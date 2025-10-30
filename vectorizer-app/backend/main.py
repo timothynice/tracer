@@ -119,29 +119,21 @@ class VectorizerService:
         pass
 
     def normalize_svg_dimensions(self, svg_content: str, original_width: int, original_height: int) -> str:
-        """Normalize SVG dimensions to consistent pixel units with proper viewBox"""
+        """Normalize SVG dimensions to consistent scaling with viewBox only (no explicit width/height)"""
         try:
-            # For Potrace SVGs: Convert from points to pixels and add viewBox if missing
-            if 'pt"' in svg_content:
-                # Replace pt units with px and scale appropriately
-                # 1 pt = 1.33 px approximately, but we want 1:1 mapping to original image
-                svg_content = re.sub(r'width="([0-9.]+)pt"', f'width="{original_width}"', svg_content)
-                svg_content = re.sub(r'height="([0-9.]+)pt"', f'height="{original_height}"', svg_content)
+            # Remove explicit width and height attributes to allow CSS scaling to work properly
+            svg_content = re.sub(r'\s*width="[^"]*"', '', svg_content)
+            svg_content = re.sub(r'\s*height="[^"]*"', '', svg_content)
 
-                # Ensure viewBox matches original dimensions
-                viewbox_pattern = r'viewBox="[^"]*"'
-                new_viewbox = f'viewBox="0 0 {original_width} {original_height}"'
-                if 'viewBox=' in svg_content:
-                    svg_content = re.sub(viewbox_pattern, new_viewbox, svg_content)
-                else:
-                    # Add viewBox after the opening svg tag
-                    svg_content = re.sub(r'(<svg[^>]*)', f'\\1 {new_viewbox}', svg_content)
+            # Ensure viewBox is present and matches original dimensions
+            viewbox_pattern = r'viewBox="[^"]*"'
+            new_viewbox = f'viewBox="0 0 {original_width} {original_height}"'
 
-            # For VTracer SVGs: Ensure viewBox is present for consistent scaling
-            elif not 'viewBox=' in svg_content:
-                # Add viewBox to VTracer SVGs for consistency
-                viewbox = f'viewBox="0 0 {original_width} {original_height}"'
-                svg_content = re.sub(r'(<svg[^>]*)', f'\\1 {viewbox}', svg_content)
+            if 'viewBox=' in svg_content:
+                svg_content = re.sub(viewbox_pattern, new_viewbox, svg_content)
+            else:
+                # Add viewBox after the opening svg tag
+                svg_content = re.sub(r'(<svg[^>]*)', f'\\1 {new_viewbox}', svg_content)
 
             return svg_content
 
