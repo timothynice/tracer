@@ -509,7 +509,8 @@ export default {
         console.log('DEBUG: Sending request with parameters:', this.parameters)
         console.log('DEBUG: Selected method only:', selectedMethodOnly, 'Method:', this.selectedMethod)
 
-        const response = await axios.post('http://localhost:8000/vectorize', formData, {
+        const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+        const response = await axios.post(`${apiBase}/vectorize`, formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
