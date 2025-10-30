@@ -191,7 +191,7 @@
             <!-- Vectorized Layer -->
             <div class="image-layer vector-layer" :style="{ clipPath: `inset(0 ${100 - sliderValue}% 0 0)` }">
               <div class="svg-container" :class="{ 'loading-svg': parameterLoading }">
-                <div v-html="getCurrentSVG()" class="svg-content" :key="selectedMethod + JSON.stringify(parameters[selectedMethod])"></div>
+                <div v-html="getCurrentSVG()" class="svg-content" :key="selectedMethod"></div>
                 <div v-if="parameterLoading" class="svg-loading-overlay">
                   <div class="mini-spinner"></div>
                 </div>
@@ -331,6 +331,9 @@ export default {
     async vectorizeWithCurrentParameters(selectedMethodOnly = false) {
       if (!this.originalFile) return
 
+      console.log(`DEBUG: Making API call - selectedMethodOnly: ${selectedMethodOnly}, method: ${this.selectedMethod}`)
+      console.log('DEBUG: Parameters:', JSON.stringify(this.parameters, null, 2))
+
       try {
         const formData = new FormData()
         formData.append('file', this.originalFile)
@@ -339,6 +342,7 @@ export default {
         // Send selected method for faster parameter updates
         if (selectedMethodOnly) {
           formData.append('selected_method', this.selectedMethod)
+          console.log(`DEBUG: Sending selected_method: ${this.selectedMethod}`)
         }
 
         const response = await axios.post('http://localhost:8000/vectorize', formData, {
@@ -347,8 +351,12 @@ export default {
           }
         })
 
+        console.log('DEBUG: API Response status:', response.status)
+        console.log('DEBUG: API Response data:', response.data)
+
         // Merge results when only processing selected method
         if (selectedMethodOnly && this.results) {
+          console.log('DEBUG: Merging results for selected method only')
           // Merge the new results with existing results
           this.results = {
             ...this.results,
@@ -358,9 +366,11 @@ export default {
             }
           }
         } else {
+          console.log('DEBUG: Replacing all results (initial load or method toggle)')
           // Replace all results (initial load or method toggle)
           this.results = response.data
         }
+        console.log('DEBUG: Final results:', this.results)
         // Don't override selectedMethod - keep the user's selection!
 
       } catch (err) {
@@ -373,8 +383,10 @@ export default {
     },
 
     debouncedReprocess() {
+      console.log('DEBUG: debouncedReprocess called')
       // Clear any existing timer
       if (this.parameterDebounceTimer) {
+        console.log('DEBUG: Clearing existing debounce timer')
         clearTimeout(this.parameterDebounceTimer)
       }
 
@@ -383,7 +395,11 @@ export default {
 
       // Debounce the actual API call
       this.parameterDebounceTimer = setTimeout(() => {
-        this.reprocessImage()
+        console.log('DEBUG: Debounce timer expired, calling reprocessImage')
+        // Only process if we're still in parameter loading state (not cancelled)
+        if (this.parameterLoading) {
+          this.reprocessImage()
+        }
       }, 500) // 500ms debounce
     },
 
@@ -400,26 +416,49 @@ export default {
     },
 
     async reprocessImage() {
-      if (!this.originalFile || this.loading) return
+      console.log('DEBUG: reprocessImage called')
+      if (!this.originalFile) {
+        console.log('DEBUG: No original file, skipping reprocess')
+        return
+      }
+      if (this.loading) {
+        console.log('DEBUG: Already loading, skipping reprocess')
+        return
+      }
 
       try {
+        console.log('DEBUG: Calling vectorizeWithCurrentParameters(true)')
         await this.vectorizeWithCurrentParameters(true) // Only process current method
       } finally {
+        console.log('DEBUG: reprocessImage completed')
         this.parameterLoading = false
         this.parameterDebounceTimer = null
       }
     },
 
     getCurrentSVG() {
-      if (!this.results) return ''
-      const svg = this.results.vectorized[this.selectedMethod]
+      console.log('DEBUG: getCurrentSVG called')
+      if (!this.results) {
+        console.log('DEBUG: No results available')
+        return ''
+      }
 
-      if (!svg) return ''
+      const svg = this.results.vectorized[this.selectedMethod]
+      console.log(`DEBUG: SVG for method ${this.selectedMethod}:`, typeof svg, svg ? svg.substring(0, 50) + '...' : 'null')
+
+      if (!svg) {
+        console.log('DEBUG: No SVG found for selected method')
+        return ''
+      }
 
       // Handle both string and object responses
       const svgContent = typeof svg === 'object' ? svg.svg : svg
+      console.log('DEBUG: SVG content type:', typeof svgContent)
 
-      return typeof svgContent === 'string' && svgContent.trim().startsWith('<') ? svgContent : ''
+      const isValidSVG = typeof svgContent === 'string' && svgContent.trim().startsWith('<')
+      console.log('DEBUG: Is valid SVG:', isValidSVG)
+
+      return isValidSVG ? svgContent : ''
     },
 
     downloadSVG() {

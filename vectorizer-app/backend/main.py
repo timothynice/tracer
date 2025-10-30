@@ -20,6 +20,83 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class ParameterValidationError(ValueError):
+    """Custom exception for parameter validation errors"""
+    pass
+
+def validate_potrace_params(params):
+    """Validate Potrace parameters with proper bounds checking"""
+    if 'turdsize' in params:
+        if not isinstance(params['turdsize'], (int, float)) or params['turdsize'] < 0 or params['turdsize'] > 100:
+            raise ParameterValidationError("turdsize must be a number between 0 and 100")
+
+    if 'alphamax' in params:
+        if not isinstance(params['alphamax'], (int, float)) or params['alphamax'] < 0 or params['alphamax'] > 2.0:
+            raise ParameterValidationError("alphamax must be a number between 0.0 and 2.0")
+
+    if 'turnpolicy' in params:
+        valid_policies = ['black', 'white', 'left', 'right', 'minority', 'majority', 'random']
+        if params['turnpolicy'] not in valid_policies:
+            raise ParameterValidationError(f"turnpolicy must be one of: {', '.join(valid_policies)}")
+
+    if 'invert' in params:
+        if not isinstance(params['invert'], bool):
+            raise ParameterValidationError("invert must be a boolean")
+
+    if 'opticurve' in params:
+        if not isinstance(params['opticurve'], bool):
+            raise ParameterValidationError("opticurve must be a boolean")
+
+def validate_vtracer_params(params):
+    """Validate VTracer parameters with proper bounds checking"""
+    validations = {
+        'colormode': {'type': str, 'values': ['color', 'binary']},
+        'color_precision': {'type': (int, float), 'range': (1, 8), 'convert': True},
+        'filter_speckle': {'type': (int, float), 'range': (1, 100), 'convert': True},
+        'corner_threshold': {'type': (int, float), 'range': (0, 180), 'convert': True},
+        'length_threshold': {'type': (int, float), 'range': (0.0, 50.0), 'convert': True},
+        'max_iterations': {'type': (int, float), 'range': (1, 100), 'convert': True},
+        'splice_threshold': {'type': (int, float), 'range': (0, 180), 'convert': True},
+        'path_precision': {'type': (int, float), 'range': (1, 10), 'convert': True}
+    }
+
+    for param, validation in validations.items():
+        if param in params:
+            value = params[param]
+
+            # Convert string numbers to actual numbers for HTML range inputs
+            if validation.get('convert') and isinstance(value, str):
+                try:
+                    # Try int first, then float
+                    if '.' in value:
+                        value = float(value)
+                    else:
+                        value = int(value)
+                    # Update the params dict with converted value
+                    params[param] = value
+                except (ValueError, TypeError):
+                    raise ParameterValidationError(f"{param} must be a valid number")
+
+            # Type checking
+            if 'type' in validation:
+                if isinstance(validation['type'], tuple):
+                    if not isinstance(value, validation['type']):
+                        raise ParameterValidationError(f"{param} must be a {' or '.join([t.__name__ for t in validation['type']])}")
+                else:
+                    if not isinstance(value, validation['type']):
+                        raise ParameterValidationError(f"{param} must be a {validation['type'].__name__}")
+
+            # Value checking
+            if 'values' in validation:
+                if value not in validation['values']:
+                    raise ParameterValidationError(f"{param} must be one of: {', '.join(validation['values'])}")
+
+            # Range checking
+            if 'range' in validation:
+                min_val, max_val = validation['range']
+                if not (min_val <= value <= max_val):
+                    raise ParameterValidationError(f"{param} must be between {min_val} and {max_val}")
+
 class VectorizerService:
     def __init__(self):
         pass
@@ -176,14 +253,30 @@ async def vectorize_image(file: UploadFile = File(...), parameters: str = Form("
     if not file.content_type or not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
 
+    # Parse parameters OUTSIDE the main try block so validation errors aren't caught
     try:
-        # Parse parameters
         import json
         params = json.loads(parameters) if parameters != "{}" else {}
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON in parameters: {str(e)}")
 
+    # Validate parameters OUTSIDE the main try block
+    try:
+        if 'potrace' in params:
+            validate_potrace_params(params['potrace'])
+        if 'vtracer' in params:
+            validate_vtracer_params(params['vtracer'])
+    except ParameterValidationError as e:
+        raise HTTPException(status_code=400, detail=f"Parameter validation failed: {str(e)}")
+
+    try:
         # Optional debug logging (comment out for production)
-        # print(f"DEBUG: Received parameters: {params}")
-        # print(f"DEBUG: Selected method: {selected_method}")
+        print(f"DEBUG: Received parameters: {params}")
+        print(f"DEBUG: Selected method: '{selected_method}' (type: {type(selected_method)})")
+        print(f"DEBUG: selected_method == 'vtracer': {selected_method == 'vtracer'}")
+        print(f"DEBUG: selected_method == 'potrace': {selected_method == 'potrace'}")
+        print(f"DEBUG: bool(selected_method): {bool(selected_method)}")
+        print(f"DEBUG: selected_method in ['potrace', 'vtracer']: {selected_method in ['potrace', 'vtracer']}")
 
         # Read image bytes
         image_bytes = await file.read()
@@ -200,10 +293,14 @@ async def vectorize_image(file: UploadFile = File(...), parameters: str = Form("
                 except Exception as e:
                     results['potrace'] = f"Error: {str(e)}"
             elif selected_method == 'vtracer':
+                print("DEBUG: Processing VTracer method!")
                 try:
                     vtracer_params = params.get('vtracer', {})
+                    print(f"DEBUG: VTracer params: {vtracer_params}")
                     results['vtracer'] = await vectorizer.vtracer_vectorize(image_bytes, **vtracer_params)
+                    print("DEBUG: VTracer processing completed successfully")
                 except Exception as e:
+                    print(f"DEBUG: VTracer processing failed: {str(e)}")
                     results['vtracer'] = f"Error: {str(e)}"
         else:
             # Process both methods (default behavior)

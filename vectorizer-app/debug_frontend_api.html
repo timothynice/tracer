@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Frontend API Communication</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .debug { background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .error { background: #ffebee; color: #c62828; }
+        .success { background: #e8f5e9; color: #2e7d32; }
+        button { margin: 5px; padding: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Frontend API Communication Debug</h1>
+    <p>This simulates the exact API calls that the Vue.js frontend makes.</p>
+
+    <div>
+        <button onclick="testInitialUpload()">Test Initial Upload</button>
+        <button onclick="testParameterChange()">Test Parameter Change (VTracer)</button>
+        <button onclick="testPotraceParameterChange()">Test Parameter Change (Potrace)</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        function log(message, type = 'debug') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `debug ${type}`;
+            entry.innerHTML = `<strong>${new Date().toLocaleTimeString()}:</strong> ${message}`;
+            logDiv.appendChild(entry);
+            console.log(message);
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        // Create a test image (same as test script)
+        function createTestImageBlob() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 100;
+            canvas.height = 100;
+            const ctx = canvas.getContext('2d');
+
+            // White background
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, 100, 100);
+
+            // Black square
+            ctx.fillStyle = 'black';
+            ctx.fillRect(20, 20, 60, 60);
+
+            return new Promise(resolve => {
+                canvas.toBlob(resolve, 'image/png');
+            });
+        }
+
+        async function testInitialUpload() {
+            log('=== Testing Initial Upload ===');
+
+            try {
+                const blob = await createTestImageBlob();
+
+                const parameters = {
+                    potrace: {
+                        invert: false,
+                        turdsize: 2,
+                        turnpolicy: 'minority',
+                        alphamax: 1.0,
+                        opticurve: true,
+                    },
+                    vtracer: {
+                        colormode: 'color',
+                        color_precision: 6,
+                        filter_speckle: 4,
+                        corner_threshold: 60,
+                        length_threshold: 4.0,
+                        max_iterations: 10,
+                        splice_threshold: 45,
+                        path_precision: 3
+                    }
+                };
+
+                const formData = new FormData();
+                formData.append('file', blob, 'test.png');
+                formData.append('parameters', JSON.stringify(parameters));
+
+                log('Making initial upload request...');
+
+                const response = await fetch('http://localhost:8000/vectorize', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                log(`Response status: ${response.status}`);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    log(`Success: ${data.success}`, 'success');
+                    log(`Methods returned: ${Object.keys(data.vectorized || {}).join(', ')}`);
+
+                    // Check SVG lengths
+                    const vectorized = data.vectorized || {};
+                    if (vectorized.potrace) {
+                        log(`Potrace SVG length: ${vectorized.potrace.length} chars`);
+                    }
+                    if (vectorized.vtracer) {
+                        log(`VTracer SVG length: ${vectorized.vtracer.length} chars`);
+                    }
+                } else {
+                    const errorText = await response.text();
+                    log(`Error: ${response.status} - ${errorText}`, 'error');
+                }
+
+            } catch (error) {
+                log(`Network Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testParameterChange() {
+            log('=== Testing VTracer Parameter Change ===');
+
+            try {
+                const blob = await createTestImageBlob();
+
+                const parameters = {
+                    vtracer: {
+                        colormode: 'color',
+                        color_precision: 4, // Changed from 6 to 4
+                        filter_speckle: 4,
+                        corner_threshold: 60,
+                        length_threshold: 4.0,
+                        max_iterations: 10,
+                        splice_threshold: 45,
+                        path_precision: 3
+                    }
+                };
+
+                const formData = new FormData();
+                formData.append('file', blob, 'test.png');
+                formData.append('parameters', JSON.stringify(parameters));
+                formData.append('selected_method', 'vtracer'); // This mimics parameter change
+
+                log('Making parameter change request (VTracer only)...');
+                log(`Parameters: ${JSON.stringify(parameters)}`);
+
+                const response = await fetch('http://localhost:8000/vectorize', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                log(`Response status: ${response.status}`);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    log(`Success: ${data.success}`, 'success');
+                    log(`Methods returned: ${Object.keys(data.vectorized || {}).join(', ')}`);
+
+                    const vtracer = data.vectorized?.vtracer;
+                    if (vtracer) {
+                        if (vtracer.startsWith('Error:')) {
+                            log(`VTracer Error: ${vtracer}`, 'error');
+                        } else {
+                            log(`VTracer SVG length: ${vtracer.length} chars`, 'success');
+                        }
+                    } else {
+                        log('No VTracer result returned', 'error');
+                    }
+                } else {
+                    const errorText = await response.text();
+                    log(`Error: ${response.status} - ${errorText}`, 'error');
+                }
+
+            } catch (error) {
+                log(`Network Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testPotraceParameterChange() {
+            log('=== Testing Potrace Parameter Change ===');
+
+            try {
+                const blob = await createTestImageBlob();
+
+                const parameters = {
+                    potrace: {
+                        invert: false,
+                        turdsize: 8, // Changed from 2 to 8
+                        turnpolicy: 'minority',
+                        alphamax: 1.0,
+                        opticurve: true,
+                    }
+                };
+
+                const formData = new FormData();
+                formData.append('file', blob, 'test.png');
+                formData.append('parameters', JSON.stringify(parameters));
+                formData.append('selected_method', 'potrace'); // This mimics parameter change
+
+                log('Making parameter change request (Potrace only)...');
+                log(`Parameters: ${JSON.stringify(parameters)}`);
+
+                const response = await fetch('http://localhost:8000/vectorize', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                log(`Response status: ${response.status}`);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    log(`Success: ${data.success}`, 'success');
+                    log(`Methods returned: ${Object.keys(data.vectorized || {}).join(', ')}`);
+
+                    const potrace = data.vectorized?.potrace;
+                    if (potrace) {
+                        if (potrace.startsWith('Error:')) {
+                            log(`Potrace Error: ${potrace}`, 'error');
+                        } else {
+                            log(`Potrace SVG length: ${potrace.length} chars`, 'success');
+                        }
+                    } else {
+                        log('No Potrace result returned', 'error');
+                    }
+                } else {
+                    const errorText = await response.text();
+                    log(`Error: ${response.status} - ${errorText}`, 'error');
+                }
+
+            } catch (error) {
+                log(`Network Error: ${error.message}`, 'error');
+            }
+        }
+
+        // Automatically test connection on load
+        window.onload = function() {
+            log('Debug page loaded. Click buttons to test API communication.');
+            log('Make sure both backend (port 8000) and frontend (port 5173) are running.');
+        };
+    </script>
+</body>
+</html>
