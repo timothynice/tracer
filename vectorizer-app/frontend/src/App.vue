@@ -46,16 +46,16 @@
           <h3>🚀 Vectorization Method</h3>
           <div class="method-buttons">
             <button
-              @click="changeMethod('potrace')"
-              :class="{ active: selectedMethod === 'potrace' }"
-              class="method-btn">
-              🖤 Potrace (Classic B&W)
-            </button>
-            <button
               @click="changeMethod('vtracer')"
               :class="{ active: selectedMethod === 'vtracer' }"
               class="method-btn">
               🌈 VTracer (Color Preserving)
+            </button>
+            <button
+              @click="changeMethod('potrace')"
+              :class="{ active: selectedMethod === 'potrace' }"
+              class="method-btn">
+              🖤 Potrace (Classic B&W)
             </button>
           </div>
         </div>
@@ -246,14 +246,14 @@ export default {
       originalImage: null,
       originalFile: null,
       results: null,
-      selectedMethod: 'potrace',
+      selectedMethod: 'vtracer',
       sliderValue: 50,
       loading: false,
       error: null,
       showParameters: false,
       parameterLoading: false,
       parameterDebounceTimer: null,
-      selectedMethod: 'potrace', // Default to Potrace
+      selectedMethod: 'vtracer', // Default to VTracer
       parameters: {
         potrace: {
           invert: false,
