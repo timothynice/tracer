@@ -305,12 +305,7 @@
                 <img :src="originalImage" alt="Original" />
               </div>
 
-              <!-- Vector Image Layer (Full Width Background) -->
-              <div class="image-layer vector-layer">
-                <div class="svg-container" :key="selectedMethod">
-                  <div v-html="getCurrentSVG()" class="svg-content"></div>
-                </div>
-              </div>
+              <!-- Vector overlay is rendered only inside the mask below -->
 
               <!-- Clipping Mask for Vector Side -->
               <div class="vector-mask" :style="{ clipPath: `polygon(${sliderValue}% 0%, 100% 0%, 100% 100%, ${sliderValue}% 100%)` }">
