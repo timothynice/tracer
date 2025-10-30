@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM python:3.13-slim
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -13,6 +13,7 @@ RUN apt-get update \
        potrace \
        libgl1 \
        libglib2.0-0 \
+       build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps
