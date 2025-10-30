@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: tracer-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    env: python
+    buildCommand: ""
+    startCommand: ""
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: "http://localhost:3000,http://localhost:5173,https://tracer-frontend-z5u3.onrender.com"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    healthCheckPath: /health
+
+  - type: web
+    name: tracer-frontend
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    plan: free
+    envVars:
+      - key: VITE_API_URL
+        value: "https://tracer-n32i.onrender.com"
