@@ -13,7 +13,7 @@ import re
 app = FastAPI(title="Image Vectorizer API")
 
 # Configure CORS from environment
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173,https://tracer-frontend-z5u3.onrender.com")
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:5173,https://tracer-frontend-25u3.onrender.com")
 allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
 
 app.add_middleware(
