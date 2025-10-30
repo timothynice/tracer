@@ -30,6 +30,19 @@ class ParameterValidationError(ValueError):
 
 def validate_potrace_params(params):
     """Validate Potrace parameters with proper bounds checking"""
+    # Convert string numbers to actual numbers for HTML range/select inputs
+    if 'turdsize' in params and isinstance(params['turdsize'], str):
+        try:
+            params['turdsize'] = int(params['turdsize']) if '.' not in params['turdsize'] else float(params['turdsize'])
+        except (ValueError, TypeError):
+            raise ParameterValidationError("turdsize must be a valid number")
+
+    if 'alphamax' in params and isinstance(params['alphamax'], str):
+        try:
+            params['alphamax'] = float(params['alphamax'])
+        except (ValueError, TypeError):
+            raise ParameterValidationError("alphamax must be a valid number")
+
     if 'turdsize' in params:
         if not isinstance(params['turdsize'], (int, float)) or params['turdsize'] < 0 or params['turdsize'] > 100:
             raise ParameterValidationError("turdsize must be a number between 0 and 100")
