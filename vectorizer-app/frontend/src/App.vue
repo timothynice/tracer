@@ -44,6 +44,7 @@
               <span>JPG</span>
               <span>GIF</span>
             </div>
+            <p class="size-limit">Maximum file size: 20MB</p>
           </div>
           <div v-else class="uploaded-preview">
             <img :src="originalImage" alt="Original Image" />
@@ -63,7 +64,7 @@
       <input
         type="file"
         ref="fileInput"
-        accept="image/*"
+        accept="image/png,image/jpeg,image/gif"
         @change="handleFileSelect"
         class="hidden-input"
       />
@@ -457,6 +458,21 @@ export default {
       this.originalFile = null
       this.results = null
       this.error = null
+      this.sliderValue = 50  // Reset comparison slider
+      this.loading = false
+      this.parameterLoading = false
+      this.showParameters = false  // Close parameters panel
+
+      // Clear any pending parameter debounce timers
+      if (this.parameterDebounceTimer) {
+        clearTimeout(this.parameterDebounceTimer)
+        this.parameterDebounceTimer = null
+      }
+
+      // Reset file input
+      if (this.$refs.fileInput) {
+        this.$refs.fileInput.value = ''
+      }
     },
 
     processNewImage() {
@@ -465,8 +481,17 @@ export default {
     },
 
     async processFile(file) {
-      if (!file.type.startsWith('image/')) {
-        this.error = 'Please select a valid image file'
+      // Validate file type
+      const allowedTypes = ['image/png', 'image/jpeg', 'image/gif']
+      if (!allowedTypes.includes(file.type)) {
+        this.error = 'Please select a PNG, JPEG, or GIF image file'
+        return
+      }
+
+      // Validate file size (20MB limit)
+      const maxSize = 20 * 1024 * 1024 // 20MB in bytes
+      if (file.size > maxSize) {
+        this.error = 'File size exceeds 20MB limit. Please choose a smaller image.'
         return
       }
 
@@ -485,10 +510,9 @@ export default {
     },
 
     async vectorizeWithCurrentParameters(selectedMethodOnly = false) {
-      console.log('DEBUG: vectorizeWithCurrentParameters called, selectedMethodOnly:', selectedMethodOnly)
 
       if (!this.originalFile) {
-        console.log('DEBUG: No original file available')
+        
         return
       }
 
@@ -501,8 +525,7 @@ export default {
         formData.append('parameters', JSON.stringify(this.parameters))
         formData.append('selected_method', selectedMethodOnly ? this.selectedMethod : '')
 
-        console.log('DEBUG: Sending request with parameters:', this.parameters)
-        console.log('DEBUG: Selected method only:', selectedMethodOnly, 'Method:', this.selectedMethod)
+        
 
         const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000'
         const response = await axios.post(`${apiBase}/vectorize`, formData, {
@@ -511,7 +534,7 @@ export default {
           }
         })
 
-        console.log('DEBUG: Response received:', response.data.success)
+        
 
         if (selectedMethodOnly && this.results) {
           // Merge results to preserve other method's results
@@ -522,15 +545,15 @@ export default {
               ...response.data.vectorized
             }
           }
-          console.log('DEBUG: Results merged for selected method only')
+          
         } else {
           this.results = response.data
-          console.log('DEBUG: Full results set')
+          
         }
 
         this.error = null
       } catch (error) {
-        console.error('Error:', error)
+        
         if (error.response) {
           this.error = error.response.data?.detail || 'Processing failed'
         } else if (error.request) {
@@ -545,7 +568,7 @@ export default {
     },
 
     debouncedReprocess() {
-      console.log('DEBUG: debouncedReprocess called')
+      
 
       if (this.parameterDebounceTimer) {
         clearTimeout(this.parameterDebounceTimer)
@@ -554,7 +577,7 @@ export default {
       this.parameterLoading = true
 
       this.parameterDebounceTimer = setTimeout(() => {
-        console.log('DEBUG: Debounce timer fired, parameterLoading:', this.parameterLoading)
+        
         if (this.parameterLoading) {
           this.reprocessImage()
         }
@@ -564,7 +587,7 @@ export default {
     changeMethod(newMethod) {
       if (this.selectedMethod === newMethod) return // No change needed
 
-      console.log(`Switching from ${this.selectedMethod} to ${newMethod}`)
+      
       this.selectedMethod = newMethod
 
       // Only reprocess if we have an image loaded
@@ -574,43 +597,43 @@ export default {
     },
 
     async reprocessImage() {
-      console.log('DEBUG: reprocessImage called')
+      
       if (!this.originalFile) {
-        console.log('DEBUG: No original file, skipping reprocess')
+        
         return
       }
       if (this.loading) {
-        console.log('DEBUG: Already loading, skipping reprocess')
+        
         return
       }
 
       try {
-        console.log('DEBUG: Calling vectorizeWithCurrentParameters(true)')
+        
         await this.vectorizeWithCurrentParameters(true) // Only process current method
       } finally {
-        console.log('DEBUG: reprocessImage completed')
+        
         this.parameterLoading = false
         this.parameterDebounceTimer = null
       }
     },
 
     getCurrentSVG() {
-      console.log('DEBUG: getCurrentSVG called')
+      
       if (!this.results) {
-        console.log('DEBUG: No results available')
+        
         return ''
       }
 
       const svg = this.results.vectorized[this.selectedMethod]
-      console.log(`DEBUG: SVG for method ${this.selectedMethod}:`, typeof svg, svg ? svg.substring(0, 50) + '...' : 'null')
+      
 
       if (!svg) {
-        console.log('DEBUG: No SVG found for current method')
+        
         return '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #666;">Processing...</div>'
       }
 
       if (svg.startsWith('Error:')) {
-        console.log('DEBUG: SVG contains error')
+        
         return `<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #ff6b6b; text-align: center; padding: 20px;">${svg}</div>`
       }
 
@@ -784,6 +807,13 @@ body {
   border-radius: 4px;
   font-size: 0.8125rem;
   font-weight: 500;
+}
+
+.size-limit {
+  font-size: 0.8125rem;
+  color: #a0aec0;
+  margin-top: 0.75rem;
+  font-weight: 400;
 }
 
 .uploaded-preview {

@@ -189,9 +189,7 @@ class VectorizerService:
 
             cmd.append(temp_bmp_path)
 
-            # Optional debug logging (comment out for production)
-            print(f"DEBUG: Potrace command: {' '.join(cmd)}")
-            print(f"DEBUG: Potrace params - invert:{invert}, turdsize:{turdsize}, turnpolicy:{turnpolicy}, alphamax:{alphamax}, opticurve:{opticurve}")
+            
 
             # Run potrace
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -267,8 +265,19 @@ vectorizer = VectorizerService()
 @app.post("/vectorize")
 async def vectorize_image(file: UploadFile = File(...), parameters: str = Form("{}"), selected_method: str = Form("")):
     """Vectorize an uploaded image using multiple methods with parameters"""
-    if not file.content_type or not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
+    # Check file size (20MB limit)
+    MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB in bytes
+    file_bytes = await file.read()
+    if len(file_bytes) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File size exceeds 20MB limit")
+
+    # Reset file position for reading later
+    await file.seek(0)
+
+    # Restrict to specific image types
+    allowed_types = ['image/png', 'image/jpeg', 'image/gif']
+    if not file.content_type or file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="File must be PNG, JPEG, or GIF format")
 
     # Parse parameters OUTSIDE the main try block so validation errors aren't caught
     try:
@@ -287,13 +296,7 @@ async def vectorize_image(file: UploadFile = File(...), parameters: str = Form("
         raise HTTPException(status_code=400, detail=f"Parameter validation failed: {str(e)}")
 
     try:
-        # Optional debug logging (comment out for production)
-        print(f"DEBUG: Received parameters: {params}")
-        print(f"DEBUG: Selected method: '{selected_method}' (type: {type(selected_method)})")
-        print(f"DEBUG: selected_method == 'vtracer': {selected_method == 'vtracer'}")
-        print(f"DEBUG: selected_method == 'potrace': {selected_method == 'potrace'}")
-        print(f"DEBUG: bool(selected_method): {bool(selected_method)}")
-        print(f"DEBUG: selected_method in ['potrace', 'vtracer']: {selected_method in ['potrace', 'vtracer']}")
+        
 
         # Read image bytes
         image_bytes = await file.read()
@@ -310,14 +313,10 @@ async def vectorize_image(file: UploadFile = File(...), parameters: str = Form("
                 except Exception as e:
                     results['potrace'] = f"Error: {str(e)}"
             elif selected_method == 'vtracer':
-                print("DEBUG: Processing VTracer method!")
                 try:
                     vtracer_params = params.get('vtracer', {})
-                    print(f"DEBUG: VTracer params: {vtracer_params}")
                     results['vtracer'] = await vectorizer.vtracer_vectorize(image_bytes, **vtracer_params)
-                    print("DEBUG: VTracer processing completed successfully")
                 except Exception as e:
-                    print(f"DEBUG: VTracer processing failed: {str(e)}")
                     results['vtracer'] = f"Error: {str(e)}"
         else:
             # Process both methods (default behavior)
