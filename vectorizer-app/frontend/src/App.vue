@@ -72,8 +72,7 @@
       <!-- Loading State -->
       <div v-if="loading" class="loading-state">
         <div class="loading-spinner"></div>
-        <p v-if="!isRetrying">Processing your image...</p>
-        <p v-if="isRetrying">Server is waking up... Attempt {{ retryAttempt }}/3</p>
+        <p>{{ loadingMessage }}</p>
         <p v-if="isRetrying" class="retry-info">Free servers can take up to 60 seconds to start. Please wait...</p>
       </div>
 
@@ -396,6 +395,20 @@ export default {
   mounted() {
     // Display ASCII art in console
     this.showConsoleArt()
+
+    // Expose test method to console for debugging
+    if (import.meta.env.MODE === 'development') {
+      window.testRetrySystem = () => this.testRetrySystem()
+      console.log('🔧 Development mode: Run testRetrySystem() in console to test retry logic')
+    }
+  },
+  computed: {
+    loadingMessage() {
+      if (this.isRetrying) {
+        return `Server is waking up... Attempt ${this.retryAttempt}/3`
+      }
+      return 'Processing your image...'
+    }
   },
   data() {
     return {
@@ -508,6 +521,10 @@ export default {
       this.parameterLoading = false
       this.showParameters = false  // Close parameters panel
 
+      // Clear retry state
+      this.retryAttempt = 0
+      this.isRetrying = false
+
       // Clear any pending parameter debounce timers
       if (this.parameterDebounceTimer) {
         clearTimeout(this.parameterDebounceTimer)
@@ -589,12 +606,14 @@ export default {
         this.error = null
       } catch (error) {
         console.error('Vectorization failed:', error)
+
+        // Set user-friendly error messages
         if (error.response) {
           this.error = error.response.data?.detail || 'Processing failed'
-        } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-          this.error = 'Request timed out. The server may be starting up - please try again.'
+        } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+          this.error = 'Request timed out. The free server may be spinning up - this can take up to 60 seconds. Please try again.'
         } else if (error.request) {
-          this.error = 'Server not responding. The service may be waking up - please wait and try again.'
+          this.error = 'Server not responding. The service may be starting up - please wait a moment and try again.'
         } else {
           this.error = 'An unexpected error occurred'
         }
@@ -696,19 +715,17 @@ export default {
     },
 
     async makeRequestWithRetry(url, formData, maxRetries = 3) {
+      let lastError = null
+
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         this.retryAttempt = attempt
         this.isRetrying = attempt > 1
 
         try {
-          // Progressive timeout: 60s for first attempt, 90s for retry, 120s for final attempt
+          // Aggressive timeouts for free server spin-up: 60s, 90s, 120s
           const timeout = 60000 + (attempt - 1) * 30000
 
-          if (this.isRetrying) {
-            console.log(`Retry attempt ${attempt}/${maxRetries} with ${timeout/1000}s timeout...`)
-            // Show helpful retry message
-            this.error = `Server is waking up... Attempt ${attempt}/${maxRetries} (${timeout/1000}s timeout)`
-          }
+          console.log(`Attempt ${attempt}/${maxRetries} (${timeout/1000}s timeout)`)
 
           const response = await axios.post(url, formData, {
             headers: {
@@ -717,35 +734,117 @@ export default {
             timeout: timeout
           })
 
-          // Success - reset retry state
+          // Success - reset state
           this.retryAttempt = 0
           this.isRetrying = false
+          console.log(`Request succeeded on attempt ${attempt}`)
           return response
 
         } catch (error) {
-          console.log(`Attempt ${attempt} failed:`, error.message)
+          console.log(`Attempt ${attempt} failed:`, error.message || error.code)
+          lastError = error
 
-          const isTimeout = error.code === 'ECONNABORTED' || error.message.includes('timeout')
-          const isNetworkError = !error.response && error.request
-          const isServerError = error.response && error.response.status >= 500
+          const shouldRetry = this.shouldRetryError(error) && attempt < maxRetries
 
-          // Retry on timeout, network errors, or server errors
-          if (attempt < maxRetries && (isTimeout || isNetworkError || isServerError)) {
-            // Wait before retry: 2s, 5s, 8s
-            const delay = Math.min(2000 + (attempt - 1) * 3000, 8000)
-            console.log(`Waiting ${delay/1000}s before retry...`)
-            this.error = `Server is starting up... Retrying in ${delay/1000}s...`
+          if (shouldRetry) {
+            // Progressive delays: 3s, 6s
+            const delayMs = 3000 * attempt
+            console.log(`Waiting ${delayMs/1000}s before retry...`)
 
-            await new Promise(resolve => setTimeout(resolve, delay))
+            await this.delay(delayMs)
             continue
           }
 
-          // Final failure or non-retryable error
-          this.retryAttempt = 0
-          this.isRetrying = false
-          throw error
+          break // No more retries
         }
       }
+
+      // Final cleanup and throw the last error
+      this.retryAttempt = 0
+      this.isRetrying = false
+      throw lastError
+    },
+
+    shouldRetryError(error) {
+      const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
+      const isNetworkError = !error.response && error.request
+      const isServerError = error.response && error.response.status >= 500
+
+      return isTimeout || isNetworkError || isServerError
+    },
+
+    delay(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms))
+    },
+
+    // Development/test method - can be removed in production
+    async testRetrySystem() {
+      console.log('=== Testing Retry System ===')
+
+      // Test 1: Immediate success
+      console.log('Test 1: Immediate success')
+      try {
+        const originalPost = axios.post
+        let callCount = 0
+        axios.post = () => {
+          callCount++
+          return Promise.resolve({ data: { test: 'success' } })
+        }
+
+        await this.makeRequestWithRetry('http://test.com', new FormData())
+        console.log('✓ Immediate success test passed')
+        axios.post = originalPost
+      } catch (e) {
+        console.error('✗ Immediate success test failed:', e)
+      }
+
+      // Test 2: Retry after failure
+      console.log('Test 2: Success after 2 failures')
+      try {
+        const originalPost = axios.post
+        let callCount = 0
+        axios.post = () => {
+          callCount++
+          if (callCount < 3) {
+            const error = new Error('Network error')
+            error.request = true
+            return Promise.reject(error)
+          }
+          return Promise.resolve({ data: { test: 'success after retry' } })
+        }
+
+        const startTime = Date.now()
+        await this.makeRequestWithRetry('http://test.com', new FormData())
+        const endTime = Date.now()
+        const duration = endTime - startTime
+
+        console.log(`✓ Retry test passed (took ${duration}ms)`)
+        console.log(`✓ Expected ~9s delay, actual: ${duration/1000}s`)
+        axios.post = originalPost
+      } catch (e) {
+        console.error('✗ Retry test failed:', e)
+      }
+
+      // Test 3: Final failure
+      console.log('Test 3: Final failure after max retries')
+      try {
+        const originalPost = axios.post
+        axios.post = () => {
+          const error = new Error('Network error')
+          error.request = true
+          return Promise.reject(error)
+        }
+
+        await this.makeRequestWithRetry('http://test.com', new FormData(), 2)
+        console.error('✗ Final failure test failed - should have thrown')
+        axios.post = originalPost
+      } catch (e) {
+        console.log('✓ Final failure test passed - correctly threw error')
+        const originalPost = axios.post
+        axios.post = originalPost
+      }
+
+      console.log('=== Retry System Tests Complete ===')
     }
   }
 }
