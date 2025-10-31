@@ -1,8 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
 from PIL import Image
 import io
 import base64
@@ -18,7 +20,39 @@ app = FastAPI(title="Image Vectorizer API")
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,https://tracer-frontend-z5u3.onrender.com")
 allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
 
-# CORS configuration - must be explicit origins (no wildcards with credentials)
+# Custom middleware to ensure CORS headers on ALL responses (even errors)
+class CORSEnforcerMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            # Catch any exception and create a response with CORS headers
+            origin = request.headers.get("origin")
+            cors_origin = origin if origin in allowed_origins else (allowed_origins[0] if allowed_origins else "*")
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error"},
+                headers={
+                    "Access-Control-Allow-Origin": cors_origin,
+                    "Access-Control-Allow-Credentials": "true",
+                }
+            )
+        
+        # Ensure CORS headers are on the response
+        origin = request.headers.get("origin")
+        cors_origin = origin if origin in allowed_origins else (allowed_origins[0] if allowed_origins else "*")
+        
+        # Add CORS headers if not present
+        if "Access-Control-Allow-Origin" not in response.headers:
+            response.headers["Access-Control-Allow-Origin"] = cors_origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        
+        return response
+
+# Add CORS enforcer middleware FIRST (runs last in reverse order)
+app.add_middleware(CORSEnforcerMiddleware)
+
+# Standard CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -264,23 +298,37 @@ class VectorizerService:
         temp_input_path = None
         temp_svg_path = None
         try:
-            # Create temporary input file - ensure it's written and closed before use
-            temp_input_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            temp_input_path = temp_input_file.name
-            temp_input_file.write(image_bytes)
-            temp_input_file.flush()
-            temp_input_file.close()
+            # Create temporary input file with explicit mode
+            fd, temp_input_path = tempfile.mkstemp(suffix='.png')
+            try:
+                # Write bytes directly to file descriptor
+                os.write(fd, image_bytes)
+                os.fsync(fd)  # Force write to disk
+            finally:
+                os.close(fd)
 
-            # Verify file exists and is readable
+            # Verify file exists, is readable, and has content
             if not os.path.exists(temp_input_path):
                 raise Exception(f"Temporary input file was not created: {temp_input_path}")
+            
+            file_size = os.path.getsize(temp_input_path)
+            if file_size == 0:
+                raise Exception(f"Temporary input file is empty: {temp_input_path}")
+            
+            if file_size != len(image_bytes):
+                raise Exception(f"File size mismatch: expected {len(image_bytes)}, got {file_size}")
 
             temp_svg_path = temp_input_path.replace('.png', '.svg')
 
-            # Get original image dimensions
-            img = Image.open(temp_input_path)
-            original_width, original_height = img.size
-            img.close()  # Close PIL image handle
+            # Get original image dimensions - verify image is valid
+            try:
+                img = Image.open(temp_input_path)
+                img.verify()  # Verify it's a valid image
+                img = Image.open(temp_input_path)  # Reopen after verify
+                original_width, original_height = img.size
+                img.close()
+            except Exception as e:
+                raise Exception(f"Invalid image file: {str(e)}")
 
             # Convert using VTracer
             vtracer.convert_image_to_svg_py(
