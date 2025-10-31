@@ -73,7 +73,7 @@
       <div v-if="loading" class="loading-state">
         <div class="loading-spinner"></div>
         <p>{{ loadingMessage }}</p>
-        <p v-if="isWakingServer || isRetrying" class="retry-info">Free servers can take up to 60 seconds to start. Please wait...</p>
+        <p v-if="isWakingServer || isRetrying" class="retry-info">Free servers need to "wake up" after inactivity and can take 30-60 seconds to start. This is normal!</p>
       </div>
 
       <!-- Results Section -->
@@ -405,10 +405,10 @@ export default {
   computed: {
     loadingMessage() {
       if (this.isWakingServer) {
-        return `Waking up server... Health check ${this.healthCheckAttempt}/3`
+        return `Waking up server (cold start)... Health check ${this.healthCheckAttempt}/3`
       }
       if (this.isRetrying) {
-        return `Server is waking up... Attempt ${this.retryAttempt}/3`
+        return `Server cold start detected... Retry ${this.retryAttempt}/3`
       }
       return 'Processing your image...'
     }
@@ -580,7 +580,7 @@ export default {
       const serverHealthy = await this.checkServerHealth()
 
       if (!serverHealthy) {
-        this.error = 'Unable to connect to vectorization server. It may be starting up - please try again in a moment.'
+        this.error = 'Server is starting up (cold start). This takes ~60 seconds on the free tier. Please try again in a moment or wait for the retry.'
         this.loading = false
         return
       }
@@ -787,8 +787,9 @@ export default {
       const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
       const isNetworkError = !error.response && error.request
       const isServerError = error.response && error.response.status >= 500
+      const isColdStartError = error.code === 'ERR_NETWORK' || error.code === 'ERR_FILE_NOT_FOUND'
 
-      return isTimeout || isNetworkError || isServerError
+      return isTimeout || isNetworkError || isServerError || isColdStartError
     },
 
     delay(ms) {
