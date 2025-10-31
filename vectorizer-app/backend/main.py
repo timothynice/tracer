@@ -305,9 +305,24 @@ class VectorizerService:
             if not os.path.exists(temp_dir):
                 temp_dir = tempfile.gettempdir()
             
-            # Generate unique filename
+            # Detect image format to give the temp file the correct extension.
+            # Some libraries (including VTracer/image-rs) infer format from extension.
+            detected_ext = 'png'
+            try:
+                probe_img = Image.open(io.BytesIO(image_bytes))
+                fmt = (probe_img.format or '').upper()
+                if fmt == 'JPEG':
+                    detected_ext = 'jpg'
+                elif fmt in ['PNG', 'GIF', 'BMP', 'WEBP', 'TIFF']:
+                    detected_ext = fmt.lower()
+                probe_img.close()
+            except Exception:
+                # If probing fails, fall back to PNG extension (content will still be valid for PNG uploads)
+                detected_ext = 'png'
+
+            # Generate unique filename using detected extension
             unique_id = str(uuid.uuid4())
-            temp_input_path = os.path.join(temp_dir, f'vtracer_input_{unique_id}.png')
+            temp_input_path = os.path.join(temp_dir, f'vtracer_input_{unique_id}.{detected_ext}')
             temp_svg_path = os.path.join(temp_dir, f'vtracer_output_{unique_id}.svg')
             
             # Write file using standard Python I/O
@@ -321,7 +336,9 @@ class VectorizerService:
             
             # Convert to absolute paths using realpath to resolve any symlinks
             temp_input_path = os.path.realpath(os.path.abspath(temp_input_path))
-            temp_svg_path = os.path.abspath(temp_input_path.replace('.png', '.svg'))
+            # Build svg path from base name regardless of input extension
+            base_no_ext = os.path.splitext(temp_input_path)[0]
+            temp_svg_path = os.path.abspath(f"{base_no_ext}.svg")
 
             # Verify file exists, is readable, and has content with absolute path
             if not os.path.exists(temp_input_path):
