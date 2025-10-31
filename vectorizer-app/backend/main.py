@@ -261,17 +261,26 @@ class VectorizerService:
 
     async def vtracer_vectorize(self, image_bytes: bytes, colormode='color', color_precision=6, filter_speckle=4, corner_threshold=60, length_threshold=4.0, max_iterations=10, splice_threshold=45, path_precision=3) -> str:
         """Vectorize using VTracer (advanced color-preserving method)"""
+        temp_input_path = None
+        temp_svg_path = None
         try:
-            # Create temporary files
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_input:
-                temp_input.write(image_bytes)
-                temp_input_path = temp_input.name
+            # Create temporary input file - ensure it's written and closed before use
+            temp_input_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            temp_input_path = temp_input_file.name
+            temp_input_file.write(image_bytes)
+            temp_input_file.flush()
+            temp_input_file.close()
+
+            # Verify file exists and is readable
+            if not os.path.exists(temp_input_path):
+                raise Exception(f"Temporary input file was not created: {temp_input_path}")
 
             temp_svg_path = temp_input_path.replace('.png', '.svg')
 
             # Get original image dimensions
             img = Image.open(temp_input_path)
             original_width, original_height = img.size
+            img.close()  # Close PIL image handle
 
             # Convert using VTracer
             vtracer.convert_image_to_svg_py(
@@ -296,12 +305,22 @@ class VectorizerService:
 
             # Cleanup
             for path in [temp_input_path, temp_svg_path]:
-                if os.path.exists(path):
-                    os.unlink(path)
+                if path and os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                    except:
+                        pass  # Ignore cleanup errors
 
             return svg_content
 
         except Exception as e:
+            # Ensure cleanup on error
+            for path in [temp_input_path, temp_svg_path]:
+                if path and os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                    except:
+                        pass  # Ignore cleanup errors
             raise Exception(f"VTracer processing failed: {str(e)}")
 
 vectorizer = VectorizerService()
