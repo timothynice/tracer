@@ -7,13 +7,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps: potrace for bitmap tracing; libs for opencv
+# System deps: potrace and image codecs required by Pillow (PNG/JPEG/GIF/etc.)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        potrace \
        libgl1 \
        libglib2.0-0 \
        build-essential \
+       libjpeg62-turbo \
+       zlib1g \
+       libpng16-16 \
+       libtiff6 \
+       libwebp7 \
+       libopenjp2-7 \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps
