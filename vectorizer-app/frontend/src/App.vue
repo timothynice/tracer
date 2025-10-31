@@ -378,6 +378,11 @@
         <p>{{ error }}</p>
       </div>
     </main>
+
+    <!-- Version indicator -->
+    <div class="version-indicator">
+      v{{ version }}
+    </div>
   </div>
 </template>
 
@@ -392,6 +397,7 @@ export default {
   },
   data() {
     return {
+      version: '1.0.0',
       isDragOver: false,
       originalImage: null,
       originalFile: null,
@@ -1260,8 +1266,8 @@ body {
 }
 
 .svg-content svg {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
 }
 
@@ -1461,5 +1467,29 @@ body {
   .comparison-view {
     height: 400px;
   }
+}
+
+/* Version Indicator */
+.version-indicator {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #a0aec0;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  z-index: 1000;
+  transition: all 0.2s ease;
+}
+
+.version-indicator:hover {
+  background: rgba(255, 255, 255, 1);
+  color: #718096;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 </style>
