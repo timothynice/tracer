@@ -11,6 +11,7 @@ import base64
 import subprocess
 import os
 import tempfile
+import uuid
 import vtracer
 import re
 
@@ -298,21 +299,26 @@ class VectorizerService:
         temp_input_path = None
         temp_svg_path = None
         try:
-            # Create temporary input file with explicit mode - use /tmp directory explicitly
-            temp_dir = tempfile.gettempdir()
-            fd, temp_input_path = tempfile.mkstemp(suffix='.png', dir=temp_dir)
-            try:
-                # Write bytes directly to file descriptor
-                written = os.write(fd, image_bytes)
-                if written != len(image_bytes):
-                    raise Exception(f"Failed to write all bytes: wrote {written} of {len(image_bytes)}")
-                os.fsync(fd)  # Force write to disk
-            finally:
-                os.close(fd)
-
-            # Convert to absolute path - vtracer needs absolute paths
+            # Use standard Python file writing (more compatible with Rust FFI)
+            # Write to /tmp explicitly to ensure visibility
+            temp_dir = '/tmp'
+            if not os.path.exists(temp_dir):
+                temp_dir = tempfile.gettempdir()
+            
+            # Generate unique filename
+            unique_id = str(uuid.uuid4())
+            temp_input_path = os.path.join(temp_dir, f'vtracer_input_{unique_id}.png')
+            temp_svg_path = os.path.join(temp_dir, f'vtracer_output_{unique_id}.svg')
+            
+            # Write file using standard Python I/O
+            with open(temp_input_path, 'wb') as f:
+                f.write(image_bytes)
+                f.flush()
+                os.fsync(f.fileno())  # Ensure written to disk
+            
+            # Convert to absolute paths - vtracer needs absolute paths
             temp_input_path = os.path.abspath(temp_input_path)
-            temp_svg_path = os.path.abspath(temp_input_path.replace('.png', '.svg'))
+            temp_svg_path = os.path.abspath(temp_svg_path)
 
             # Verify file exists, is readable, and has content with absolute path
             if not os.path.exists(temp_input_path):
@@ -355,16 +361,22 @@ class VectorizerService:
                 raise Exception(f"Cannot read file back before vtracer: {str(e)}")
 
             # Convert using VTracer with absolute paths
-            # Log the paths for debugging (remove in production if needed)
-            print(f"VTracer input path: {temp_input_path}")
-            print(f"VTracer output path: {temp_svg_path}")
-            print(f"Input file exists: {os.path.exists(temp_input_path)}")
-            print(f"Input file readable: {os.access(temp_input_path, os.R_OK)}")
-            print(f"Input file size: {os.path.getsize(temp_input_path)}")
+            # Ensure paths are strings (not Path objects) for Rust compatibility
+            vtracer_input_path = str(temp_input_path)
+            vtracer_output_path = str(temp_svg_path)
+            
+            # Final debug check - log to stderr (more reliable than print in some environments)
+            import sys
+            sys.stderr.write(f"DEBUG: VTracer input path: {vtracer_input_path}\n")
+            sys.stderr.write(f"DEBUG: VTracer output path: {vtracer_output_path}\n")
+            sys.stderr.write(f"DEBUG: Input file exists: {os.path.exists(vtracer_input_path)}\n")
+            sys.stderr.write(f"DEBUG: Input file readable: {os.access(vtracer_input_path, os.R_OK)}\n")
+            sys.stderr.write(f"DEBUG: Input file size: {os.path.getsize(vtracer_input_path)}\n")
+            sys.stderr.flush()
             
             vtracer.convert_image_to_svg_py(
-                temp_input_path,
-                temp_svg_path,
+                vtracer_input_path,
+                vtracer_output_path,
                 colormode=colormode,
                 color_precision=color_precision,
                 filter_speckle=filter_speckle,
