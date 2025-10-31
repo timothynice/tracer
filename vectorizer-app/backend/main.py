@@ -1,6 +1,8 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from PIL import Image
 import io
 import base64
@@ -24,6 +26,55 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Exception handlers to ensure CORS headers on all error responses
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Ensure HTTPException responses include CORS headers"""
+    origin = request.headers.get("origin")
+    cors_origin = origin if origin in allowed_origins else (allowed_origins[0] if allowed_origins else "*")
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers={
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
+
+@app.exception_handler(StarletteHTTPException)
+async def starlette_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Ensure StarletteHTTPException responses include CORS headers"""
+    origin = request.headers.get("origin")
+    cors_origin = origin if origin in allowed_origins else (allowed_origins[0] if allowed_origins else "*")
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers={
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Catch-all exception handler with CORS headers"""
+    import traceback
+    traceback.print_exc()
+    
+    origin = request.headers.get("origin")
+    cors_origin = origin if origin in allowed_origins else (allowed_origins[0] if allowed_origins else "*")
+    
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+        headers={
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
 
 class ParameterValidationError(ValueError):
     """Custom exception for parameter validation errors"""
