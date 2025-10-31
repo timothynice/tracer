@@ -12,20 +12,30 @@ import re
 
 app = FastAPI(title="Image Vectorizer API")
 
-# Configure CORS from environment
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:5173,https://tracer-frontend-z5u3.onrender.com,https://tracer-n32i.onrender.com")
-allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+# Configure CORS more robustly - temporary wildcard for debugging
+debug_mode = os.getenv("DEBUG_CORS", "false").lower() == "true"
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:5173,https://tracer-frontend-z5u3.onrender.com")
+
+if debug_mode:
+    allowed_origins = ["*"]  # Temporarily allow all origins for debugging
+    print("🚨 DEBUG MODE: CORS allowing all origins")
+else:
+    allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
 
 # Add debug logging for CORS
 print(f"CORS allowed origins: {allowed_origins}")
+print(f"Environment: {os.getenv('NODE_ENV', 'development')}")
+print(f"Debug CORS mode: {debug_mode}")
 
+# More permissive CORS configuration for production issues
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_credentials=False,  # Simplified for debugging
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["*"],
+    max_age=3600  # Cache preflight for 1 hour
 )
 
 class ParameterValidationError(ValueError):
@@ -263,44 +273,51 @@ async def health_check():
     """Health check endpoint to verify server is awake and responsive"""
     return {"status": "healthy", "message": "Vectorizer service is running"}
 
+@app.options("/vectorize")
+async def vectorize_options():
+    """Handle preflight OPTIONS request for /vectorize"""
+    return {"message": "OK"}
+
 @app.post("/vectorize")
 async def vectorize_image(file: UploadFile = File(...), parameters: str = Form("{}"), selected_method: str = Form("")):
     """Vectorize an uploaded image using multiple methods with parameters"""
-    # Check file size (20MB limit)
-    MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB in bytes
-    file_bytes = await file.read()
-    if len(file_bytes) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="File size exceeds 20MB limit")
-
-    # Reset file position for reading later
-    await file.seek(0)
-
-    # Restrict to specific image types
-    allowed_types = ['image/png', 'image/jpeg', 'image/gif']
-    if not file.content_type or file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="File must be PNG, JPEG, or GIF format")
-
-    # Parse parameters OUTSIDE the main try block so validation errors aren't caught
     try:
+        print(f"Vectorize request received - File: {file.filename}, Size: {file.size}, Method: {selected_method}")
+
+        # Check file size (20MB limit)
+        MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB in bytes
+        file_bytes = await file.read()
+        print(f"File read successfully: {len(file_bytes)} bytes")
+
+        if len(file_bytes) > MAX_FILE_SIZE:
+            print(f"File size exceeded: {len(file_bytes)} > {MAX_FILE_SIZE}")
+            raise HTTPException(status_code=400, detail="File size exceeds 20MB limit")
+
+        # Reset file position for reading later
+        await file.seek(0)
+
+        # Restrict to specific image types
+        allowed_types = ['image/png', 'image/jpeg', 'image/gif']
+        if not file.content_type or file.content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="File must be PNG, JPEG, or GIF format")
+
+        # Parse parameters
         import json
-        params = json.loads(parameters) if parameters != "{}" else {}
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON in parameters: {str(e)}")
+        try:
+            params = json.loads(parameters) if parameters != "{}" else {}
+            print(f"Parameters parsed: {params}")
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON in parameters: {str(e)}")
 
-    # Validate parameters OUTSIDE the main try block
-    try:
+        # Validate parameters
         if 'potrace' in params:
             validate_potrace_params(params['potrace'])
         if 'vtracer' in params:
             validate_vtracer_params(params['vtracer'])
-    except ParameterValidationError as e:
-        raise HTTPException(status_code=400, detail=f"Parameter validation failed: {str(e)}")
 
-    try:
-        
-
-        # Read image bytes
-        image_bytes = await file.read()
+        # Use the image bytes we already read (don't read again)
+        print(f"Using image bytes: {len(file_bytes)} bytes")
+        image_bytes = file_bytes
 
         # Process with all available methods (or just the selected one if specified)
         results = {}
@@ -345,12 +362,17 @@ async def vectorize_image(file: UploadFile = File(...), parameters: str = Form("
             'parameters_used': params
         })
 
+    except HTTPException:
+        # Re-raise HTTP exceptions (they already have proper status codes)
+        raise
+    except ParameterValidationError as e:
+        print(f"Parameter validation error: {e}")
+        raise HTTPException(status_code=400, detail=f"Parameter validation failed: {str(e)}")
     except Exception as e:
+        print(f"Unexpected error in vectorize endpoint: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "message": "Image Vectorizer API is running"}
 
 if __name__ == "__main__":
     import uvicorn
