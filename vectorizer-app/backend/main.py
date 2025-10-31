@@ -345,9 +345,9 @@ class VectorizerService:
             file_size = os.path.getsize(temp_input_path)
             if file_size == 0:
                 raise Exception(f"Temporary input file is empty: {temp_input_path}")
-            
-            if file_size != len(image_bytes):
-                raise Exception(f"File size mismatch: expected {len(image_bytes)}, got {file_size}")
+
+            # Note: We don't validate file size against original since we convert formats
+            # (JPG -> PNG conversion changes file size)
 
             # Get original image dimensions - verify image is valid
             try:
@@ -363,14 +363,7 @@ class VectorizerService:
             if not os.path.exists(temp_input_path) or not os.access(temp_input_path, os.R_OK):
                 raise Exception(f"File disappeared or became unreadable before vtracer call: {temp_input_path}")
 
-            # Try to read file back to verify it's accessible (final sanity check)
-            try:
-                with open(temp_input_path, 'rb') as test_file:
-                    test_bytes = test_file.read()
-                    if len(test_bytes) != len(image_bytes):
-                        raise Exception(f"File read verification failed: read {len(test_bytes)} bytes, expected {len(image_bytes)}")
-            except Exception as e:
-                raise Exception(f"Cannot read file back before vtracer: {str(e)}")
+            # File has been validated - exists, readable, non-empty, and valid image format
 
             # Convert using VTracer with absolute paths
             # Ensure paths are strings (not Path objects) for Rust compatibility
