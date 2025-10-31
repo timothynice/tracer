@@ -258,6 +258,11 @@ class VectorizerService:
 
 vectorizer = VectorizerService()
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint to verify server is awake and responsive"""
+    return {"status": "healthy", "message": "Vectorizer service is running"}
+
 @app.post("/vectorize")
 async def vectorize_image(file: UploadFile = File(...), parameters: str = Form("{}"), selected_method: str = Form("")):
     """Vectorize an uploaded image using multiple methods with parameters"""

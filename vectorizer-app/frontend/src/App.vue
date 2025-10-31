@@ -73,7 +73,7 @@
       <div v-if="loading" class="loading-state">
         <div class="loading-spinner"></div>
         <p>{{ loadingMessage }}</p>
-        <p v-if="isRetrying" class="retry-info">Free servers can take up to 60 seconds to start. Please wait...</p>
+        <p v-if="isWakingServer || isRetrying" class="retry-info">Free servers can take up to 60 seconds to start. Please wait...</p>
       </div>
 
       <!-- Results Section -->
@@ -404,6 +404,9 @@ export default {
   },
   computed: {
     loadingMessage() {
+      if (this.isWakingServer) {
+        return `Waking up server... Health check ${this.healthCheckAttempt}/3`
+      }
       if (this.isRetrying) {
         return `Server is waking up... Attempt ${this.retryAttempt}/3`
       }
@@ -427,6 +430,8 @@ export default {
       selectedMethod: 'vtracer', // Default to VTracer
       retryAttempt: 0,
       isRetrying: false,
+      healthCheckAttempt: 0,
+      isWakingServer: false,
       parameters: {
         potrace: {
           invert: false,
@@ -521,9 +526,11 @@ export default {
       this.parameterLoading = false
       this.showParameters = false  // Close parameters panel
 
-      // Clear retry state
+      // Clear retry and health check state
       this.retryAttempt = 0
       this.isRetrying = false
+      this.healthCheckAttempt = 0
+      this.isWakingServer = false
 
       // Clear any pending parameter debounce timers
       if (this.parameterDebounceTimer) {
@@ -568,6 +575,17 @@ export default {
       }
       reader.readAsDataURL(file)
 
+      // Check server health before attempting vectorization
+      console.log('Checking server health before vectorization...')
+      const serverHealthy = await this.checkServerHealth()
+
+      if (!serverHealthy) {
+        this.error = 'Unable to connect to vectorization server. It may be starting up - please try again in a moment.'
+        this.loading = false
+        return
+      }
+
+      console.log('Server is healthy, proceeding with vectorization...')
       await this.vectorizeWithCurrentParameters()
     },
 
@@ -775,6 +793,60 @@ export default {
 
     delay(ms) {
       return new Promise(resolve => setTimeout(resolve, ms))
+    },
+
+    async checkServerHealth(maxRetries = 3) {
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      let lastError = null
+
+      // Set initial wake-up state
+      this.isWakingServer = true
+      this.healthCheckAttempt = 0
+
+      try {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          this.healthCheckAttempt = attempt
+
+          try {
+            // Progressive timeouts for health check: 10s, 30s, 60s
+            const timeout = attempt === 1 ? 10000 : 30000 + (attempt - 2) * 30000
+
+            console.log(`Health check attempt ${attempt}/${maxRetries} (${timeout/1000}s timeout)`)
+
+            const response = await axios.get(`${apiBase}/health`, {
+              timeout: timeout
+            })
+
+            console.log('Health check passed:', response.data)
+            return true // Server is healthy
+
+          } catch (error) {
+            console.log(`Health check attempt ${attempt} failed:`, error.message || error.code)
+            lastError = error
+
+            const shouldRetry = this.shouldRetryError(error) && attempt < maxRetries
+
+            if (shouldRetry) {
+              // Progressive delays: 2s, 5s
+              const delayMs = 2000 + (attempt - 1) * 3000
+              console.log(`Server appears to be spinning up... waiting ${delayMs/1000}s...`)
+
+              await this.delay(delayMs)
+              continue
+            }
+
+            break
+          }
+        }
+
+        console.warn('Health check failed after all attempts:', lastError)
+        return false // Server is not healthy
+
+      } finally {
+        // Reset wake-up state regardless of outcome
+        this.isWakingServer = false
+        this.healthCheckAttempt = 0
+      }
     },
 
     // Development/test method - can be removed in production
