@@ -305,31 +305,23 @@ class VectorizerService:
             if not os.path.exists(temp_dir):
                 temp_dir = tempfile.gettempdir()
             
-            # Detect image format to give the temp file the correct extension.
-            # Some libraries (including VTracer/image-rs) infer format from extension.
-            detected_ext = 'png'
-            try:
-                probe_img = Image.open(io.BytesIO(image_bytes))
-                fmt = (probe_img.format or '').upper()
-                if fmt == 'JPEG':
-                    detected_ext = 'jpg'
-                elif fmt in ['PNG', 'GIF', 'BMP', 'WEBP', 'TIFF']:
-                    detected_ext = fmt.lower()
-                probe_img.close()
-            except Exception:
-                # If probing fails, fall back to PNG extension (content will still be valid for PNG uploads)
-                detected_ext = 'png'
-
-            # Generate unique filename using detected extension
+            # Always convert to PNG for VTracer compatibility
+            # VTracer's Rust library has issues with some JPEG files, so we
+            # standardize on PNG format regardless of input format
             unique_id = str(uuid.uuid4())
-            temp_input_path = os.path.join(temp_dir, f'vtracer_input_{unique_id}.{detected_ext}')
+            temp_input_path = os.path.join(temp_dir, f'vtracer_input_{unique_id}.png')
             temp_svg_path = os.path.join(temp_dir, f'vtracer_output_{unique_id}.svg')
-            
-            # Write file using standard Python I/O
-            with open(temp_input_path, 'wb') as f:
-                f.write(image_bytes)
-                f.flush()
-                os.fsync(f.fileno())  # Ensure written to disk
+
+            # Convert to PNG using PIL to ensure VTracer compatibility
+            try:
+                img = Image.open(io.BytesIO(image_bytes))
+                img = img.convert('RGB')  # Ensure RGB mode for consistent PNG output
+                img.save(temp_input_path, 'PNG', optimize=True)
+                img.close()
+            except Exception as e:
+                raise Exception(f"Failed to convert image to PNG format: {str(e)}")
+
+            # Ensure file is written and accessible
             
             # Set explicit permissions - ensure file is readable by all (Rust might run as different user)
             os.chmod(temp_input_path, 0o644)  # rw-r--r--
