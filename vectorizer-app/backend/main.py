@@ -298,18 +298,31 @@ class VectorizerService:
         temp_input_path = None
         temp_svg_path = None
         try:
-            # Create temporary input file with explicit mode
-            fd, temp_input_path = tempfile.mkstemp(suffix='.png')
+            # Create temporary input file with explicit mode - use /tmp directory explicitly
+            temp_dir = tempfile.gettempdir()
+            fd, temp_input_path = tempfile.mkstemp(suffix='.png', dir=temp_dir)
             try:
                 # Write bytes directly to file descriptor
-                os.write(fd, image_bytes)
+                written = os.write(fd, image_bytes)
+                if written != len(image_bytes):
+                    raise Exception(f"Failed to write all bytes: wrote {written} of {len(image_bytes)}")
                 os.fsync(fd)  # Force write to disk
             finally:
                 os.close(fd)
 
-            # Verify file exists, is readable, and has content
+            # Convert to absolute path - vtracer needs absolute paths
+            temp_input_path = os.path.abspath(temp_input_path)
+            temp_svg_path = os.path.abspath(temp_input_path.replace('.png', '.svg'))
+
+            # Verify file exists, is readable, and has content with absolute path
             if not os.path.exists(temp_input_path):
                 raise Exception(f"Temporary input file was not created: {temp_input_path}")
+            
+            if not os.path.isfile(temp_input_path):
+                raise Exception(f"Path exists but is not a file: {temp_input_path}")
+            
+            if not os.access(temp_input_path, os.R_OK):
+                raise Exception(f"File is not readable: {temp_input_path}")
             
             file_size = os.path.getsize(temp_input_path)
             if file_size == 0:
@@ -317,8 +330,6 @@ class VectorizerService:
             
             if file_size != len(image_bytes):
                 raise Exception(f"File size mismatch: expected {len(image_bytes)}, got {file_size}")
-
-            temp_svg_path = temp_input_path.replace('.png', '.svg')
 
             # Get original image dimensions - verify image is valid
             try:
@@ -330,7 +341,27 @@ class VectorizerService:
             except Exception as e:
                 raise Exception(f"Invalid image file: {str(e)}")
 
-            # Convert using VTracer
+            # Final verification before calling vtracer - ensure file is still there
+            if not os.path.exists(temp_input_path) or not os.access(temp_input_path, os.R_OK):
+                raise Exception(f"File disappeared or became unreadable before vtracer call: {temp_input_path}")
+
+            # Try to read file back to verify it's accessible (final sanity check)
+            try:
+                with open(temp_input_path, 'rb') as test_file:
+                    test_bytes = test_file.read()
+                    if len(test_bytes) != len(image_bytes):
+                        raise Exception(f"File read verification failed: read {len(test_bytes)} bytes, expected {len(image_bytes)}")
+            except Exception as e:
+                raise Exception(f"Cannot read file back before vtracer: {str(e)}")
+
+            # Convert using VTracer with absolute paths
+            # Log the paths for debugging (remove in production if needed)
+            print(f"VTracer input path: {temp_input_path}")
+            print(f"VTracer output path: {temp_svg_path}")
+            print(f"Input file exists: {os.path.exists(temp_input_path)}")
+            print(f"Input file readable: {os.access(temp_input_path, os.R_OK)}")
+            print(f"Input file size: {os.path.getsize(temp_input_path)}")
+            
             vtracer.convert_image_to_svg_py(
                 temp_input_path,
                 temp_svg_path,
