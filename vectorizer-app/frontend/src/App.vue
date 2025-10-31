@@ -72,7 +72,9 @@
       <!-- Loading State -->
       <div v-if="loading" class="loading-state">
         <div class="loading-spinner"></div>
-        <p>Processing your image...</p>
+        <p v-if="!isRetrying">Processing your image...</p>
+        <p v-if="isRetrying">Server is waking up... Attempt {{ retryAttempt }}/3</p>
+        <p v-if="isRetrying" class="retry-info">Free servers can take up to 60 seconds to start. Please wait...</p>
       </div>
 
       <!-- Results Section -->
@@ -410,6 +412,8 @@ export default {
       parameterLoading: false,
       parameterDebounceTimer: null,
       selectedMethod: 'vtracer', // Default to VTracer
+      retryAttempt: 0,
+      isRetrying: false,
       parameters: {
         potrace: {
           invert: false,
@@ -566,16 +570,8 @@ export default {
         formData.append('parameters', JSON.stringify(this.parameters))
         formData.append('selected_method', selectedMethodOnly ? this.selectedMethod : '')
 
-        
-
         const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-        const response = await axios.post(`${apiBase}/vectorize`, formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data'
-          }
-        })
-
-        
+        const response = await this.makeRequestWithRetry(`${apiBase}/vectorize`, formData)
 
         if (selectedMethodOnly && this.results) {
           // Merge results to preserve other method's results
@@ -586,19 +582,19 @@ export default {
               ...response.data.vectorized
             }
           }
-          
         } else {
           this.results = response.data
-          
         }
 
         this.error = null
       } catch (error) {
-        
+        console.error('Vectorization failed:', error)
         if (error.response) {
           this.error = error.response.data?.detail || 'Processing failed'
+        } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+          this.error = 'Request timed out. The server may be starting up - please try again.'
         } else if (error.request) {
-          this.error = 'Server not responding. Please check if the backend is running.'
+          this.error = 'Server not responding. The service may be waking up - please wait and try again.'
         } else {
           this.error = 'An unexpected error occurred'
         }
@@ -697,6 +693,59 @@ export default {
       link.click()
       document.body.removeChild(link)
       URL.revokeObjectURL(url)
+    },
+
+    async makeRequestWithRetry(url, formData, maxRetries = 3) {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        this.retryAttempt = attempt
+        this.isRetrying = attempt > 1
+
+        try {
+          // Progressive timeout: 60s for first attempt, 90s for retry, 120s for final attempt
+          const timeout = 60000 + (attempt - 1) * 30000
+
+          if (this.isRetrying) {
+            console.log(`Retry attempt ${attempt}/${maxRetries} with ${timeout/1000}s timeout...`)
+            // Show helpful retry message
+            this.error = `Server is waking up... Attempt ${attempt}/${maxRetries} (${timeout/1000}s timeout)`
+          }
+
+          const response = await axios.post(url, formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data'
+            },
+            timeout: timeout
+          })
+
+          // Success - reset retry state
+          this.retryAttempt = 0
+          this.isRetrying = false
+          return response
+
+        } catch (error) {
+          console.log(`Attempt ${attempt} failed:`, error.message)
+
+          const isTimeout = error.code === 'ECONNABORTED' || error.message.includes('timeout')
+          const isNetworkError = !error.response && error.request
+          const isServerError = error.response && error.response.status >= 500
+
+          // Retry on timeout, network errors, or server errors
+          if (attempt < maxRetries && (isTimeout || isNetworkError || isServerError)) {
+            // Wait before retry: 2s, 5s, 8s
+            const delay = Math.min(2000 + (attempt - 1) * 3000, 8000)
+            console.log(`Waiting ${delay/1000}s before retry...`)
+            this.error = `Server is starting up... Retrying in ${delay/1000}s...`
+
+            await new Promise(resolve => setTimeout(resolve, delay))
+            continue
+          }
+
+          // Final failure or non-retryable error
+          this.retryAttempt = 0
+          this.isRetrying = false
+          throw error
+        }
+      }
     }
   }
 }
@@ -920,6 +969,12 @@ body {
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+.retry-info {
+  font-size: 0.875rem;
+  color: #718096;
+  margin-top: 0.5rem;
 }
 
 /* Results Section */

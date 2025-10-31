@@ -13,15 +13,19 @@ import re
 app = FastAPI(title="Image Vectorizer API")
 
 # Configure CORS from environment
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:5173,https://tracer-frontend-z5u3.onrender.com")
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:5173,https://tracer-frontend-z5u3.onrender.com,https://tracer-n32i.onrender.com")
 allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+
+# Add debug logging for CORS
+print(f"CORS allowed origins: {allowed_origins}")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 class ParameterValidationError(ValueError):
