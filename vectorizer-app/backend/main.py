@@ -316,9 +316,12 @@ class VectorizerService:
                 f.flush()
                 os.fsync(f.fileno())  # Ensure written to disk
             
-            # Convert to absolute paths - vtracer needs absolute paths
-            temp_input_path = os.path.abspath(temp_input_path)
-            temp_svg_path = os.path.abspath(temp_svg_path)
+            # Set explicit permissions - ensure file is readable by all (Rust might run as different user)
+            os.chmod(temp_input_path, 0o644)  # rw-r--r--
+            
+            # Convert to absolute paths using realpath to resolve any symlinks
+            temp_input_path = os.path.realpath(os.path.abspath(temp_input_path))
+            temp_svg_path = os.path.abspath(temp_input_path.replace('.png', '.svg'))
 
             # Verify file exists, is readable, and has content with absolute path
             if not os.path.exists(temp_input_path):
@@ -372,20 +375,31 @@ class VectorizerService:
             sys.stderr.write(f"DEBUG: Input file exists: {os.path.exists(vtracer_input_path)}\n")
             sys.stderr.write(f"DEBUG: Input file readable: {os.access(vtracer_input_path, os.R_OK)}\n")
             sys.stderr.write(f"DEBUG: Input file size: {os.path.getsize(vtracer_input_path)}\n")
+            sys.stderr.write(f"DEBUG: Input file permissions: {oct(os.stat(vtracer_input_path).st_mode)}\n")
+            sys.stderr.write(f"DEBUG: Current working directory: {os.getcwd()}\n")
             sys.stderr.flush()
             
-            vtracer.convert_image_to_svg_py(
-                vtracer_input_path,
-                vtracer_output_path,
-                colormode=colormode,
-                color_precision=color_precision,
-                filter_speckle=filter_speckle,
-                corner_threshold=corner_threshold,
-                length_threshold=length_threshold,
-                max_iterations=max_iterations,
-                splice_threshold=splice_threshold,
-                path_precision=path_precision
-            )
+            # Try calling vtracer with the resolved path
+            # If it still fails, wrap in try/except to get better error message
+            try:
+                vtracer.convert_image_to_svg_py(
+                    vtracer_input_path,
+                    vtracer_output_path,
+                    colormode=colormode,
+                    color_precision=color_precision,
+                    filter_speckle=filter_speckle,
+                    corner_threshold=corner_threshold,
+                    length_threshold=length_threshold,
+                    max_iterations=max_iterations,
+                    splice_threshold=splice_threshold,
+                    path_precision=path_precision
+                )
+            except Exception as vtracer_error:
+                # Log detailed error information
+                sys.stderr.write(f"DEBUG: VTracer error type: {type(vtracer_error).__name__}\n")
+                sys.stderr.write(f"DEBUG: VTracer error message: {str(vtracer_error)}\n")
+                sys.stderr.flush()
+                raise Exception(f"VTracer failed with path '{vtracer_input_path}': {str(vtracer_error)}")
 
             # Read SVG content
             with open(temp_svg_path, 'r') as f:
