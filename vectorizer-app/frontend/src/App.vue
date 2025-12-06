@@ -396,6 +396,14 @@ export default {
     // Display ASCII art in console
     this.showConsoleArt()
 
+    // Log API configuration for debugging
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+    const mode = import.meta.env.MODE
+    console.log(`%c🔌 API Configuration`, 'color: #4a5568; font-weight: bold;')
+    console.log(`   Mode: ${mode}`)
+    console.log(`   API URL: ${apiUrl}`)
+    console.log(`   All env vars:`, import.meta.env)
+
     // Expose test method to console for debugging
     if (import.meta.env.MODE === 'development') {
       window.testRetrySystem = () => this.testRetrySystem()

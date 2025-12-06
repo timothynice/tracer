@@ -18,7 +18,7 @@ services:
   - type: web
     name: tracer-frontend
     runtime: static
-    buildCommand: cd frontend && npm ci && npm run build
+    buildCommand: cd frontend && npm ci && VITE_API_URL=https://tracer-n32i.onrender.com npm run build
     staticPublishPath: frontend/dist
     plan: free
     envVars:
