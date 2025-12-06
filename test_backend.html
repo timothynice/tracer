@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Backend Test</title>
+</head>
+<body>
+    <h1>Backend Vectorization Test</h1>
+    <input type="file" id="fileInput" accept="image/png,image/jpeg,image/gif">
+    <button onclick="testVectorize()">Test Vectorize</button>
+    <div id="result" style="white-space: pre-wrap; font-family: monospace; margin-top: 20px;"></div>
+
+    <script>
+        async function testVectorize() {
+            const fileInput = document.getElementById('fileInput');
+            const resultDiv = document.getElementById('result');
+
+            if (!fileInput.files[0]) {
+                resultDiv.textContent = 'Please select a file first';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('parameters', JSON.stringify({
+                potrace: {
+                    invert: false,
+                    turdsize: 2,
+                    turnpolicy: 'minority',
+                    alphamax: 1.0,
+                    opticurve: true
+                },
+                vtracer: {
+                    colormode: 'color',
+                    color_precision: 6,
+                    filter_speckle: 4,
+                    corner_threshold: 60,
+                    length_threshold: 4.0,
+                    max_iterations: 10,
+                    splice_threshold: 45,
+                    path_precision: 3
+                }
+            }));
+            formData.append('selected_method', '');
+
+            resultDiv.textContent = 'Sending request to backend...';
+
+            try {
+                const response = await fetch('https://tracer-n32i.onrender.com/vectorize', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                resultDiv.textContent = `Status: ${response.status} ${response.statusText}\n\n`;
+
+                const data = await response.json();
+                resultDiv.textContent += 'Response:\n' + JSON.stringify(data, null, 2);
+
+                // Check if SVG results are present and their lengths
+                if (data.vectorized) {
+                    resultDiv.textContent += '\n\nVectorized results:';
+                    if (data.vectorized.potrace) {
+                        resultDiv.textContent += `\n- Potrace: ${data.vectorized.potrace.substring(0, 100)}...`;
+                        resultDiv.textContent += `\n  Length: ${data.vectorized.potrace.length} chars`;
+                    }
+                    if (data.vectorized.vtracer) {
+                        resultDiv.textContent += `\n- VTracer: ${data.vectorized.vtracer.substring(0, 100)}...`;
+                        resultDiv.textContent += `\n  Length: ${data.vectorized.vtracer.length} chars`;
+                    }
+                }
+            } catch (error) {
+                resultDiv.textContent += 'Error: ' + error.message;
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+</html>
