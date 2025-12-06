@@ -413,10 +413,10 @@ export default {
   computed: {
     loadingMessage() {
       if (this.isWakingServer) {
-        return `Waking up server (cold start)... Health check ${this.healthCheckAttempt}/3`
+        return `⏱️ Waking up backend server (cold start)... ${this.healthCheckAttempt}/3`
       }
       if (this.isRetrying) {
-        return `Server cold start detected... Retry ${this.retryAttempt}/3`
+        return `⏱️ Backend is starting up... Attempt ${this.retryAttempt}/3`
       }
       return 'Processing your image...'
     }
@@ -588,9 +588,11 @@ export default {
       const serverHealthy = await this.checkServerHealth()
 
       if (!serverHealthy) {
-        this.error = 'Server is starting up (cold start). This takes ~60 seconds on the free tier. Please try again in a moment or wait for the retry.'
-        this.loading = false
-        return
+        this.error = '⏱️ Server is waking up from sleep (cold start). This is normal on the free tier and takes 30-60 seconds. The app will automatically retry - please wait...'
+
+        // Don't stop loading - continue trying in the background
+        console.log('Cold start detected - attempting vectorization anyway, retries will handle it...')
+        // Continue to vectorization - the retry logic will handle the cold start
       }
 
       console.log('Server is healthy, proceeding with vectorization...')
