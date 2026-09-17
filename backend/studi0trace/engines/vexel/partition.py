@@ -80,9 +80,13 @@ def seed_mask(features: np.ndarray, grad: np.ndarray, g_low: float, g_seed: floa
     the gradient test keeps neighbouring regions from leaking into one seed."""
     ridge, valley = ridges_and_valleys(features, grad, g_low)
     band = ndimage.binary_dilation(ridge, _CROSS)
-    # Valleys are local minima across the edge direction and can never be edge
-    # pixels, so they stay seeds regardless of their gradient (thin stroke cores).
-    return (~band & (grad < g_seed)) | valley
+    # Junction gaps sit right next to ridge segments, so the gradient test is only
+    # applied within two pixels of the band; a steep but smooth ramp far from any
+    # ridge keeps its seeds. Valleys (minima across the edge direction) can never
+    # be edge pixels and always seed - that is what keeps thin stroke cores alive.
+    near_band = ndimage.binary_dilation(band, _CROSS, iterations=2)
+    leaky = near_band & (grad >= g_seed)
+    return (~band & ~leaky) | valley
 
 
 def _absorb_small(labels: np.ndarray, grad: np.ndarray, min_region: int, rounds: int = 3) -> np.ndarray:
