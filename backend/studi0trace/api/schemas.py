@@ -18,15 +18,19 @@ class EngineResult(BaseModel):
     error: ErrorBody | None = None
 
 
+class UploadResponse(BaseModel):
+    image_id: str
+    width: int
+    height: int
+    format: str
+
+
 class VectorizeResponse(BaseModel):
     success: bool = True
-    original_image: str
+    image_id: str
     width: int
     height: int
     results: dict[str, EngineResult]
-    # Legacy shape consumed by the current Vue app: {engine: svg | "Error: ..."}.
-    # Removed in Project C.
-    vectorized: dict[str, str]
     parameters_used: dict[str, dict[str, Any]]
 
 

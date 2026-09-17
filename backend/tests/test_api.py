@@ -10,18 +10,21 @@ from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
 from studi0trace.main import create_app
 from studi0trace.settings import Settings
-from tests.conftest import black_square_on_transparent, encode, make_png
+from tests.conftest import black_square_on_transparent, make_png
 
 ORIGIN = "http://localhost:5173"
 
 
 @pytest.fixture(scope="module")
 def client() -> TestClient:
-    app = create_app(Settings(allowed_origins=[ORIGIN], max_upload_bytes=1_000_000, max_image_pixels=4_000_000))
+    app = create_app(Settings(
+        allowed_origins=[ORIGIN], max_upload_bytes=1_000_000, max_image_pixels=4_000_000,
+        max_upload_cache_bytes=8 * 1024 * 1024, upload_ttl_seconds=60,
+    ))
     return TestClient(app, headers={"Origin": ORIGIN}, raise_server_exceptions=False)
 
 
-def upload(client: TestClient, data: bytes, **form) -> dict:
+def upload(client: TestClient, data: bytes, **form):
     return client.post("/vectorize", files={"file": ("x.png", data, "application/octet-stream")}, data=form)
 
 
@@ -38,21 +41,49 @@ def test_engines_expose_schema_and_defaults(client):
     assert potrace["defaults"]["threshold"] == 128
 
 
-def test_vectorize_runs_all_engines_with_legacy_shape(client):
+def test_vectorize_with_file_runs_all_engines(client):
     r = upload(client, black_square_on_transparent())
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] and body["width"] == 64
-    assert body["original_image"].startswith("data:image/png;base64,")
+    assert len(body["image_id"]) == 32
     for eid in ("potrace", "vtracer"):
         assert body["results"][eid]["svg"].startswith("<")
         assert body["results"][eid]["stats"]["paths"] >= 1
-        assert body["vectorized"][eid].lstrip().startswith(("<?xml", "<svg"))
     assert body["parameters_used"]["potrace"]["threshold"] == 128
+    assert "vectorized" not in body and "original_image" not in body
 
 
-def test_selected_method_alias_and_engines_list(client):
-    assert set(upload(client, make_png(), selected_method="potrace").json()["results"]) == {"potrace"}
+def test_upload_then_vectorize_by_id(client):
+    up = client.post("/uploads", files={"file": ("x.png", black_square_on_transparent(), "image/png")}).json()
+    assert up["width"] == 64 and up["format"] == "PNG" and len(up["image_id"]) == 32
+
+    r = client.post("/vectorize", data={"image_id": up["image_id"], "engines": "potrace"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["image_id"] == up["image_id"]
+    assert set(body["results"]) == {"potrace"}
+
+
+def test_file_response_id_is_reusable(client):
+    first = upload(client, make_png(), engines="potrace").json()
+    again = client.post("/vectorize", data={"image_id": first["image_id"], "engines": "vtracer"}).json()
+    assert set(again["results"]) == {"vtracer"}
+
+
+def test_unknown_image_id_is_404(client):
+    r = client.post("/vectorize", data={"image_id": "0" * 32})
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "image_expired"
+
+
+def test_no_image_is_400(client):
+    r = client.post("/vectorize", data={"engines": "potrace"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "no_image"
+
+
+def test_engines_list_filters(client):
     assert set(upload(client, make_png(), engines="vtracer").json()["results"]) == {"vtracer"}
 
 
@@ -83,6 +114,8 @@ def test_garbage_upload_is_400_with_cors(client):
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "unsupported_format"
     assert r.headers["access-control-allow-origin"] == ORIGIN
+    r = client.post("/uploads", files={"file": ("x.png", b"nope", "image/png")})
+    assert r.status_code == 400
 
 
 def test_oversize_upload_is_400(client):
@@ -108,7 +141,6 @@ def test_engine_failure_is_isolated(client):
         registry.unregister("boom")
     assert body["results"]["boom"]["error"]["code"] == "engine_crashed"
     assert body["results"]["potrace"]["svg"]
-    assert body["vectorized"]["boom"].startswith("Error:")
 
 
 def test_engines_run_off_the_event_loop_and_in_parallel(client):

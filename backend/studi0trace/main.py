@@ -14,6 +14,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from studi0trace import __version__
 from studi0trace.api.routes import router
 from studi0trace.engines import registry
+from studi0trace.imaging.cache import UploadCache
 from studi0trace.settings import Settings, get_settings
 
 log = logging.getLogger("studi0trace")
@@ -63,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Studi0Trace API", version=__version__)
     app.state.settings = settings
+    app.state.uploads = UploadCache(settings.max_upload_cache_bytes, settings.upload_ttl_seconds)
 
     # add_middleware() inserts at the outside: ErrorBoundary is added first so it
     # ends up *inside* CORSMiddleware.
