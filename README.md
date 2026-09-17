@@ -25,22 +25,28 @@ and tracing bands, it:
    red→blue gradient is one region and two flat tiles 6 ΔE apart are not;
 3. reconstructs each region's fill as a solid, a multi-stop linear gradient or
    a radial gradient (stop-opacity for alpha ramps);
-4. rescues thin features swallowed by a neighbour via per-region residuals;
+4. rescues thin features swallowed by a neighbour via per-region residuals,
+   then joins gradient fragments that one real fill explains;
 5. orders shapes by enclosure (painter's algorithm, seamless stacking);
 6. places outlines at **sub-pixel** positions inferred from anti-aliasing
    coverage, sharpens corners, fits circles/ellipses/rects as primitives and
-   otherwise G1 cubic Béziers.
+   otherwise G1 cubic Béziers;
+7. recovers thin lines as **stroked centreline paths** (`fill="none"`,
+   measured `stroke-width`, cap style read from the source) instead of
+   filled slivers.
 
-On the synthetic bench (mean CIEDE2000 ΔE, lower is better):
+On the bench (synthetic corpus plus real Studi0 logos; mean CIEDE2000 ΔE,
+lower is better):
 
 | class | Potrace | VTracer | **Vexel** |
 |---|---|---|---|
-| logo | 13.8 | 0.89 | **0.43** |
-| flat | 20.8 | 1.03 | 1.64 |
-| gradient | 24.0 | 11.4 | **1.10** |
-| shadow | 15.2 | 3.97 | **0.53** |
+| logo | 11.3 | 1.14 | **0.35** |
+| flat | 20.8 | 1.03 | **0.70** |
+| gradient | 24.0 | 11.4 | **0.92** |
+| shadow | 15.2 | 3.97 | **0.51** |
 
-Every 512 px corpus image traces in under 2 s in pure Python. Design and
+Vexel has the lowest ΔE on 52 of 57 corpus items; every image traces in about
+0.3 s on average and under 1.1 s worst case, in pure Python. Design and
 research notes: `docs/superpowers/specs/2026-09-17-vexel-engine-design.md`.
 
 ## Run it

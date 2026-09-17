@@ -241,6 +241,32 @@ Vexel has lower ΔE than VTracer on 39 of 48 items; every 512 px item is under
   transparent regions look visible); the Nelder-Mead centre search needs a cheap
   smooth surrogate, not the full knot search.
 
+## v0.1 additions (2026-09-17, later the same day)
+
+- **Refit-merge** (`refine.py`): adjacent smooth regions with no visible edge
+  between them are merged when the *actual* multi-stop fill fitted to the union
+  is as good as the parts. Fixes glows and off-centre radials fragmenting into
+  rings (radial-focal-512 edge F1 0 → 1).
+- **Partition robustness**: seeds must also have a low gradient within two
+  pixels of a ridge band (NMS drops ridge pixels at T-junctions; the gap pixels
+  leaked neighbouring regions into one seed — this alone took flat ΔE from 1.63
+  to 0.70). Valleys always seed. Ridges need 10 % prominence against near *or*
+  far samples.
+- **Stroke recovery** (`strokes.py`): thin regions (medial-axis half-width ≤
+  1.75 px) that are line-like become `<path fill="none" stroke=… stroke-width=…>`
+  with width = ink area ÷ centreline length, ends extended to the true tip,
+  butt vs round caps decided from ink at the tip corners. Sub-pixel lines keep
+  their true width against transparency (alpha is the coverage).
+- **Real corpus**: `bench import` adds local images; Studi0 brand marks and
+  wordmarks are in `bench/corpus/real/logo`.
+- Speed: bounding-box distance transforms, gated radial search, vectorised
+  corner detection — worst case 1.1 s, mean ≈ 0.3 s.
+
+Current standing: lowest ΔE on 52 / 57 items; classes logo 0.35 / flat 0.70 /
+gradient 0.92 / shadow 0.51 vs VTracer 1.14 / 1.03 / 11.4 / 3.97. The one
+remaining loss is `logo/thin-mark-128` (0.5–0.75 px lines), where rescued
+sub-pixel fragments are still too broken for a clean centreline.
+
 ## Out of scope for v0 (v1 candidates)
 Semi-transparent layer decomposition (Photo2ClipArt-style shadows as a separate blurred layer / `feGaussianBlur`), symmetry detection, rounded-rect and star primitives, Levien optimal cubic fitting, elliptical gradients with rotation, differentiable refinement, Rust port.
 
