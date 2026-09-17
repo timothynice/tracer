@@ -8,6 +8,12 @@
       "port": 8000
     },
     {
+      "name": "bench-reports",
+      "runtimeExecutable": "backend/.venv/bin/python",
+      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "backend/bench/reports"],
+      "port": 8765
+    },
+    {
       "name": "frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend", "--", "--host", "127.0.0.1", "--port", "5173"],

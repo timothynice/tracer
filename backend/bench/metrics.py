@@ -63,8 +63,12 @@ def alpha_mae(a_rgba: np.ndarray, b_rgba: np.ndarray) -> float:
     return float(np.abs(a_rgba[..., 3].astype(np.float32) - b_rgba[..., 3].astype(np.float32)).mean() / 255.0)
 
 
-def smooth_mask(src_rgb: np.ndarray, window: int = 7, lo: float = 0.5, hi: float = 6.0) -> np.ndarray:
-    """Pixels where the source varies gently: a gradient, not a flat fill or an edge."""
+def smooth_mask(src_rgb: np.ndarray, window: int = 7, lo: float = 0.15, hi: float = 6.0) -> np.ndarray:
+    """Pixels where the source varies gently: a gradient, not a flat fill or an edge.
+
+    `lo` must admit a 512 px full-frame ramp (slope ≈ 0.2 luma/px → 7×7 std ≈ 0.4)
+    while a flat fill (std 0) stays out; `hi` rejects anti-aliased edges.
+    """
     lum = luminance(src_rgb)
     mean = ndimage.uniform_filter(lum, window, mode="reflect")
     mean_sq = ndimage.uniform_filter(lum * lum, window, mode="reflect")

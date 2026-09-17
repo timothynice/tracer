@@ -71,6 +71,14 @@ def test_banding_detects_posterised_gradient():
     assert banded_index > 5 * max(smooth_index, 0.01)
 
 
+def test_gentle_512px_ramp_is_still_smooth():
+    # 0..102 over 512 px ≈ 0.2 luma/px, the slope of a full-frame brand gradient
+    row = (np.arange(512) * 0.2).astype(np.uint8)
+    rgb = np.repeat(np.repeat(row[None, :, None], 3, axis=2), 16, axis=0)
+    _, fraction = metrics.banding_index(rgb, rgb)
+    assert fraction > 0.8
+
+
 def test_flat_image_has_no_smooth_region():
     rgb = to_rgb_on_white(solid((90, 90, 90)))
     index, fraction = metrics.banding_index(rgb, rgb)
