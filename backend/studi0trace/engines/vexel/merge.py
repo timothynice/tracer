@@ -102,7 +102,9 @@ def merge_regions(labels: np.ndarray, features: np.ndarray, params: MergeParams,
             ca_solid, _ = st.region_cost(stats[a], n_ch, params.mu, allow_gradients=False)
             cb_solid, _ = st.region_cost(stats[b], n_ch, params.mu, allow_gradients=False)
             d_solid = st.merge_distance(float(cu_solid), float(ca_solid), float(cb_solid), na, nb)
-            return d_solid if d_solid < params.detail else np.inf
+            # Across a visible edge only near-identical flat colours merge (half the
+            # tolerance); pieces of one stroke pass, adjacent palette tiles do not.
+            return d_solid if d_solid < 0.5 * params.detail else np.inf
         return d_best
 
     heap: list[tuple[float, int, int, int, int]] = []

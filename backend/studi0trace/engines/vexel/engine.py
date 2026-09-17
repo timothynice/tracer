@@ -117,12 +117,19 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
 
     # Rescue thin strokes / small details that were swallowed by a neighbour:
     # pixels far from any boundary whose colour disagrees with their region's fill.
+    # The residual is normalised per region by its own fit error, so a smooth
+    # region that a gradient model fits imperfectly is not shredded into
+    # fragments; only pixels that are outliers *for their region* qualify.
     residual = np.zeros((height, width), np.float32)
     for lab in ids:
         m = labels == lab
         pred = fills[lab].evaluate(xs[m], ys[m])
-        residual[m] = np.sqrt(((rgba255[m] - pred) ** 2).sum(axis=1))
-    labels, rescued = rescue_features(labels, residual, threshold=7.5 * p.detail, min_region=p.min_region)
+        r = np.sqrt(((rgba255[m] - pred) ** 2).sum(axis=1))
+        base = 7.5 * p.detail
+        inliers = r[r < base]  # the swallowed feature itself must not inflate the scale
+        fit_rms = float(np.sqrt(np.mean(inliers * inliers))) if inliers.size else 0.0
+        residual[m] = r / max(base, 4.0 * fit_rms)
+    labels, rescued = rescue_features(labels, residual, threshold=1.0, min_region=p.min_region)
     if rescued:
         ids = [int(i) for i in np.unique(labels) if i != 0]
         fills.clear()
