@@ -8,7 +8,8 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 - `backend/studi0trace/` — FastAPI app (`main.py`), `api/`, `engines/`, `imaging/`
 - `backend/bench/` — Vexel Bench (`python -m bench …`)
 - `backend/tests/` — pytest; run `cd backend && .venv/bin/python -m pytest`
-- `frontend/` — Vue 3 app (legacy; being replaced by the Studi0Trace React UI)
+- `frontend/` — Studi0Trace React 18 + TS app; `npm run test:run`, `npm run build`
+  (`src/components`, `src/hooks`, `src/lib`; tokens in `src/styles.css`)
 - `docs/superpowers/specs|plans/` — design specs and implementation plans
 
 ## Conventions
@@ -24,3 +25,9 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 - Any tracing quality change must be run through the bench and compared against
   `backend/bench/baselines/` before it is called an improvement.
 - Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`.
+- Frontend follows the Studi0 design system (semantic HSL tokens, Poppins,
+  `.dark` on `<html>`, `h-10 rounded-md` buttons, sticky blurred header). Never
+  use a one-sided coloured border as a highlight; use the yellow dot, a
+  `ring-1 ring-primary/20`, a muted tint, or a weight shift.
+- Frontend tests run in `src/test/env.ts` (jsdom + Node fetch globals) with MSW
+  handlers in `src/test/server.ts` that mirror the backend contract.

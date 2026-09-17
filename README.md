@@ -5,7 +5,7 @@ scoreboard that says which trace is more true to the source image.
 
 ```
 backend/   FastAPI service + engines + bench     (Python ≥ 3.12)
-frontend/  Vue 3 single-page app                 (Node ≥ 18)
+frontend/  Studi0Trace web app: React 18 + TS + Tailwind on the Studi0 design system (Node ≥ 20)
 ```
 
 Engines today: **Potrace** (1-bit outlines) and **VTracer** (colour layers).
@@ -46,12 +46,32 @@ The backend suite includes a concurrency test (two 0.4 s traces must finish in
 | Route | Purpose |
 |---|---|
 | `GET /health` | `{status, version, engines}` |
-| `GET /engines` | Each engine's `id`, `label`, `description`, JSON Schema `params` and `defaults`. UIs render controls from this. |
-| `POST /vectorize` | multipart: `file`, `parameters` (JSON keyed by engine id), `engines` (comma list; default all). Returns `results.{engine}.{svg, elapsed_ms, stats | error}` plus `original_image`, `width`, `height`. |
+| `GET /engines` | Each engine's `id`, `label`, `description`, JSON Schema `params` and `defaults`. The UI renders every control from this — adding an engine or a parameter needs no frontend change. |
+| `POST /uploads` | multipart `file` → `{image_id, width, height, format}`. Validated once and kept server-side (LRU, sliding 30 min TTL) so re-tracing while tuning doesn't re-send the file. |
+| `POST /vectorize` | multipart: `image_id` **or** `file`, `parameters` (JSON keyed by engine id), `engines` (comma list; default all). Returns `results.{engine}.{svg, elapsed_ms, stats | error}`, `image_id`, `width`, `height`. Expired id → 404 `image_expired`; the client re-uploads and retries once. |
 
 Uploads are sniffed with Pillow (client `Content-Type` is ignored), limited by
 `MAX_UPLOAD_BYTES` (20 MB) and `MAX_IMAGE_PIXELS` (40 MP), and normalised to
-RGBA — transparency reaches every engine. `ALLOWED_ORIGINS` is a comma list.
+RGBA — transparency reaches every engine. Errors carry a stable `code`.
+Env: `ALLOWED_ORIGINS` (comma list), `MAX_UPLOAD_CACHE_BYTES` (256 MB),
+`UPLOAD_TTL_SECONDS` (1800). The upload cache is per process; with several
+workers the client's re-upload fallback keeps things correct, just slower.
+
+## Frontend
+
+Single workspace: drop / paste / browse an image (or pick a sample), then tune.
+Controls are generated from `GET /engines` (`ui.control`, `ui.group`, `ui.label`,
+`ui.step`, `ui.unit` hints on each Pydantic field). Parameter changes are
+debounced 250 ms, superseded requests are aborted, and the previous result stays
+on screen while the next one loads. Views: split (draggable divider), side by
+side, overlay (opacity), vector; shared zoom/pan keeps raster and SVG
+pixel-aligned. Download SVG or PNG (1×/2×/4×, rendered client-side), copy SVG,
+and "Compare all engines" for a stats table across engines. System/light/dark
+theme, persisted. No service worker.
+
+Tests: Vitest + Testing Library + MSW (`npm run test:run`). A custom Vitest
+environment (`src/test/env.ts`) keeps Node's fetch globals under jsdom so MSW
+sees real multipart bodies and AbortSignals.
 
 ## The engine seam
 
