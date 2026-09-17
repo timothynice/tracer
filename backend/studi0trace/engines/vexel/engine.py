@@ -18,6 +18,7 @@ from studi0trace.engines.vexel.order import enclosure, paint_order, shape_mask
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels
 from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
+from studi0trace.engines.vexel.rescue import rescue_features
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
 
@@ -26,7 +27,7 @@ class VexelParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     detail: float = Field(
-        8.0, ge=1.0, le=40.0, description="Colour difference (ΔE) below which neighbouring regions merge; lower keeps more regions",
+        6.0, ge=1.0, le=40.0, description="Colour difference (ΔE) below which neighbouring regions merge; lower keeps more regions",
         json_schema_extra={"ui": {"control": "slider", "step": 0.5, "group": "Regions"}},
     )
     min_region: int = Field(
@@ -98,17 +99,35 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
 
     fit_params = FitParams(gradients=p.gradients, max_stops=p.max_stops, tol=max(2.0, p.detail / 2.0))
-    ids = [int(i) for i in np.unique(labels) if i != 0]
-    fills = {}
+    fills: dict[int, object] = {}
     visible: dict[int, bool] = {}
+
+    def fit_regions(target: list[int]) -> None:
+        for lab in target:
+            m = labels == lab
+            # Boundary pixels are anti-aliasing mixtures: weight by distance into the
+            # region so the fill (and the visibility test) is driven by pure pixels.
+            interior = np.clip(ndimage.distance_transform_edt(m), 0.5, 2.0) / 2.0
+            w = interior[m]
+            fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], fit_params, weights=w)
+            visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.01
+
+    ids = [int(i) for i in np.unique(labels) if i != 0]
+    fit_regions(ids)
+
+    # Rescue thin strokes / small details that were swallowed by a neighbour:
+    # pixels far from any boundary whose colour disagrees with their region's fill.
+    residual = np.zeros((height, width), np.float32)
     for lab in ids:
         m = labels == lab
-        # Boundary pixels are anti-aliasing mixtures: weight by distance into the
-        # region so the fill (and the visibility test) is driven by pure pixels.
-        interior = np.clip(ndimage.distance_transform_edt(m), 0.5, 2.0) / 2.0
-        w = interior[m]
-        fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], fit_params, weights=w)
-        visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.01
+        pred = fills[lab].evaluate(xs[m], ys[m])
+        residual[m] = np.sqrt(((rgba255[m] - pred) ** 2).sum(axis=1))
+    labels, rescued = rescue_features(labels, residual, threshold=7.5 * p.detail, min_region=p.min_region)
+    if rescued:
+        ids = [int(i) for i in np.unique(labels) if i != 0]
+        fills.clear()
+        visible.clear()
+        fit_regions(ids)
 
     def fill_at(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
         return fills[lab].evaluate(qx, qy)
