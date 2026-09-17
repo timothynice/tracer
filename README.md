@@ -8,8 +8,40 @@ backend/   FastAPI service + engines + bench     (Python ≥ 3.12)
 frontend/  Studi0Trace web app: React 18 + TS + Tailwind on the Studi0 design system (Node ≥ 20)
 ```
 
-Engines today: **Potrace** (1-bit outlines) and **VTracer** (colour layers).
-**Vexel**, our own fidelity-first engine, plugs into the same seam.
+Engines: **Potrace** (1-bit outlines), **VTracer** (colour layers), and
+**Vexel** — Studi0's own fidelity-first engine.
+
+### Vexel
+
+Vexel (`backend/studi0trace/engines/vexel/`) is built for logos, flat art and
+illustrations with gradients and soft shadows. Instead of quantising colours
+and tracing bands, it:
+
+1. finds discontinuities as *ridges* of the colour gradient (Canny-style
+   non-maximum suppression), so steep smooth ramps stay whole and thin strokes
+   keep their seeds;
+2. merges regions by how well a **solid / linear / radial** colour model
+   explains the union — closed-form least squares from moment statistics, so a
+   red→blue gradient is one region and two flat tiles 6 ΔE apart are not;
+3. reconstructs each region's fill as a solid, a multi-stop linear gradient or
+   a radial gradient (stop-opacity for alpha ramps);
+4. rescues thin features swallowed by a neighbour via per-region residuals;
+5. orders shapes by enclosure (painter's algorithm, seamless stacking);
+6. places outlines at **sub-pixel** positions inferred from anti-aliasing
+   coverage, sharpens corners, fits circles/ellipses/rects as primitives and
+   otherwise G1 cubic Béziers.
+
+On the synthetic bench (mean CIEDE2000 ΔE, lower is better):
+
+| class | Potrace | VTracer | **Vexel** |
+|---|---|---|---|
+| logo | 13.8 | 0.89 | **0.43** |
+| flat | 20.8 | 1.03 | 1.64 |
+| gradient | 24.0 | 11.4 | **1.10** |
+| shadow | 15.2 | 3.97 | **0.53** |
+
+Every 512 px corpus image traces in under 2 s in pure Python. Design and
+research notes: `docs/superpowers/specs/2026-09-17-vexel-engine-design.md`.
 
 ## Run it
 

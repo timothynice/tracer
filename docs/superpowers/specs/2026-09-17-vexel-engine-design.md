@@ -206,6 +206,41 @@ Bench gate (the actual definition of done for v0):
 - Targets: `gradient` and `shadow` ΔE mean and banding_index below VTracer's; `logo` and `flat` score ≥ VTracer's with `paths` ≤ 1.2× VTracer's; per-item runtime < 2 s at 512 px.
 - Baseline committed as `bench/baselines/vexel.json`; observations appended to this spec.
 
+## Baseline observations (v0, 2026-09-17)
+
+Full corpus, defaults (`detail=6`), Python 3.13 on Tim's Mac:
+
+| class | score V / VT | ΔE mean V / VT | edge F1 V / VT | banding V / VT | paths V / VT |
+|---|---|---|---|---|---|
+| logo | 0.946 / 0.961 | **0.43 / 0.89** | 0.971 / 0.988 | 0.72 / 0.03 | 3.6 / 2.8 |
+| flat | 0.855 / 0.926 | 1.64 / 1.03 | 0.933 / 0.962 | 2.37 / 0.44 | 10.4 / 12.6 |
+| gradient | 0.931 / 0.822 | **1.10 / 11.4** | 0.801 / 0.902 | 0.30 / 0.25 | 2.0 / 5.5 |
+| shadow | 0.930 / 0.840 | **0.53 / 3.97** | 0.895 / 0.874 | 0.51 / 8.68 | 5.0 / 8.7 |
+
+Vexel has lower ΔE than VTracer on 39 of 48 items; every 512 px item is under
+1.7 s. Remaining losses and what they need:
+
+- `flat/stripes`, `flat/mosaic`: neighbouring palette colours < `detail` apart
+  merge by design; the composite score is flat across detail 5–8 (sweep), so the
+  default stays 6. A perceptual "distinct colour" prior (e.g. treat a prominent
+  ridge between two *large* flat regions as a hard boundary) is the v1 fix.
+- `logo/thin-mark-128`: strokes narrower than a pixel become semi-transparent
+  bands; a dedicated centreline/thin-stroke pass is needed (Vectorizer.AI's
+  "features less than a pixel wide").
+- `gradient/radial-focal`: SVG focal radial gradients (fx, fy) are not modelled;
+  the region splits into two rings.
+- `shadow/glow`: a Gaussian bump is not well approximated by the quadratic merge
+  proxy, so the glow fragments into rings; a refit-merge pass on the final regions
+  (try the *actual* multi-stop radial fit on each adjacent pair) would join them.
+- Lessons that changed the design during implementation: absolute gradient is
+  the wrong "smooth" test (steep ramps have large flat gradients) — ridges need
+  non-maximum suppression *and* prominence (8-bit quantisation puts periodic
+  bumps on ramps); a planar/quadratic model "explains" a hard step surprisingly
+  well, so gradient-assisted merges must be vetoed across visible edges; fills
+  must be fitted on interior pixels (anti-aliasing mixtures bias colour and make
+  transparent regions look visible); the Nelder-Mead centre search needs a cheap
+  smooth surrogate, not the full knot search.
+
 ## Out of scope for v0 (v1 candidates)
 Semi-transparent layer decomposition (Photo2ClipArt-style shadows as a separate blurred layer / `feGaussianBlur`), symmetry detection, rounded-rect and star primitives, Levien optimal cubic fitting, elliptical gradients with rotation, differentiable refinement, Rust port.
 
