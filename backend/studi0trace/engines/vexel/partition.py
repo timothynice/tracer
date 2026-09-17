@@ -73,10 +73,16 @@ def edge_mask(features: np.ndarray, grad: np.ndarray, g_low: float) -> np.ndarra
     return ndimage.binary_dilation(ridge, _CROSS)
 
 
-def seed_mask(features: np.ndarray, grad: np.ndarray, g_low: float) -> np.ndarray:
+def seed_mask(features: np.ndarray, grad: np.ndarray, g_low: float, g_seed: float = 8.0) -> np.ndarray:
+    """Seeds: pixels clear of the ridge band, or valley pixels, that also have a
+    low gradient. NMS loses ridge pixels at T-junctions (where two edges meet the
+    orientation estimate flips); those gap pixels still carry a high gradient, so
+    the gradient test keeps neighbouring regions from leaking into one seed."""
     ridge, valley = ridges_and_valleys(features, grad, g_low)
     band = ndimage.binary_dilation(ridge, _CROSS)
-    return ~band | valley
+    # Valleys are local minima across the edge direction and can never be edge
+    # pixels, so they stay seeds regardless of their gradient (thin stroke cores).
+    return (~band & (grad < g_seed)) | valley
 
 
 def _absorb_small(labels: np.ndarray, grad: np.ndarray, min_region: int, rounds: int = 3) -> np.ndarray:
