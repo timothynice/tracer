@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" aria-hidden="true">
+  <!-- Studi0 squircle, as in the family logomark -->
+  <path d="M128 18c38 0 60.5 1.7 75 6.5 14.8 4.8 22.9 12.9 27.7 27.7C235.3 66.5 238 89 238 128s-2.7 61.5-7.3 75.8c-4.8 14.8-12.9 22.9-27.7 27.7-14.5 4.8-37 6.5-75 6.5s-60.5-1.7-75-6.5c-14.8-4.8-22.9-12.9-27.7-27.7C20.7 189.5 18 167 18 128s2.7-61.5 7.3-75.8C30.1 37.4 38.2 29.3 53 24.5 67.5 19.7 90 18 128 18Z" stroke="#3F4D60" stroke-width="18" stroke-linejoin="round"/>
+  <!-- the trace: a bezier following the raster edge -->
+  <path d="M66 160c18-56 40-84 62-84 26 0 22 60 44 60 16 0 24-22 24-46" stroke="#FFFA7A" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="66" cy="160" r="12" fill="#FFFA7A"/>
+</svg>

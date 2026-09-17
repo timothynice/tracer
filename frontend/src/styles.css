@@ -1,0 +1,144 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Studi0 design tokens — raw HSL, semantic names identical across modes. */
+:root {
+  color-scheme: light;
+  --background: 0 0% 99%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 215 20% 30%;
+  --primary-foreground: 58 100% 74%;
+  --secondary: 210 40% 96%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --accent: 210 40% 96%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 100% 68%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 215 20% 30%;
+  --brand-accent: 58 100% 73%;
+  --success: 142 71% 45%;
+  --warning: 45 93% 47%;
+  --info: 199 89% 48%;
+  --radius: 0.5rem;
+  --checker-a: 0 0% 100%;
+  --checker-b: 210 40% 94%;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: 210 15% 15%;
+  --foreground: 210 20% 98%;
+  --card: 214 19% 18%;
+  --card-foreground: 210 20% 98%;
+  --popover: 214 19% 18%;
+  --popover-foreground: 210 20% 98%;
+  --primary: 215 20% 45%;
+  --primary-foreground: 58 100% 74%;
+  --secondary: 210 12% 22%;
+  --secondary-foreground: 210 20% 98%;
+  --muted: 210 12% 22%;
+  --muted-foreground: 215 15% 65%;
+  --accent: 210 12% 24%;
+  --accent-foreground: 210 20% 98%;
+  --destructive: 0 100% 68%;
+  --destructive-foreground: 210 20% 98%;
+  --border: 210 12% 20%;
+  --input: 210 12% 20%;
+  --ring: 215 20% 45%;
+  --checker-a: 214 19% 20%;
+  --checker-b: 210 15% 15%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  }
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    min-height: 100dvh;
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-sm antialiased;
+    margin: 0;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+  button,
+  a {
+    touch-action: manipulation;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border bg-card text-card-foreground shadow-sm;
+  }
+  .btn {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors
+      disabled:pointer-events-none disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-primary text-primary-foreground hover:bg-primary/90 font-semibold;
+  }
+  .btn-secondary {
+    @apply btn bg-secondary text-secondary-foreground hover:bg-secondary/80;
+  }
+  .btn-outline {
+    @apply btn border bg-background hover:bg-accent hover:text-accent-foreground;
+  }
+  .btn-ghost {
+    @apply btn hover:bg-accent hover:text-accent-foreground;
+  }
+  .btn-icon {
+    @apply h-10 w-10 px-0;
+  }
+  .btn-sm {
+    @apply h-9 px-3;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground;
+  }
+  .dot {
+    @apply inline-block h-1.5 w-1.5 rounded-full bg-primary-foreground;
+  }
+  .dot-brand {
+    @apply inline-block h-1.5 w-1.5 rounded-full bg-brand;
+  }
+  .input {
+    @apply h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground
+      focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
+  }
+  .checker {
+    background-color: hsl(var(--checker-a));
+    background-image:
+      linear-gradient(45deg, hsl(var(--checker-b)) 25%, transparent 25%),
+      linear-gradient(-45deg, hsl(var(--checker-b)) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, hsl(var(--checker-b)) 75%),
+      linear-gradient(-45deg, transparent 75%, hsl(var(--checker-b)) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
