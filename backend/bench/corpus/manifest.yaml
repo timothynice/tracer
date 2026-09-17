@@ -255,7 +255,7 @@ items:
   class: logo
   png: real/logo/logomark-128.png
   width: 128
-  height: 128
+  height: 122
   tags:
   - real
   - size:128
@@ -264,7 +264,7 @@ items:
   class: logo
   png: real/logo/logomark-512.png
   width: 512
-  height: 512
+  height: 485
   tags:
   - real
   - size:512

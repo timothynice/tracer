@@ -158,7 +158,9 @@ def cmd_import(args) -> int:
             for size in args.sizes:
                 png = out_dir / f"{stem}-{size}.png"
                 png.write_bytes(render_png(svg, size))
-                added.append(Item(id=f"{args.cls}/{stem}-{size}", cls=args.cls, png=png, width=size, height=size, truth_svg=truth, tags=["real", f"size:{size}"]))
+                with Image.open(png) as im:  # resvg keeps the aspect ratio: record the real size
+                    w, h = im.size
+                added.append(Item(id=f"{args.cls}/{stem}-{size}", cls=args.cls, png=png, width=w, height=h, truth_svg=truth, tags=["real", f"size:{size}"]))
         else:
             png = out_dir / f"{stem}{src.suffix.lower()}"
             shutil.copy(src, png)
