@@ -53,6 +53,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/flat/mosaic.svg
+- id: flat/mosaic-512-q75
+  class: flat
+  png: real/flat/mosaic-512-q75.jpg
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: flat/overlap-128
   class: flat
   png: synthetic/flat/overlap-128.png
@@ -89,6 +96,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/flat/sticker.svg
+- id: flat/sticker-512-q75
+  class: flat
+  png: real/flat/sticker-512-q75.jpg
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: flat/stripes-128
   class: flat
   png: synthetic/flat/stripes-128.png
@@ -179,6 +193,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/gradient/multi-shape.svg
+- id: gradient/multi-shape-512-q75
+  class: gradient
+  png: real/gradient/multi-shape-512-q75.jpg
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: gradient/radial-disc-128
   class: gradient
   png: synthetic/gradient/radial-disc-128.png
@@ -197,6 +218,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/gradient/radial-disc.svg
+- id: gradient/radial-disc-512-q75
+  class: gradient
+  png: real/gradient/radial-disc-512-q75.jpg
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: gradient/radial-focal-128
   class: gradient
   png: synthetic/gradient/radial-focal-128.png
@@ -251,6 +279,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/logo/hex-nest.svg
+- id: logo/hex-nest-512-q75
+  class: logo
+  png: real/logo/hex-nest-512-q75.jpg
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: logo/logomark-128
   class: logo
   png: real/logo/logomark-128.png
@@ -394,6 +429,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/logo/venn.svg
+- id: logo/venn-512-q75
+  class: logo
+  png: real/logo/venn-512-q75.jpg
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: shadow/card-128
   class: shadow
   png: synthetic/shadow/card-128.png
@@ -412,6 +454,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/shadow/card.svg
+- id: shadow/card-512-q75
+  class: shadow
+  png: real/shadow/card-512-q75.jpg
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: shadow/disc-128
   class: shadow
   png: synthetic/shadow/disc-128.png
@@ -448,6 +497,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/shadow/glow.svg
+- id: shadow/glow-512-q75
+  class: shadow
+  png: real/shadow/glow-512-q75.jpg
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: shadow/over-gradient-128
   class: shadow
   png: synthetic/shadow/over-gradient-128.png

@@ -10,6 +10,10 @@ services:
         value: "http://localhost:3000,http://localhost:5173,https://tracer-frontend-z5u3.onrender.com"
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: MAX_UPLOAD_CACHE_BYTES
+        value: "67108864"
+      - key: UPLOAD_TTL_SECONDS
+        value: "900"
     healthCheckPath: /health
 
   - type: web
