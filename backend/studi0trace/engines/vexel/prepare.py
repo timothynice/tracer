@@ -48,5 +48,10 @@ def prepare(rgba: np.ndarray) -> Prepared:
     alpha = rgba[..., 3].astype(np.float32) / 255.0
     rgb = inpaint_transparent(rgb, alpha)
     lab = rgb2lab(rgb / 255.0).astype(np.float32)
+    # Colour is kept at full strength everywhere (inpainted under transparency):
+    # anti-aliased rims against transparency then differ from the ink only in
+    # alpha and stay attached to it. The nearest-colour seams this leaves deep
+    # inside transparent areas produce invisible fragments, which the engine
+    # collapses into a single transparent region after fitting.
     features = np.concatenate([lab, (alpha * ALPHA_FEATURE_SCALE)[..., None]], axis=-1).astype(np.float32)
     return Prepared(rgb=rgb, alpha=alpha, lab=lab, features=features)

@@ -7,14 +7,16 @@ from typing import ClassVar, Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 from scipy import ndimage
+from skimage.segmentation import relabel_sequential
 
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
 from studi0trace.engines.vexel.boundary import contours, coverage_field, thin_coverage
 from studi0trace.engines.vexel.curves import CurveParams, fit_shape, shape_svg
 from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
-from studi0trace.engines.vexel.merge import MergeParams, merge_regions
+from studi0trace.engines.vexel.merge import MergeParams, adjacency, merge_regions
 from studi0trace.engines.vexel.order import enclosure, paint_order, shape_mask
+from studi0trace.engines.vexel.overlaps import decompose_overlaps
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels
 from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
@@ -65,6 +67,10 @@ class VexelParams(BaseModel):
     strokes: bool = Field(
         True, description="Recover thin lines as stroked centreline paths instead of filled slivers",
         json_schema_extra={"ui": {"control": "toggle", "group": "Curves", "label": "Stroke recovery"}},
+    )
+    overlaps: bool = Field(
+        True, description="Rebuild semi-transparent overlaps as two overlapping shapes with opacity",
+        json_schema_extra={"ui": {"control": "toggle", "group": "Fills", "label": "Overlap decomposition"}},
     )
     path_precision: int = Field(
         2, ge=0, le=4, description="Decimal places in coordinates",
@@ -153,10 +159,25 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             # region so the fill (and the visibility test) is driven by pure pixels.
             w = interior_weights(m)
             fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], fit_params, weights=w)
-            visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.01
+            visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.04
 
     ids = [int(i) for i in np.unique(labels) if i != 0]
     fit_regions(ids)
+
+    # Transparency is one region. The inpainting under alpha = 0 leaves colour
+    # seams that fragment the background into many invisible pieces; fold them
+    # into a single label so ordering, adjacency and the rescue residual see one
+    # transparent field (and its faint ink stands out against it).
+    clear = [lab for lab in ids if not visible[lab]]
+    if len(clear) > 1:
+        keep = clear[0]
+        labels = np.where(np.isin(labels, clear[1:]), keep, labels)
+        labels, _, _ = relabel_sequential(labels)
+        labels = labels.astype(np.int32)
+        ids = [int(i) for i in np.unique(labels) if i != 0]
+        fills.clear()
+        visible.clear()
+        fit_regions(ids)
 
     # Rescue thin strokes / small details that were swallowed by a neighbour:
     # pixels far from any boundary whose colour disagrees with their region's fill.
@@ -186,7 +207,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         visible.clear()
         for lab in ids:
             m = labels == lab
-            visible[lab] = float(np.average(prep.alpha[m], weights=interior_weights(m))) > 0.01
+            visible[lab] = float(np.average(prep.alpha[m], weights=interior_weights(m))) > 0.04
 
     def fill_at(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
         return fills[lab].evaluate(qx, qy)
@@ -205,6 +226,55 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     skip: set[int] = set()
     if p.strokes:
         thin_labels = [lab for lab in order if lab not in invisible and is_thin(labels == lab)]
+        # A thin region that matches the colour of an adjacent large region is that
+        # region's anti-aliased rim, not a line: fold it in so its neighbour's
+        # coverage contour handles it, instead of stroking a hairline around it.
+        if thin_labels:
+            nbr_edges = adjacency(labels)
+            neighbours: dict[int, set[int]] = {}
+            for a, b in nbr_edges:
+                neighbours.setdefault(a, set()).add(b)
+                neighbours.setdefault(b, set()).add(a)
+            thin_set = set(thin_labels)
+            absorbed: dict[int, list[int]] = {}  # rim label -> opaque neighbours to split it among
+            for t in thin_labels:
+                m = labels == t
+                field = thin_coverage(m, labels, prep.rgb, prep.alpha, fill_at)
+                w = np.maximum(field[m], 1e-3) ** 2
+                ink = np.average(prep.rgb[m], axis=0, weights=w)
+                mean_alpha = float(prep.alpha[m].mean())
+                cx, cy = float(np.average(xs[m], weights=w)), float(np.average(ys[m], weights=w))
+                opaque_nbrs = []
+                colour_match = False
+                for n in neighbours.get(t, ()):
+                    if n in thin_set or n in invisible:
+                        continue
+                    n_fill = fills[n].evaluate(np.array([cx]), np.array([cy]))[0]
+                    if n_fill[3] > 128:
+                        opaque_nbrs.append(n)
+                    if np.linalg.norm(ink - n_fill[:3]) < 5.0 * p.detail:
+                        colour_match = True
+                # a rim: same colour as a neighbour, or nearly transparent and hugging opaque shapes
+                if opaque_nbrs and (colour_match or mean_alpha < 0.2):
+                    absorbed[t] = opaque_nbrs
+            if absorbed:
+                for t, cands in absorbed.items():
+                    m = labels == t
+                    if len(cands) == 1:
+                        labels = np.where(m, cands[0], labels)
+                    else:
+                        # each rim pixel joins the nearest opaque neighbour
+                        dists = np.stack([ndimage.distance_transform_edt(labels != n)[m] for n in cands])
+                        nearest = np.asarray(cands)[np.argmin(dists, axis=0)]
+                        new = labels.copy()
+                        new[m] = nearest
+                        labels = new
+                    fills.pop(t, None)
+                    visible.pop(t, None)
+                    order.remove(t)
+                    invisible.discard(t)
+                thin_labels = [lab for lab in thin_labels if lab not in absorbed]
+                enc = enclosure(labels)
         groups = _group_thin(thin_labels, labels, prep.rgb, prep.alpha, fill_at)
         transparent = np.isin(labels, list(invisible)) if invisible else np.zeros_like(labels, dtype=bool)
         for members in groups:
@@ -228,6 +298,38 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 stroke_of[first] = (colour, el)
                 skip.update(members)
 
+    # Overlaps: a region whose colour is a blend of two neighbours, and whose
+    # union with the top neighbour is a simpler shape, is two overlapping shapes
+    # with the top one semi-transparent. The overlap region itself is dropped.
+    mask_override: dict[int, np.ndarray] = {}
+    fill_override: dict[int, Solid] = {}
+    if p.overlaps and stacked:
+        dec = decompose_overlaps(labels, fills, visible, curve_params, tol=fit_params.tol)
+        if not dec.empty and not (dec.removed & skip):
+            skip |= dec.removed
+            mask_override.update(dec.masks)
+            fill_override.update(dec.fills)
+            # a top shape paints after everything it lies on
+            for _ in range(len(dec.above)):
+                moved = False
+                for top, below in dec.above:
+                    if top in order and below in order and order.index(top) < order.index(below):
+                        order.remove(top)
+                        order.insert(order.index(below) + 1, top)
+                        moved = True
+                if not moved:
+                    break
+
+    def fill_at_visible(q_lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
+        """Colour actually visible at (qx, qy) when q_lab's footprint was extended:
+        the fill of whichever original region lies under each pixel."""
+        under = labels[np.clip(qy.astype(int), 0, height - 1), np.clip(qx.astype(int), 0, width - 1)]
+        out = np.empty((qx.size, 4))
+        for lab_u in np.unique(under):
+            sel = under == lab_u
+            out[sel] = fills[int(lab_u)].evaluate(qx[sel], qy[sel]) if int(lab_u) in fills else fill_at(q_lab, qx[sel], qy[sel])
+        return out
+
     defs: list[str] = []
     elements: list[str] = []
     for i, lab in enumerate(order):
@@ -237,7 +339,20 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             elements.append(stroke_of[lab][1])
         if lab in skip:
             continue
-        fill = fills[lab]
+        fill = fill_override.get(lab, fills[lab])
+        if lab in mask_override:
+            mask = mask_override[lab]
+            field = coverage_field(mask, lab, labels, prep.rgb, prep.alpha, fill_at_visible)
+            polys = contours(field)
+            if not polys:
+                continue
+            polys.sort(key=lambda c: -abs(0.5 * (np.dot(c[:, 0], np.roll(c[:, 1], -1)) - np.dot(c[:, 1], np.roll(c[:, 0], -1)))))
+            shape = fit_shape(polys, curve_params)
+            d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
+            if d:
+                defs.append(d)
+            elements.append(shape_svg(shape, attrs, p.path_precision))
+            continue
         mask = shape_mask(labels, lab, enc, stacked, invisible)
         field = coverage_field(mask, lab, labels, prep.rgb, prep.alpha, fill_at)
         polys = contours(field)
