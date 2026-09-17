@@ -135,6 +135,42 @@ def cmd_sweep(args) -> int:
     return 0
 
 
+def cmd_import(args) -> int:
+    """Add real images (PNG, or SVG rendered at the given sizes) to the corpus under real/<class>/."""
+    import shutil
+
+    from bench.corpus import Item, load_corpus, write_manifest
+    from bench.synth import render_png
+    from PIL import Image
+
+    root = Path(args.corpus)
+    existing = load_corpus(root) if (root / "manifest.yaml").exists() else []
+    out_dir = root / "real" / args.cls
+    out_dir.mkdir(parents=True, exist_ok=True)
+    added: list[Item] = []
+    for src in args.files:
+        src = Path(src)
+        stem = src.stem.lower().replace(" ", "-")
+        if src.suffix.lower() == ".svg":
+            svg = src.read_text(encoding="utf-8")
+            truth = out_dir / f"{stem}.svg"
+            truth.write_text(svg, encoding="utf-8")
+            for size in args.sizes:
+                png = out_dir / f"{stem}-{size}.png"
+                png.write_bytes(render_png(svg, size))
+                added.append(Item(id=f"{args.cls}/{stem}-{size}", cls=args.cls, png=png, width=size, height=size, truth_svg=truth, tags=["real", f"size:{size}"]))
+        else:
+            png = out_dir / f"{stem}{src.suffix.lower()}"
+            shutil.copy(src, png)
+            with Image.open(png) as im:
+                w, h = im.size
+            added.append(Item(id=f"{args.cls}/{stem}", cls=args.cls, png=png, width=w, height=h, tags=["real"]))
+    ids = {i.id for i in added}
+    write_manifest(root, [i for i in existing if i.id not in ids] + added)
+    print(f"imported {len(added)} items into {out_dir}")
+    return 0
+
+
 def cmd_report(args) -> int:
     from bench.report import write_html
     from bench.runner import load_results
@@ -183,6 +219,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--label", default="sweep")
     s.add_argument("--corpus", default=str(CORPUS))
     s.set_defaults(fn=cmd_sweep)
+
+    im = sub.add_parser("import", help="add real PNG/SVG images to the corpus")
+    im.add_argument("files", nargs="+")
+    im.add_argument("--class", dest="cls", required=True, choices=list(CLASSES))
+    im.add_argument("--sizes", type=int, nargs="+", default=[512, 128], help="render sizes for SVG inputs")
+    im.add_argument("--corpus", default=str(CORPUS))
+    im.set_defaults(fn=cmd_import)
 
     rp = sub.add_parser("report", help="regenerate index.html from a results.json")
     rp.add_argument("results")

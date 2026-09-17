@@ -18,6 +18,7 @@ from studi0trace.engines.vexel.order import enclosure, paint_order, shape_mask
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels
 from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
+from studi0trace.engines.vexel.refine import refine_merge
 from studi0trace.engines.vexel.rescue import rescue_features
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
@@ -135,6 +136,16 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         fills.clear()
         visible.clear()
         fit_regions(ids)
+
+    # Join gradient fragments (glows, off-centre radials) that one real fill explains.
+    labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
+    if changed:
+        ids = [int(i) for i in np.unique(labels) if i != 0]
+        visible.clear()
+        for lab in ids:
+            m = labels == lab
+            w = (np.clip(ndimage.distance_transform_edt(m), 0.5, 2.0) / 2.0)[m]
+            visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.01
 
     def fill_at(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
         return fills[lab].evaluate(qx, qy)

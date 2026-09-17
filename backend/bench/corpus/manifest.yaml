@@ -251,6 +251,24 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/logo/hex-nest.svg
+- id: logo/logomark-128
+  class: logo
+  png: real/logo/logomark-128.png
+  width: 128
+  height: 128
+  tags:
+  - real
+  - size:128
+  truth_svg: real/logo/logomark.svg
+- id: logo/logomark-512
+  class: logo
+  png: real/logo/logomark-512.png
+  width: 512
+  height: 512
+  tags:
+  - real
+  - size:512
+  truth_svg: real/logo/logomark.svg
 - id: logo/ring-128
   class: logo
   png: synthetic/logo/ring-128.png
@@ -269,6 +287,59 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/logo/ring.svg
+- id: logo/studi0clip-icon-512
+  class: logo
+  png: real/logo/studi0clip-icon-512.png
+  width: 512
+  height: 512
+  tags:
+  - real
+- id: logo/studi0clip-mark-light
+  class: logo
+  png: real/logo/studi0clip-mark-light.png
+  width: 389
+  height: 389
+  tags:
+  - real
+- id: logo/studi0mail-icon-512
+  class: logo
+  png: real/logo/studi0mail-icon-512.png
+  width: 512
+  height: 512
+  tags:
+  - real
+- id: logo/studi0mail-logo-dark
+  class: logo
+  png: real/logo/studi0mail-logo-dark.png
+  width: 415
+  height: 38
+  tags:
+  - real
+- id: logo/studi0mail-logo-light
+  class: logo
+  png: real/logo/studi0mail-logo-light.png
+  width: 830
+  height: 76
+  tags:
+  - real
+- id: logo/studi0trace-mark-128
+  class: logo
+  png: real/logo/studi0trace-mark-128.png
+  width: 128
+  height: 128
+  tags:
+  - real
+  - size:128
+  truth_svg: real/logo/studi0trace-mark.svg
+- id: logo/studi0trace-mark-512
+  class: logo
+  png: real/logo/studi0trace-mark-512.png
+  width: 512
+  height: 512
+  tags:
+  - real
+  - size:512
+  truth_svg: real/logo/studi0trace-mark.svg
 - id: logo/thin-mark-128
   class: logo
   png: synthetic/logo/thin-mark-128.png
