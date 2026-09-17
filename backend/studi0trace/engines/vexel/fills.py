@@ -268,11 +268,14 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
                 rad = Radial(cx=float(cen[0] + cx0), cy=float(cen[1] + cy0), r=rmax, stops=stops)
                 return _rms(rad.evaluate(x, y), c, w), rad
 
-            # refine the centre with Nelder-Mead on the surrogate, then fit the real ramp once
-            res = optimize.minimize(radial_objective, centre, method="Nelder-Mead",
-                                    options={"maxiter": 120, "xatol": 0.05, "fatol": 0.01})
-            rms_rad, rad = radial_for(res.x)
-            candidates.append((rms_rad, rad))
+            # Only search when the radial surrogate at the initial centre already
+            # beats the best candidate so far by a margin; most regions are not radial.
+            best_so_far = min(r for r, _ in candidates)
+            if radial_objective(centre) < best_so_far - 0.25 * params.tol:
+                res = optimize.minimize(radial_objective, centre, method="Nelder-Mead",
+                                        options={"maxiter": 80, "xatol": 0.05, "fatol": 0.01})
+                rms_rad, rad = radial_for(res.x)
+                candidates.append((rms_rad, rad))
 
     # --- choose: a gradient must buy a real improvement over solid ---------------------
     penalty = {"solid": 0.0, "linear": 0.35 * params.tol, "radial": 0.5 * params.tol}

@@ -6,7 +6,6 @@ from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
-from scipy import ndimage
 
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
@@ -20,6 +19,7 @@ from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.refine import refine_merge
 from studi0trace.engines.vexel.rescue import rescue_features
+from studi0trace.engines.vexel.weights import interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
 
@@ -108,8 +108,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             m = labels == lab
             # Boundary pixels are anti-aliasing mixtures: weight by distance into the
             # region so the fill (and the visibility test) is driven by pure pixels.
-            interior = np.clip(ndimage.distance_transform_edt(m), 0.5, 2.0) / 2.0
-            w = interior[m]
+            w = interior_weights(m)
             fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], fit_params, weights=w)
             visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.01
 
@@ -144,8 +143,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         visible.clear()
         for lab in ids:
             m = labels == lab
-            w = (np.clip(ndimage.distance_transform_edt(m), 0.5, 2.0) / 2.0)[m]
-            visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.01
+            visible[lab] = float(np.average(prep.alpha[m], weights=interior_weights(m))) > 0.01
 
     def fill_at(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
         return fills[lab].evaluate(qx, qy)

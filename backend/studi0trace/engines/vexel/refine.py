@@ -13,17 +13,16 @@ from __future__ import annotations
 from typing import Callable
 
 import numpy as np
-from scipy import ndimage
 from skimage.segmentation import relabel_sequential
 
 from studi0trace.engines.vexel.fills import Fill, FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import adjacency
+from studi0trace.engines.vexel.weights import interior_weights
 
 FitFn = Callable[[np.ndarray], tuple[Fill, float]]
 
 
-def _weights(mask: np.ndarray) -> np.ndarray:
-    return (np.clip(ndimage.distance_transform_edt(mask), 0.5, 2.0) / 2.0)[mask]
+_weights = interior_weights
 
 
 def fill_rms(fill: Fill, xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, w: np.ndarray) -> float:

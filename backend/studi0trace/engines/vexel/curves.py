@@ -110,6 +110,14 @@ def _turning_angle(pb: np.ndarray, p: np.ndarray, pf: np.ndarray) -> float:
     return math.degrees(math.acos(c))
 
 
+def _points_at_arcs(poly: np.ndarray, cum: np.ndarray, s: np.ndarray) -> np.ndarray:
+    """Vectorised closed-polyline interpolation at arc lengths `s` (wraps around)."""
+    total = cum[-1]
+    s = np.mod(s, total)
+    ext = np.vstack([poly, poly[:1]])
+    return np.column_stack([np.interp(s, cum, ext[:, 0]), np.interp(s, cum, ext[:, 1])])
+
+
 def find_corners(poly: np.ndarray, threshold_deg: float, scales: tuple[float, ...] = (2.0, 4.0)) -> list[int]:
     """Indices of vertices where the contour turns by more than `threshold_deg`
     at every chord scale in `scales` (closed polyline)."""
@@ -120,29 +128,31 @@ def find_corners(poly: np.ndarray, threshold_deg: float, scales: tuple[float, ..
     total = cum[-1]
     if total < 2 * max(scales):
         return []
-    angles = np.zeros(n)
-    for i in range(n):
-        a = min(_turning_angle(_point_at_arc(poly, cum, cum[i] - s, True), poly[i], _point_at_arc(poly, cum, cum[i] + s, True)) for s in scales)
-        angles[i] = a
+    here = cum[:-1]
+    angles = np.full(n, np.inf)
+    for s in scales:
+        pb = _points_at_arcs(poly, cum, here - s)
+        pf = _points_at_arcs(poly, cum, here + s)
+        v1 = poly - pb
+        v2 = pf - poly
+        n1 = np.linalg.norm(v1, axis=1)
+        n2 = np.linalg.norm(v2, axis=1)
+        cosang = np.sum(v1 * v2, axis=1) / np.maximum(n1 * n2, 1e-12)
+        ang = np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0)))
+        ang[(n1 < 1e-9) | (n2 < 1e-9)] = 0.0
+        angles = np.minimum(angles, ang)
     cand = np.nonzero(angles > threshold_deg)[0]
     if cand.size == 0:
         return []
     # non-maximum suppression within the smallest scale along the arc
     window = min(scales)
-    corners: list[int] = []
-    for i in cand:
-        best = True
-        for j in cand:
-            if i == j:
-                continue
-            d = abs(cum[i] - cum[j])
-            d = min(d, total - d)
-            if d <= window and (angles[j] > angles[i] or (angles[j] == angles[i] and j < i)):
-                best = False
-                break
-        if best:
-            corners.append(int(i))
-    return corners
+    pos = here[cand]
+    d = np.abs(pos[:, None] - pos[None, :])
+    d = np.minimum(d, total - d)
+    a = angles[cand]
+    beaten = (d <= window) & ((a[None, :] > a[:, None]) | ((a[None, :] == a[:, None]) & (cand[None, :] < cand[:, None])))
+    np.fill_diagonal(beaten, False)
+    return [int(i) for i in cand[~beaten.any(axis=1)]]
 
 
 # --- whole shapes ------------------------------------------------------------------
