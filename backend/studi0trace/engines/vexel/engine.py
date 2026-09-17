@@ -19,6 +19,7 @@ from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.refine import refine_merge
 from studi0trace.engines.vexel.rescue import rescue_features
+from studi0trace.engines.vexel.strokes import is_thin, stroke_geometry, stroke_svg
 from studi0trace.engines.vexel.weights import interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
@@ -58,6 +59,10 @@ class VexelParams(BaseModel):
     shape_fitting: bool = Field(
         True, description="Emit circles, ellipses and rectangles as primitives when they fit",
         json_schema_extra={"ui": {"control": "toggle", "group": "Curves", "label": "Whole-shape fitting"}},
+    )
+    strokes: bool = Field(
+        True, description="Recover thin lines as stroked centreline paths instead of filled slivers",
+        json_schema_extra={"ui": {"control": "toggle", "group": "Curves", "label": "Stroke recovery"}},
     )
     path_precision: int = Field(
         2, ge=0, le=4, description="Decimal places in coordinates",
@@ -160,6 +165,18 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         if lab in invisible:
             continue  # transparent canvas or hole: nothing to paint
         fill = fills[lab]
+        own = labels == lab
+        if p.strokes and isinstance(fill, Solid) and is_thin(own):
+            # A thin region is a drawn line: recover its centreline and width.
+            field = coverage_field(own, lab, labels, prep.rgb, prep.alpha, fill_at)
+            stroke = stroke_geometry(own, field)
+            if stroke is not None:
+                colour = fill.svg("", p.path_precision)[1].split('"')[1]
+                opacity = float(np.percentile(prep.alpha[own], 90))
+                el = stroke_svg(stroke, colour, opacity, curve_params, p.path_precision)
+                if el:
+                    elements.append(el)
+                    continue
         mask = shape_mask(labels, lab, enc, stacked, invisible)
         field = coverage_field(mask, lab, labels, prep.rgb, prep.alpha, fill_at)
         polys = contours(field)
