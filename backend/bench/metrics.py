@@ -29,11 +29,16 @@ def ssim(a_rgb: np.ndarray, b_rgb: np.ndarray) -> float:
     return float(structural_similarity(a_rgb, b_rgb, channel_axis=-1, data_range=255, win_size=win))
 
 
-def delta_e(a_rgb: np.ndarray, b_rgb: np.ndarray) -> tuple[float, float]:
-    """CIEDE2000 per pixel → (mean, 95th percentile)."""
+def delta_e_map(a_rgb: np.ndarray, b_rgb: np.ndarray) -> np.ndarray:
+    """CIEDE2000 per pixel as a float64 (H, W) array."""
     lab_a = rgb2lab(a_rgb.astype(np.float64) / 255.0)
     lab_b = rgb2lab(b_rgb.astype(np.float64) / 255.0)
-    de = deltaE_ciede2000(lab_a, lab_b)
+    return deltaE_ciede2000(lab_a, lab_b)
+
+
+def delta_e(a_rgb: np.ndarray, b_rgb: np.ndarray) -> tuple[float, float]:
+    """CIEDE2000 per pixel → (mean, 95th percentile)."""
+    de = delta_e_map(a_rgb, b_rgb)
     return float(de.mean()), float(np.percentile(de, 95))
 
 
