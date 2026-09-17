@@ -32,7 +32,7 @@ def test_filters(tmp_path: Path):
 def test_items_have_truth_and_expected_pixels(tmp_path: Path):
     items = {i.id: i for i in generate(tmp_path, seed=3, sizes=(64,))}
     ring = items["logo/ring-64"]
-    assert ring.truth_paths == 0  # circles, not paths - fine, path_ratio is None then
+    assert ring.truth_paths == 3  # three <circle> elements count as shapes
     px = load_png(ring.png)
     assert px.shape == (64, 64, 4)
     assert px[0, 0, 3] == 0, "logo backgrounds are transparent"

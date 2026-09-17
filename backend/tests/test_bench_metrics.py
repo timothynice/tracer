@@ -121,6 +121,6 @@ def test_all_metrics_shape():
                 "path_ratio", "elapsed_ms", "fidelity", "smoothness", "economy", "score"):
         assert key in m, key
     assert m["gradients"] == 1
-    assert m["path_ratio"] == 0.0  # rect, no <path>
+    assert m["path_ratio"] == 0.5  # one <rect> vs truth_paths=2
     assert m["elapsed_ms"] == 3.2
     assert DEFAULT_WEIGHTS.as_dict()["w_ssim"] == 0.35

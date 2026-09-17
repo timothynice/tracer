@@ -15,7 +15,8 @@ _WIDTH = re.compile(r'\s+width="[^"]*"', re.IGNORECASE)
 _HEIGHT = re.compile(r'\s+height="[^"]*"', re.IGNORECASE)
 _VIEWBOX = re.compile(r'\s+viewBox="[^"]*"', re.IGNORECASE)
 
-_PATH_TAG = re.compile(r"<path\b", re.IGNORECASE)
+# every painted geometry element counts as a "path" for complexity purposes
+_PATH_TAG = re.compile(r"<(?:path|circle|ellipse|rect|polygon|polyline|line)\b", re.IGNORECASE)
 _D_ATTR = re.compile(r'\bd="([^"]*)"', re.IGNORECASE)
 _NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 _GRADIENT = re.compile(r"<(?:linear|radial)Gradient\b", re.IGNORECASE)
