@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "backend/.venv/bin/python",
+      "runtimeArgs": ["-m", "uvicorn", "studi0trace.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend", "--", "--host", "127.0.0.1", "--port", "5173"],
+      "port": 5173
+    }
+  ]
+}
