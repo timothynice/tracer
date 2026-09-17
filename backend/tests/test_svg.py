@@ -55,7 +55,7 @@ def test_stats_counts_paths_nodes_gradients_and_fills():
     )
     stats = svg_stats(svg)
     assert stats.paths == 4
-    assert stats.nodes == 4 + 4 + 1 + 1
+    assert stats.nodes == 5 + 2 + 1 + 1  # coordinate pairs per path
     assert stats.gradients == 2
     assert stats.unique_fills == 2  # #fff/#FFF collapse, red, "none" excluded
     assert stats.bytes == len(svg.encode())

@@ -17,7 +17,7 @@ _VIEWBOX = re.compile(r'\s+viewBox="[^"]*"', re.IGNORECASE)
 
 _PATH_TAG = re.compile(r"<path\b", re.IGNORECASE)
 _D_ATTR = re.compile(r'\bd="([^"]*)"', re.IGNORECASE)
-_PATH_CMD = re.compile(r"[MmLlHhVvCcSsQqTtAaZz]")
+_NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 _GRADIENT = re.compile(r"<(?:linear|radial)Gradient\b", re.IGNORECASE)
 _FILL_ATTR = re.compile(r'\bfill="([^"]*)"', re.IGNORECASE)
 _FILL_STYLE = re.compile(r"fill\s*:\s*([^;\"']+)", re.IGNORECASE)
@@ -61,7 +61,9 @@ def normalize_dimensions(svg: str, width: int, height: int) -> str:
 
 
 def svg_stats(svg: str) -> SvgStats:
-    nodes = sum(len(_PATH_CMD.findall(d)) for d in _D_ATTR.findall(svg))
+    # Coordinate pairs across all path data. Counts implicit polyline/polybezier
+    # continuations (which Potrace uses heavily) that a command-letter count misses.
+    nodes = sum(len(_NUMBER.findall(d)) // 2 for d in _D_ATTR.findall(svg))
     fills = {f.strip().lower() for f in _FILL_ATTR.findall(svg)} | {
         f.strip().lower() for f in _FILL_STYLE.findall(svg)
     }
