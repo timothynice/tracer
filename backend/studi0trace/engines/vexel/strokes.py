@@ -25,7 +25,46 @@ _OFFSETS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)
 class Stroke:
     polylines: list[np.ndarray] = field(default_factory=list)  # (N, 2) xy in SVG space
     closed: list[bool] = field(default_factory=list)
+    caps: list[str] = field(default_factory=list)  # "butt" | "round" per polyline (ignored when closed)
     width: float = 1.0
+
+
+def _sample(field: np.ndarray, x: float, y: float) -> float:
+    """Nearest-pixel coverage sample in SVG space (pixel centres at +0.5)."""
+    r, c = int(np.floor(y)), int(np.floor(x))
+    if 0 <= r < field.shape[0] and 0 <= c < field.shape[1]:
+        return float(field[r, c])
+    return 0.0
+
+
+def _finish_ends(xy: np.ndarray, width: float, coverage: np.ndarray) -> tuple[np.ndarray, str]:
+    """Extend the medial axis to the stroke's real end and pick the cap style.
+
+    The medial axis stops about w/2 short of a line's end. A butt-ended line has
+    ink at the corners of the extended tip; a round-ended one does not.
+    """
+    if len(xy) < 2 or width <= 0:
+        return xy, "round"
+    out = xy.astype(float).copy()
+    votes_butt = 0
+    for end in (0, -1):
+        p = out[end]
+        q = out[1] if end == 0 else out[-2]
+        t = p - q
+        n = np.linalg.norm(t)
+        if n < 1e-9:
+            continue
+        t /= n
+        normal = np.array([-t[1], t[0]])
+        tip = p + t * (width / 2.0)
+        corner_ink = [_sample(coverage, *(tip + s * normal * 0.4 * width)) for s in (-1.0, 1.0)]
+        centre_ink = _sample(coverage, *(p + t * (width * 0.35)))
+        if centre_ink > 0.3 and min(corner_ink) > 0.35:
+            votes_butt += 1
+            out[end] = tip  # ink reaches the corners: square end, extend to it
+        elif centre_ink > 0.3:
+            out[end] = p + t * (width * 0.15)  # round cap covers the rest
+    return out, ("butt" if votes_butt == 2 else "round")
 
 
 def _bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
@@ -147,29 +186,50 @@ def stroke_geometry(mask: np.ndarray, coverage: np.ndarray, min_length: float = 
     if total_len < min_length:
         return None
     width = max(0.25, ink_area / total_len)
+    # Stroke only when a filled region would serve badly: sub-pixel/one-pixel
+    # lines (the fill would be a semi-transparent sliver) or genuinely line-like
+    # features. Short thick pieces such as letter stems stay filled shapes.
+    if total_len < 4.0 * width or (width >= 1.5 and total_len < 8.0 * width):
+        return None
     # drop spurs much shorter than the stroke is wide (medial-axis artefacts)
     keep = [i for i, xy in enumerate(polylines) if closed[i] or np.linalg.norm(np.diff(xy, axis=0), axis=1).sum() >= max(min_length, 1.5 * width)]
     if not keep:
         return None
-    return Stroke(polylines=[polylines[i] for i in keep], closed=[closed[i] for i in keep], width=width)
+    # the width was measured against the un-extended centreline; re-estimate after
+    # extending open ends so ink area / length stays consistent
+    finished: list[np.ndarray] = []
+    caps: list[str] = []
+    for i in keep:
+        if closed[i]:
+            finished.append(polylines[i])
+            caps.append("round")
+        else:
+            xy, cap = _finish_ends(polylines[i], width, coverage)
+            finished.append(xy)
+            caps.append(cap)
+    new_len = sum(
+        float(np.linalg.norm(np.diff(xy, axis=0), axis=1).sum()) + (float(np.linalg.norm(xy[-1] - xy[0])) if c else 0.0)
+        for xy, c in zip(finished, [closed[i] for i in keep])
+    )
+    round_len = sum(width for c in caps if c == "round" for _ in (0,))  # each round-capped line adds ~w of cap area
+    width = max(0.25, ink_area / max(new_len + 0.5 * round_len, 1e-6))
+    return Stroke(polylines=finished, closed=[closed[i] for i in keep], caps=caps, width=width)
 
 
 def stroke_svg(stroke: Stroke, colour: str, opacity: float, params: CurveParams, precision: int) -> str:
-    contours: list[list[Segment]] = []
-    opens: list[list[Segment]] = []
-    for xy, is_closed in zip(stroke.polylines, stroke.closed):
+    """One <path> per cap style (closed loops join the round group)."""
+    groups: dict[str, list[str]] = {"round": [], "butt": []}
+    caps = stroke.caps or ["round"] * len(stroke.polylines)
+    for xy, is_closed, cap in zip(stroke.polylines, stroke.closed, caps):
         if is_closed and len(xy) >= 4:
-            contours.append(fit_closed_smooth(xy, params.tol))
+            groups["round"].append(path_d([fit_closed_smooth(xy, params.tol)], precision))
         elif len(xy) >= 2:
-            opens.append(fit_open(xy, params.tol))
-    parts: list[str] = []
-    if contours:
-        parts.append(path_d(contours, precision))
-    for segs in opens:
-        d = path_d([segs], precision)
-        parts.append(d[:-1] if d.endswith("Z") else d)  # open strokes: no Z
-    if not parts:
-        return ""
+            d = path_d([fit_open(xy, params.tol)], precision)
+            groups[cap].append(d[:-1] if d.endswith("Z") else d)  # open strokes: no Z
     op = "" if opacity >= 0.995 else f' stroke-opacity="{opacity:.3f}"'
     w = f"{stroke.width:.{max(precision, 2)}f}".rstrip("0").rstrip(".")
-    return f'<path d="{"".join(parts)}" fill="none" stroke="{colour}" stroke-width="{w}" stroke-linecap="round" stroke-linejoin="round"{op}/>'
+    out = []
+    for cap, parts in groups.items():
+        if parts:
+            out.append(f'<path d="{"".join(parts)}" fill="none" stroke="{colour}" stroke-width="{w}" stroke-linecap="{cap}" stroke-linejoin="round"{op}/>')
+    return "".join(out)

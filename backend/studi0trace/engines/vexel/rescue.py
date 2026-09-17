@@ -41,7 +41,10 @@ def rescue_features(
     candidates = (residual > threshold) & ~boundary_band(labels)
     if not candidates.any():
         return labels, []
-    comps = cc_label(candidates, connectivity=2)
+    # Components are formed on a one-pixel dilation so a stroke broken by
+    # anti-aliasing gaps or junctions is rescued as one feature, not as shards.
+    comps = cc_label(ndimage.binary_dilation(candidates, _CROSS), connectivity=2)
+    comps[~candidates] = 0
     sizes = np.bincount(comps.ravel())
     keep = sizes >= max(min_region, 3)
     keep[0] = False

@@ -83,6 +83,49 @@ def coverage_field(
     return field
 
 
+def thin_coverage(
+    mask: np.ndarray,
+    labels: np.ndarray,
+    rgb: np.ndarray,
+    alpha: np.ndarray,
+    fill_at: FillAt,
+) -> np.ndarray:
+    """Coverage for a *thin* region, whose pixels are all mixtures.
+
+    The region's own fitted fill is unreliable (it was fitted to mixtures), so
+    the ink colour is taken as the pixel farthest from the surrounding fill and
+    every pixel's coverage is its projection onto the ink–background segment.
+    Returns float32 (H, W), zero outside the mask.
+    """
+    rows, cols = np.nonzero(mask)
+    xs = cols + 0.5
+    ys = rows + 0.5
+    pixel = np.concatenate([rgb[rows, cols], (alpha[rows, cols] * 255.0)[:, None]], axis=1)
+    other = _outside_label(labels, mask)[rows, cols]
+    f_out = pixel.copy()
+    for lab in np.unique(other):
+        if lab == 0:
+            continue
+        sel = other == lab
+        f_out[sel] = fill_at(int(lab), xs[sel], ys[sel])
+    # pixels with no outside neighbour: use the region-wide median background
+    missing = other == 0
+    if missing.any() and (~missing).any():
+        f_out[missing] = np.median(f_out[~missing], axis=0)
+    contrast = np.sum((pixel - f_out) ** 2, axis=1)
+    ink = pixel[np.argmax(contrast)]
+    diff = ink - f_out
+    denom = np.sum(diff * diff, axis=1)
+    cov = np.where(denom > 1e-6, np.sum((pixel - f_out) * diff, axis=1) / np.maximum(denom, 1e-6), 1.0)
+    # Against transparency the alpha channel *is* the coverage and resolves the
+    # ambiguity a projection cannot (a 0.5 px black line vs a 1 px grey one).
+    transparent_bg = f_out[:, 3] < 40.0  # the fitted background alpha is lifted by anti-aliased pixels
+    cov = np.where(transparent_bg, pixel[:, 3] / 255.0, cov)
+    field = np.zeros(mask.shape, np.float32)
+    field[rows, cols] = np.clip(cov, 0.0, 1.0)
+    return field
+
+
 def contours(field: np.ndarray, min_area: float = 0.5) -> list[np.ndarray]:
     """Closed 0.5-level iso-contours as (N, 2) xy arrays in SVG pixel space."""
     padded = np.pad(field, 1, mode="constant", constant_values=0.0)

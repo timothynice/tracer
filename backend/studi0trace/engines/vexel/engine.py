@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
-from studi0trace.engines.vexel.boundary import contours, coverage_field
+from studi0trace.engines.vexel.boundary import contours, coverage_field, thin_coverage
 from studi0trace.engines.vexel.curves import CurveParams, fit_shape, shape_svg
 from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import MergeParams, merge_regions
@@ -166,14 +166,19 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             continue  # transparent canvas or hole: nothing to paint
         fill = fills[lab]
         own = labels == lab
-        if p.strokes and isinstance(fill, Solid) and is_thin(own):
-            # A thin region is a drawn line: recover its centreline and width.
-            field = coverage_field(own, lab, labels, prep.rgb, prep.alpha, fill_at)
+        if p.strokes and is_thin(own):
+            # A thin region is a drawn line: recover its centreline and width. Its
+            # pixels are all anti-aliasing mixtures, so the ink colour is taken from
+            # the purest (highest-coverage) pixels, and opacity is 1 because the
+            # width already accounts for partial coverage.
+            field = thin_coverage(own, labels, prep.rgb, prep.alpha, fill_at)
             stroke = stroke_geometry(own, field)
             if stroke is not None:
-                colour = fill.svg("", p.path_precision)[1].split('"')[1]
-                opacity = float(np.percentile(prep.alpha[own], 90))
-                el = stroke_svg(stroke, colour, opacity, curve_params, p.path_precision)
+                cov = field[own]
+                wts = np.maximum(cov, 1e-3) ** 2
+                rgb = np.average(prep.rgb[own], axis=0, weights=wts)
+                colour = "#%02x%02x%02x" % tuple(int(round(float(v))) for v in np.clip(rgb, 0, 255))
+                el = stroke_svg(stroke, colour, 1.0, curve_params, p.path_precision)
                 if el:
                     elements.append(el)
                     continue

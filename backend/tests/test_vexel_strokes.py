@@ -1,5 +1,6 @@
 import io
 import math
+import re
 
 import numpy as np
 import resvg_py
@@ -59,7 +60,9 @@ def test_ring_becomes_a_closed_stroke_that_renders_like_the_source():
     out = render(out_svg, size, size)
     diff = np.abs(out[..., 3].astype(float) - img[..., 3].astype(float))
     assert diff.mean() < 8.0, diff.mean()
-    assert 'fill="none"' in out_svg and 'stroke-width="2' in out_svg
+    assert 'fill="none"' in out_svg
+    width = float(re.search(r'stroke-width="([^"]+)"', out_svg).group(1))
+    assert abs(width - 2.0) < 0.25
 
 
 def test_open_curve_stroke():
