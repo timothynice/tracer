@@ -170,7 +170,9 @@ def stroke_geometry(mask: np.ndarray, coverage: np.ndarray, min_length: float = 
     paths = _trace_skeleton(skel)
     if not paths:
         return None
-    ink_area = float(coverage[mask].sum())
+    # All ink the caller attributed to this stroke (the coverage field may extend
+    # one pixel beyond `mask` to catch faint anti-aliased pixels of a sub-pixel line).
+    ink_area = float(coverage.sum())
     polylines: list[np.ndarray] = []
     closed: list[bool] = []
     total_len = 0.0

@@ -6,6 +6,7 @@ from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
+from scipy import ndimage
 
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
@@ -23,6 +24,7 @@ from studi0trace.engines.vexel.strokes import is_thin, stroke_geometry, stroke_s
 from studi0trace.engines.vexel.weights import interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
+_CROSS = ndimage.generate_binary_structure(2, 1)
 
 
 class VexelParams(BaseModel):
@@ -68,6 +70,42 @@ class VexelParams(BaseModel):
         2, ge=0, le=4, description="Decimal places in coordinates",
         json_schema_extra={"ui": {"control": "slider", "step": 1, "group": "Output"}},
     )
+
+
+def _group_thin(thin_labels: list[int], labels: np.ndarray, rgb: np.ndarray, alpha: np.ndarray, fill_at, colour_tol: float = 30.0) -> list[list[int]]:
+    """Union-find over thin regions that touch (within one pixel) and have
+    similar ink colour. Returns groups of labels."""
+    if not thin_labels:
+        return []
+    from scipy import ndimage
+
+    inks: dict[int, np.ndarray] = {}
+    grown: dict[int, np.ndarray] = {}
+    struct = ndimage.generate_binary_structure(2, 2)
+    for lab in thin_labels:
+        m = labels == lab
+        field = thin_coverage(m, labels, rgb, alpha, fill_at)
+        w = np.maximum(field[m], 1e-3) ** 2
+        inks[lab] = np.average(rgb[m], axis=0, weights=w)
+        grown[lab] = ndimage.binary_dilation(m, struct)
+    parent = {lab: lab for lab in thin_labels}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, a in enumerate(thin_labels):
+        for b in thin_labels[i + 1 :]:
+            if np.linalg.norm(inks[a] - inks[b]) > colour_tol:
+                continue
+            if (grown[a] & (labels == b)).any():
+                parent[find(a)] = find(b)
+    groups: dict[int, list[int]] = {}
+    for lab in thin_labels:
+        groups.setdefault(find(lab), []).append(lab)
+    return list(groups.values())
 
 
 def _is_invisible(fill) -> bool:
@@ -159,29 +197,47 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     curve_params = CurveParams(corner_threshold=p.corner_threshold, tol=p.curve_tolerance, shape_fitting=p.shape_fitting)
 
     invisible = {lab for lab in ids if not visible[lab] or _is_invisible(fills[lab])}
+
+    # Thin regions are drawn lines. A single line often arrives as several
+    # regions (split at junctions, broken by anti-aliasing gaps), so thin regions
+    # that touch and share an ink colour are grouped and stroked together.
+    stroke_of: dict[int, tuple[str, str]] = {}  # first member label -> (colour, svg)
+    skip: set[int] = set()
+    if p.strokes:
+        thin_labels = [lab for lab in order if lab not in invisible and is_thin(labels == lab)]
+        groups = _group_thin(thin_labels, labels, prep.rgb, prep.alpha, fill_at)
+        transparent = np.isin(labels, list(invisible)) if invisible else np.zeros_like(labels, dtype=bool)
+        for members in groups:
+            union = np.isin(labels, members)
+            # grow one pixel into transparent surroundings so the faint outer
+            # anti-aliasing of a sub-pixel line counts towards its ink area
+            grown = union | (ndimage.binary_dilation(union, _CROSS) & transparent)
+            field = thin_coverage(grown, labels, prep.rgb, prep.alpha, fill_at)
+            stroke = stroke_geometry(union, field)
+            if stroke is None:
+                continue
+            # ink colour from the purest (highest-coverage) pixels; opacity 1 because
+            # the width already accounts for partial coverage
+            cov = field[union]
+            wts = np.maximum(cov, 1e-3) ** 2
+            rgb = np.average(prep.rgb[union], axis=0, weights=wts)
+            colour = "#%02x%02x%02x" % tuple(int(round(float(v))) for v in np.clip(rgb, 0, 255))
+            el = stroke_svg(stroke, colour, 1.0, curve_params, p.path_precision)
+            if el:
+                first = min(members, key=order.index)
+                stroke_of[first] = (colour, el)
+                skip.update(members)
+
     defs: list[str] = []
     elements: list[str] = []
     for i, lab in enumerate(order):
         if lab in invisible:
             continue  # transparent canvas or hole: nothing to paint
+        if lab in stroke_of:
+            elements.append(stroke_of[lab][1])
+        if lab in skip:
+            continue
         fill = fills[lab]
-        own = labels == lab
-        if p.strokes and is_thin(own):
-            # A thin region is a drawn line: recover its centreline and width. Its
-            # pixels are all anti-aliasing mixtures, so the ink colour is taken from
-            # the purest (highest-coverage) pixels, and opacity is 1 because the
-            # width already accounts for partial coverage.
-            field = thin_coverage(own, labels, prep.rgb, prep.alpha, fill_at)
-            stroke = stroke_geometry(own, field)
-            if stroke is not None:
-                cov = field[own]
-                wts = np.maximum(cov, 1e-3) ** 2
-                rgb = np.average(prep.rgb[own], axis=0, weights=wts)
-                colour = "#%02x%02x%02x" % tuple(int(round(float(v))) for v in np.clip(rgb, 0, 255))
-                el = stroke_svg(stroke, colour, 1.0, curve_params, p.path_precision)
-                if el:
-                    elements.append(el)
-                    continue
         mask = shape_mask(labels, lab, enc, stacked, invisible)
         field = coverage_field(mask, lab, labels, prep.rgb, prep.alpha, fill_at)
         polys = contours(field)

@@ -280,6 +280,14 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
     # --- choose: a gradient must buy a real improvement over solid ---------------------
     penalty = {"solid": 0.0, "linear": 0.35 * params.tol, "radial": 0.5 * params.tol}
     best_rms, best = min(candidates, key=lambda cr: cr[0] + penalty[cr[1].kind])
-    if best.kind != "solid" and rms_solid - best_rms < 0.25 * params.tol:
-        return solid
+    if best.kind != "solid":
+        if rms_solid - best_rms < 0.25 * params.tol:
+            return solid
+        # In a mostly transparent region, a model that is only somewhat better
+        # than solid is fitting faint ink (a sub-pixel line in an empty field), not
+        # a gradient, and would paint a haze. Leave it solid so the rescue pass can
+        # promote the ink. Opaque regions keep low-contrast gradients (soft shadows).
+        mostly_transparent = mean[3] < 0.2 * 255.0
+        if mostly_transparent and best_rms > params.tol and best_rms > 0.5 * rms_solid:
+            return solid
     return best
