@@ -33,21 +33,36 @@ and tracing bands, it:
    otherwise G1 cubic Béziers;
 7. recovers thin lines as **stroked centreline paths** (`fill="none"`,
    measured `stroke-width`, cap style read from the source) instead of
-   filled slivers.
+   filled slivers;
+8. recognises **drop shadows, glows and inner shadows** as what they are — a
+   blurred, offset, scaled copy of a shape's own alpha — recovers
+   `(dx, dy, σ, colour, opacity)` and emits the SVG `<filter>` that regenerates
+   them, instead of slicing the falloff into bands with lumpy iso-contour
+   edges.
 
 On the bench (synthetic corpus plus real Studi0 logos; mean CIEDE2000 ΔE,
 lower is better):
 
 | class | Potrace | VTracer | **Vexel** |
 |---|---|---|---|
-| logo | 11.3 | 1.14 | **0.35** |
-| flat | 20.8 | 1.03 | **0.70** |
-| gradient | 24.0 | 11.4 | **0.92** |
-| shadow | 15.2 | 3.97 | **0.51** |
+| logo | 11.7 | 1.11 | **0.33** |
+| flat | 20.4 | 0.97 | **0.68** |
+| gradient | 23.2 | 10.40 | **0.89** |
+| shadow | 14.8 | 3.24 | **0.44** |
 
-Vexel has the lowest ΔE on 52 of 57 corpus items; every image traces in about
-0.3 s on average and under 1.1 s worst case, in pure Python. Design and
-research notes: `docs/superpowers/specs/2026-09-17-vexel-engine-design.md`.
+Vexel has the lowest ΔE on **65 of 69** corpus items, and gets there with far
+less geometry: 6.0 paths and 5.3 KB per image on average against VTracer's 23.3
+paths and 12.4 KB. It is pure Python, averaging ~0.9 s an image.
+
+Reproduce it yourself — the corpus is generated, not shipped:
+
+```bash
+cd backend
+python -m bench generate            # rebuild the corpus from bench/synth.py
+python -m bench run                 # every registered engine
+```
+
+Design and research notes: `docs/superpowers/specs/2026-09-17-vexel-engine-design.md`.
 
 ## Run it
 
@@ -152,3 +167,13 @@ produces a self-contained image with potrace installed.
 
 `docs/superpowers/specs/` holds the approved designs; `docs/superpowers/plans/`
 the implementation plans.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: a tracing quality
+change is not an improvement until `python -m bench compare` says so, and
+baselines move only deliberately.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
