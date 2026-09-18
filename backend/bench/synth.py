@@ -8,7 +8,7 @@ Classes mirror Vexel's targets:
   logo      solid shapes, sharp geometry, few colours, transparent background
   flat      many adjacent flat regions with low-contrast neighbours and small details
   gradient  linear/radial multi-stop gradients, including alpha stops
-  shadow    feGaussianBlur drop shadows and glows at several radii
+  shadow    feGaussianBlur drop shadows, glows and inner shadows at several radii
 """
 from __future__ import annotations
 
@@ -320,6 +320,39 @@ def shadow_transparent_bg(rng):
     )
 
 
+def _inset_filter(fid: str, std: float, dx: float = 0, dy: float = 0, opacity: float = 0.55, colour: str = "#000000") -> str:
+    """An inner shadow: the blurred complement of the shape's own alpha, clipped inside it."""
+    return (
+        f'<filter id="{fid}" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">'
+        f'<feOffset in="SourceAlpha" dx="{dx}" dy="{dy}" result="off"/>'
+        f'<feGaussianBlur in="off" stdDeviation="{std}" result="bl"/>'
+        f'<feComposite in="SourceAlpha" in2="bl" operator="out" result="ring"/>'
+        f'<feFlood flood-color="{colour}" flood-opacity="{opacity}"/>'
+        f'<feComposite in2="ring" operator="in" result="sh"/>'
+        f'<feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="sh"/></feMerge>'
+        f"</filter>"
+    )
+
+
+def shadow_inset_card(rng):
+    a, = _pick(rng, BRAND, 1)
+    return _svg(
+        f'<rect x="86" y="106" width="340" height="300" rx="28" fill="{a}" filter="url(#f)"/>',
+        defs=_inset_filter("f", 14, 0, 16),
+        background="#F3F4F6",
+    )
+
+
+def shadow_inset_well(rng):
+    a, b = _pick(rng, PASTEL, 2)
+    return _svg(
+        f'<circle cx="256" cy="256" r="150" fill="{a}" filter="url(#f1)"/>'
+        f'<rect x="196" y="196" width="120" height="120" rx="20" fill="{b}" filter="url(#f2)"/>',
+        defs=_inset_filter("f1", 18, 0, 20, 0.5) + _inset_filter("f2", 6, 0, 8, 0.45),
+        background="#FFFFFF",
+    )
+
+
 TEMPLATES: dict[str, list[tuple[str, Callable[[random.Random], str]]]] = {
     "logo": [
         ("ring", logo_ring), ("cutout", logo_cutout), ("triangle-bar", logo_triangle_bar),
@@ -336,6 +369,7 @@ TEMPLATES: dict[str, list[tuple[str, Callable[[random.Random], str]]]] = {
     "shadow": [
         ("disc", shadow_disc), ("card", shadow_card), ("over-gradient", shadow_over_gradient),
         ("glow", shadow_glow), ("radii", shadow_radii), ("transparent-bg", shadow_transparent_bg),
+        ("inset-card", shadow_inset_card), ("inset-well", shadow_inset_well),
     ],
 }
 

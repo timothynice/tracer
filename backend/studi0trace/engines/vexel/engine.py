@@ -17,6 +17,7 @@ from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import MergeParams, adjacency, merge_regions
 from studi0trace.engines.vexel.order import enclosure, paint_order, shape_mask
 from studi0trace.engines.vexel.overlaps import decompose_overlaps
+from studi0trace.engines.vexel.shadows import ShadowPlan, detect_shadows, shadow_filter_svg
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels
 from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
@@ -67,6 +68,10 @@ class VexelParams(BaseModel):
     strokes: bool = Field(
         True, description="Recover thin lines as stroked centreline paths instead of filled slivers",
         json_schema_extra={"ui": {"control": "toggle", "group": "Curves", "label": "Stroke recovery"}},
+    )
+    shadows: bool = Field(
+        True, description="Rebuild drop shadows, glows and inner shadows as SVG filters instead of banded paths",
+        json_schema_extra={"ui": {"control": "toggle", "group": "Effects"}},
     )
     overlaps: bool = Field(
         True, description="Rebuild semi-transparent overlaps as two overlapping shapes with opacity",
@@ -243,11 +248,29 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
 
     invisible = {lab for lab in ids if not visible[lab] or _is_invisible(fills[lab])}
 
+    # Soft shadows are blurred copies of a shape, not colour fields. Where the
+    # blur model explains a band group better than the bands do, the bands are
+    # dropped and the caster carries an SVG filter instead.
+    shadow_plan = ShadowPlan()
+    if p.shadows:
+        shadow_plan = detect_shadows(
+            labels, fills, visible,
+            lambda lab: shape_mask(labels, lab, enc, stacked, invisible),
+            prep, xs, ys, min_region=p.min_region,
+        )
+        if shadow_plan.corrected is not None:
+            # The backdrop's fill was partly modelling the shadow's faint outer
+            # reach; refit it against colours with the shadow taken back out.
+            for lab in shadow_plan.refit:
+                m = labels == lab
+                w = interior_weights(m)
+                fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w)
+
     # Thin regions are drawn lines. A single line often arrives as several
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions
     # that touch and share an ink colour are grouped and stroked together.
     stroke_of: dict[int, tuple[str, str]] = {}  # first member label -> (colour, svg)
-    skip: set[int] = set()
+    skip: set[int] = set(shadow_plan.absorbed)
     if p.strokes:
         thin_labels = [lab for lab in order if lab not in invisible and is_thin(labels == lab)]
         # A thin region that matches the colour of an adjacent large region is that
@@ -364,6 +387,11 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         if lab in skip:
             continue
         fill = fill_override.get(lab, fills[lab])
+        shadow = shadow_plan.shadows.get(lab)
+        extra = ""
+        if shadow is not None:
+            defs.append(shadow_filter_svg(shadow, f"s{i + 1}", p.path_precision))
+            extra = f' filter="url(#s{i + 1})"'
         if lab in mask_override:
             mask = mask_override[lab]
             field = coverage_field(mask, lab, labels, prep.rgb, prep.alpha, fill_at_visible)
@@ -375,7 +403,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
             if d:
                 defs.append(d)
-            elements.append(shape_svg(shape, attrs, p.path_precision))
+            elements.append(shape_svg(shape, attrs + extra, p.path_precision))
             continue
         mask = shape_mask(labels, lab, enc, stacked, invisible)
         field = coverage_field(mask, lab, labels, prep.rgb, prep.alpha, fill_at)
@@ -387,7 +415,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
         if d:
             defs.append(d)
-        elements.append(shape_svg(shape, attrs, p.path_precision))
+        elements.append(shape_svg(shape, attrs + extra, p.path_precision))
 
     body = f"<defs>{''.join(defs)}</defs>" if defs else ""
     return f'<svg {SVG_NS} viewBox="0 0 {width} {height}">{body}{"".join(elements)}</svg>'

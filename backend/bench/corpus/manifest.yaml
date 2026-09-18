@@ -504,6 +504,42 @@ items:
   height: 512
   tags:
   - real
+- id: shadow/inset-card-128
+  class: shadow
+  png: synthetic/shadow/inset-card-128.png
+  width: 128
+  height: 128
+  tags:
+  - synthetic
+  - size:128
+  truth_svg: synthetic/shadow/inset-card.svg
+- id: shadow/inset-card-512
+  class: shadow
+  png: synthetic/shadow/inset-card-512.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  truth_svg: synthetic/shadow/inset-card.svg
+- id: shadow/inset-well-128
+  class: shadow
+  png: synthetic/shadow/inset-well-128.png
+  width: 128
+  height: 128
+  tags:
+  - synthetic
+  - size:128
+  truth_svg: synthetic/shadow/inset-well.svg
+- id: shadow/inset-well-512
+  class: shadow
+  png: synthetic/shadow/inset-well-512.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  truth_svg: synthetic/shadow/inset-well.svg
 - id: shadow/over-gradient-128
   class: shadow
   png: synthetic/shadow/over-gradient-128.png
