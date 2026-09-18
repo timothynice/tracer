@@ -44,3 +44,14 @@ test("malformed markup is rejected rather than half-parsed", () => {
   expect(parseSvg("<svg><path d='M0 0'")).toBeNull();
   expect(parseSvg("not svg at all")).toBeNull();
 });
+
+test("outlines carry the real geometry, not a chord through the anchors", () => {
+  const doc = parseSvg(SVG)!;
+  // A curve drawn as a polyline through its anchors cuts straight across the
+  // corner; the outline has to be the shape's own `d`.
+  expect(doc.shapes[1].outline).toBe('<path d="M8 8L24 8C30 8 30 20 24 20L8 20Z" fill="none"/>');
+  expect(doc.shapes[2].outline).toBe('<circle cx="48" cy="24" r="6" fill="none"/>');
+  // Nothing that could reach into defs or repaint the canvas comes along.
+  expect(doc.shapes[1].outline).not.toContain("url(");
+  expect(doc.shapes[2].outline).not.toContain("filter");
+});

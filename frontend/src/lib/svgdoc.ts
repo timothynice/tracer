@@ -18,6 +18,8 @@ export interface Shape {
   /** Axis-aligned bounds of the anchors: x, y, width, height in user units. */
   bounds: [number, number, number, number];
   area: number;
+  /** The shape's own geometry as unfilled markup, for drawing its true outline. */
+  outline: string;
 }
 
 export interface SvgDoc {
@@ -126,6 +128,37 @@ function anchorsOf(el: Element): [number, number][] {
   }
 }
 
+
+// Only geometry travels into the overlay: no fills, no filters, no references
+// out to defs. Drawing the anchors as a polyline instead would chord straight
+// across every curve, which is not the outline the shape actually has.
+const GEOMETRY_ATTRS: Record<string, string[]> = {
+  path: ["d"],
+  rect: ["x", "y", "width", "height", "rx", "ry"],
+  circle: ["cx", "cy", "r"],
+  ellipse: ["cx", "cy", "rx", "ry"],
+  polygon: ["points"],
+  polyline: ["points"],
+  line: ["x1", "y1", "x2", "y2"],
+};
+
+function escapeAttr(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+function outlineOf(el: Element): string {
+  const tag = el.tagName.toLowerCase();
+  const attrs = GEOMETRY_ATTRS[tag];
+  if (!attrs) return "";
+  const kept = attrs
+    .map((a) => [a, el.getAttribute(a)] as const)
+    .filter(([, v]) => v !== null)
+    .map(([a, v]) => `${a}="${escapeAttr(v as string)}"`)
+    .join(" ");
+  // A traced stroke is a centreline, so its outline is that line, not a region.
+  return `<${tag} ${kept} fill="none"/>`;
+}
+
 function boundsOf(anchors: [number, number][]): [number, number, number, number] {
   if (!anchors.length) return [0, 0, 0, 0];
   let minX = Infinity;
@@ -173,6 +206,7 @@ export function parseSvg(markup: string): SvgDoc | null {
       anchors,
       bounds,
       area: bounds[2] * bounds[3],
+      outline: outlineOf(el),
     };
   });
 

@@ -1,7 +1,7 @@
-import { Eye, EyeOff, Layers, PanelLeftClose, Sparkles, Undo2 } from "lucide-react";
+import { Eye, EyeOff, Layers, PanelLeftClose, Sparkles } from "lucide-react";
 import { useMemo } from "react";
 
-import { formatBytes, formatInt } from "@/lib/format";
+import { formatBytes, formatInt, formatMs } from "@/lib/format";
 import { shapeLabel, type SvgDoc } from "@/lib/svgdoc";
 
 export interface InspectorState {
@@ -18,6 +18,11 @@ export const EMPTY_INSPECTOR: InspectorState = { open: false, points: false, out
 export interface InspectorProps {
   doc: SvgDoc;
   bytes: number;
+  /** Engine time for this trace, in ms. */
+  elapsedMs?: number | null;
+  engineLabel?: string;
+  /** True once the cleanup has changed what will be exported. */
+  edited?: boolean;
   state: InspectorState;
   onChange: (patch: Partial<InspectorState>) => void;
 }
@@ -36,7 +41,7 @@ export function tinyShapes(doc: SvgDoc, minArea: number): number[] {
   return minArea <= 0 ? [] : doc.shapes.filter((s) => s.area <= minArea).map((s) => s.index);
 }
 
-export function Inspector({ doc, bytes, state, onChange }: InspectorProps) {
+export function Inspector({ doc, bytes, elapsedMs, engineLabel, edited, state, onChange }: InspectorProps) {
   // The summary describes what will be exported, so hiding a shape moves it.
   const live = useMemo(() => doc.shapes.filter((s) => !state.hidden.has(s.index)), [doc, state.hidden]);
   const totalAnchors = useMemo(() => live.reduce((n, s) => n + s.anchors.length, 0), [live]);
@@ -59,6 +64,12 @@ export function Inspector({ doc, bytes, state, onChange }: InspectorProps) {
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <Layers className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         <span className="text-sm font-medium">Inspect</span>
+        {engineLabel && (
+          <span className="pill">
+            <span className="dot-brand" aria-hidden="true" />
+            {engineLabel}
+          </span>
+        )}
         <button type="button" className="btn-ghost btn-icon ml-auto h-7 w-7" aria-label="Close inspector" onClick={() => onChange({ open: false, highlight: null })}>
           <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
         </button>
@@ -66,7 +77,7 @@ export function Inspector({ doc, bytes, state, onChange }: InspectorProps) {
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
         <dl className="tabular grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-          <dt className="text-muted-foreground">Shapes</dt>
+          <dt className="text-muted-foreground">Shapes{edited ? " (edited)" : ""}</dt>
           <dd className="text-right font-medium">{formatInt(live.length)}</dd>
           <dt className="text-muted-foreground">Anchors</dt>
           <dd className="text-right font-medium">{formatInt(totalAnchors)}</dd>
@@ -74,6 +85,8 @@ export function Inspector({ doc, bytes, state, onChange }: InspectorProps) {
           <dd className="text-right font-medium">{formatInt(colours)}</dd>
           <dt className="text-muted-foreground">Size</dt>
           <dd className="text-right font-medium">{formatBytes(bytes)}</dd>
+          <dt className="text-muted-foreground">Time</dt>
+          <dd className="text-right font-medium">{formatMs(elapsedMs)}</dd>
         </dl>
 
         <section className="space-y-1 border-t pt-3">
@@ -84,6 +97,9 @@ export function Inspector({ doc, bytes, state, onChange }: InspectorProps) {
 
         <section className="space-y-2 border-t pt-3">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Clean up</h4>
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            Tracing can leave stray one- or two-pixel shapes along edges and in noisy areas. Raise this to leave them out of the export.
+          </p>
           <label className="block space-y-1 text-xs">
             <span className="flex items-center justify-between">
               <span>Drop specks under</span>
@@ -103,12 +119,6 @@ export function Inspector({ doc, bytes, state, onChange }: InspectorProps) {
           <p className="text-[11px] text-muted-foreground">
             {tiny.length ? `${tiny.length} shape${tiny.length === 1 ? "" : "s"} will be left out of the export.` : "Nothing dropped."}
           </p>
-          {state.hidden.size > 0 && (
-            <button type="button" className="btn-ghost btn-sm -ml-3 text-xs text-muted-foreground" onClick={() => onChange({ hidden: new Set(), minArea: 0 })}>
-              <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
-              Restore all {state.hidden.size} hidden
-            </button>
-          )}
         </section>
 
         <section className="space-y-0.5 border-t pt-3">
@@ -171,14 +181,15 @@ export function InspectorOverlay({ doc, state, scale }: { doc: SvgDoc; state: In
         const [x, y, bw, bh] = s.bounds;
         return (
           <g key={s.index}>
-            {(state.outlines || lit) && (
-              <polyline
-                points={s.anchors.map(([px, py]) => `${px},${py}`).join(" ")}
+            {(state.outlines || lit) && s.outline && (
+              // The shape's own geometry, so curves stay curves.
+              <g
                 fill="none"
                 stroke={lit ? "hsl(var(--brand-accent))" : "hsl(var(--primary))"}
                 strokeWidth={(lit ? 2 : 1) * w}
                 strokeLinejoin="round"
                 opacity={lit ? 1 : 0.55}
+                dangerouslySetInnerHTML={{ __html: s.outline }}
               />
             )}
             {lit && <rect x={x} y={y} width={bw} height={bh} fill="none" stroke="hsl(var(--brand-accent))" strokeWidth={w} strokeDasharray={`${4 * w} ${3 * w}`} />}

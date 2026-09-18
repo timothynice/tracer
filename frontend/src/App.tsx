@@ -13,7 +13,6 @@ import { EMPTY_INSPECTOR, Inspector, InspectorOverlay, tinyShapes, type Inspecto
 import { ParamPanel } from "./components/ParamPanel";
 import { Presets } from "./components/Presets";
 import { Samples } from "./components/Samples";
-import { StatsStrip } from "./components/StatsStrip";
 import { useHealth } from "./hooks/useHealth";
 import { useParams } from "./hooks/useParams";
 import { useUpload } from "./hooks/useUpload";
@@ -141,7 +140,7 @@ export default function App() {
                   panel={
                     doc ? (
                       inspector.open ? (
-                        <Inspector doc={doc} bytes={exportSvg?.length ?? 0} state={liveState} onChange={patchInspector} />
+                        <Inspector doc={doc} bytes={exportSvg?.length ?? 0} elapsedMs={result?.elapsed_ms} engineLabel={active?.label ?? engine} edited={dropped.size > 0} state={liveState} onChange={patchInspector} />
                       ) : (
                         <button
                           type="button"
@@ -158,13 +157,7 @@ export default function App() {
                   }
                 />
               </div>
-              <div className="motion-rise card flex flex-wrap items-center justify-between gap-4 p-4 [animation-delay:70ms]">
-                <StatsStrip
-                  engineLabel={active?.label ?? engine}
-                  result={result}
-                  updating={busy}
-                  edited={doc && dropped.size ? { paths: doc.shapes.length - dropped.size, bytes: exportSvg?.length ?? 0 } : undefined}
-                />
+              <div className="motion-rise card flex flex-wrap items-center justify-end gap-4 p-4 [animation-delay:70ms]">
                 <Actions svg={exportSvg} filename={view.file.name} engine={engine} width={view.width} height={view.height} />
               </div>
               {compare && engines.data && <CompareTable engines={engines.data} results={trace.results} active={engine} onPick={pickEngine} updating={trace.updating} />}
