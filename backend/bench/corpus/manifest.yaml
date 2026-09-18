@@ -322,6 +322,13 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/logo/ring.svg
+- id: logo/silverpeak-badge-768
+  class: logo
+  png: real/logo/silverpeak-badge-768.png
+  width: 768
+  height: 768
+  tags:
+  - real
 - id: logo/studi0clip-icon-512
   class: logo
   png: real/logo/studi0clip-icon-512.png
@@ -434,6 +441,13 @@ items:
   png: real/logo/venn-512-q75.jpg
   width: 512
   height: 512
+  tags:
+  - real
+- id: logo/vexel-logo-768
+  class: logo
+  png: real/logo/vexel-logo-768.png
+  width: 768
+  height: 768
   tags:
   - real
 - id: shadow/card-128

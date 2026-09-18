@@ -23,7 +23,7 @@ from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.refine import refine_merge
 from studi0trace.engines.vexel.rescue import rescue_features
-from studi0trace.engines.vexel.strokes import is_thin, stroke_geometry, stroke_svg
+from studi0trace.engines.vexel.strokes import is_thin, stroke_fidelity, stroke_geometry, stroke_svg
 from studi0trace.engines.vexel.weights import interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
@@ -72,6 +72,11 @@ class VexelParams(BaseModel):
     shadows: bool = Field(
         True, description="Rebuild drop shadows, glows and inner shadows as SVG filters instead of banded paths",
         json_schema_extra={"ui": {"control": "toggle", "group": "Effects"}},
+    )
+    stroke_tolerance: float = Field(
+        0.2, ge=0.05, le=1.0,
+        description="Largest error a centreline may leave before the thin region is drawn filled instead of stroked; lower keeps more shapes filled",
+        json_schema_extra={"ui": {"control": "slider", "step": 0.01, "group": "Curves", "label": "Stroke tolerance"}},
     )
     overlaps: bool = Field(
         True, description="Rebuild semi-transparent overlaps as two overlapping shapes with opacity",
@@ -333,6 +338,12 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             field = thin_coverage(grown, labels, prep.rgb, prep.alpha, fill_at)
             stroke = stroke_geometry(union, field)
             if stroke is None:
+                continue
+            # A letterform is thin, elongated and of consistent width — it passes
+            # every geometric test for being a stroke, and stroking it mangles
+            # its terminals and joins. Only the reconstruction tells them apart:
+            # what would a constant-width centreline actually paint here?
+            if stroke_fidelity(stroke, field) > p.stroke_tolerance:
                 continue
             # ink colour from the purest (highest-coverage) pixels; opacity 1 because
             # the width already accounts for partial coverage

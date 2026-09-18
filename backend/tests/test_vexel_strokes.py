@@ -75,3 +75,47 @@ def test_open_curve_stroke():
     assert not any(s.closed)
     svg = stroke_svg(s, "#000000", 1.0, CurveParams(), 2)
     assert svg.count("M") >= 1 and "Z" not in svg
+
+
+def test_stroke_fidelity_separates_a_drawn_line_from_a_letterform():
+    """The only test that told them apart.
+
+    A letterform is thin, elongated and of consistent width — it passes every
+    geometric test for being a stroke. What it fails is the reconstruction: a
+    single constant-width centreline does not paint its terminals and joins.
+    """
+    from studi0trace.engines.vexel.strokes import stroke_fidelity
+
+    # A clean horizontal bar: exactly what a centreline paints.
+    line = np.zeros((40, 80), np.float64)
+    line[19:22, 10:70] = 1.0
+    st = stroke_geometry(line > 0.5, line)
+    assert st is not None
+    line_err = stroke_fidelity(st, line)
+
+    # A serif-ended bar: same width along its length, but the ends flare, so a
+    # constant-width centreline leaves error a plain line does not.
+    glyph = np.zeros((40, 80), np.float64)
+    glyph[19:22, 10:70] = 1.0
+    glyph[14:27, 10:14] = 1.0
+    glyph[14:27, 66:70] = 1.0
+    st2 = stroke_geometry(glyph > 0.5, glyph)
+    assert st2 is not None
+    glyph_err = stroke_fidelity(st2, glyph)
+
+    assert line_err < glyph_err, f"line {line_err:.3f} should reconstruct better than glyph {glyph_err:.3f}"
+
+
+def test_the_gate_keeps_real_strokes_and_drops_mangled_ones():
+    from studi0trace.engines.vexel.engine import VexelParams, trace_rgba
+
+    # Two thin bars: stroke recovery should still fire at the default tolerance.
+    img = np.zeros((64, 64, 4), np.uint8)
+    img[..., :3] = 255
+    img[..., 3] = 255
+    img[30:33, 8:56, :3] = 0
+    stroked = trace_rgba(img, VexelParams())
+    assert 'stroke-width' in stroked
+    # Turned all the way strict, nothing is allowed to become a stroke.
+    filled = trace_rgba(img, VexelParams(stroke_tolerance=0.05))
+    assert "stroke-width" not in filled

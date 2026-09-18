@@ -235,3 +235,31 @@ def stroke_svg(stroke: Stroke, colour: str, opacity: float, params: CurveParams,
         if parts:
             out.append(f'<path d="{"".join(parts)}" fill="none" stroke="{colour}" stroke-width="{w}" stroke-linecap="{cap}" stroke-linejoin="round"{op}/>')
     return "".join(out)
+
+def stroke_fidelity(stroke: Stroke, coverage: np.ndarray) -> float:
+    """RMS between the coverage a constant-width centreline would paint and the
+    coverage actually measured.
+
+    A drawn line *is* a constant-width centreline, so this is near zero. A
+    letterform is made of strokes too — geometrically it passes every test for
+    thinness, elongation and width consistency — but its terminals and joins are
+    not what a single centreline paints, and that shows up here. Measuring the
+    reconstruction is the only test that separated the two.
+    """
+    h, w = coverage.shape
+    on = np.zeros((h, w), bool)
+    for xy, is_closed in zip(stroke.polylines, stroke.closed):
+        pts = np.vstack([xy, xy[:1]]) if is_closed else xy
+        for (x0, y0), (x1, y1) in zip(pts[:-1], pts[1:]):
+            steps = max(int(np.hypot(x1 - x0, y1 - y0) * 2), 1)
+            for t in np.linspace(0.0, 1.0, steps + 1):
+                r, c = int(y0 + t * (y1 - y0)), int(x0 + t * (x1 - x0))
+                if 0 <= r < h and 0 <= c < w:
+                    on[r, c] = True
+    if not on.any():
+        return float("inf")
+    dist = ndimage.distance_transform_edt(~on)
+    predicted = np.clip(stroke.width / 2.0 + 0.5 - dist, 0.0, 1.0)
+    near = dist <= stroke.width / 2.0 + 2.0
+    return float(np.sqrt(np.mean((predicted[near] - coverage[near]) ** 2)))
+

@@ -26,3 +26,4 @@ coverage/
 
 # Bench output
 backend/bench/reports/
+frontend/public/test/
