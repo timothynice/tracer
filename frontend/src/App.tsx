@@ -183,7 +183,6 @@ export default function App() {
                     specs={params.specs[active.id] ?? []}
                     values={params.values[active.id] ?? active.defaults}
                     onChange={(name, value) => params.set(active.id, name, value)}
-                    onReset={() => params.reset(active.id)}
                     invalidField={invalidField}
                   />
                 </div>

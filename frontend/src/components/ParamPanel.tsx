@@ -1,7 +1,5 @@
-import { RotateCcw } from "lucide-react";
-
 import type { ParamValues } from "@/lib/api";
-import { groupSpecs, isDefault, type ParamSpec } from "@/lib/schema";
+import { groupSpecs, type ParamSpec } from "@/lib/schema";
 import { Drawer } from "./Drawer";
 import { ParamControl } from "./ParamControl";
 
@@ -10,14 +8,14 @@ export interface ParamPanelProps {
   specs: ParamSpec[];
   values: ParamValues;
   onChange: (name: string, value: unknown) => void;
-  onReset: () => void;
   disabled?: boolean;
   invalidField?: string | null;
 }
 
-export function ParamPanel({ engine, specs, values, onChange, onReset, disabled, invalidField }: ParamPanelProps) {
+// There is no reset here on purpose: re-picking the preset you are already on
+// re-applies it over the engine defaults, which is the same thing.
+export function ParamPanel({ engine, specs, values, onChange, disabled, invalidField }: ParamPanelProps) {
   const groups = groupSpecs(specs);
-  const pristine = isDefault(specs, values);
   return (
     <div data-engine={engine}>
       {groups.map((g) => {
@@ -43,10 +41,6 @@ export function ParamPanel({ engine, specs, values, onChange, onReset, disabled,
           </Drawer>
         );
       })}
-      <button type="button" className="btn-ghost btn-sm -ml-3 mt-4 text-muted-foreground" onClick={onReset} disabled={disabled || pristine}>
-        <RotateCcw className="h-4 w-4" aria-hidden="true" />
-        Reset to defaults
-      </button>
     </div>
   );
 }

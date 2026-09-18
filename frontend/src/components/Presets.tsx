@@ -35,7 +35,7 @@ export function Presets({ presets, defaults, values, onPick, disabled }: Presets
               disabled={disabled}
               onClick={() => onPick(p)}
               aria-pressed={on}
-              title={`${p.description}\n${p.detail}`}
+              title={on ? `${p.description}\n${p.detail}\n\nClick again to restore these settings` : `${p.description}\n${p.detail}`}
               className={`group flex items-center gap-2 rounded-md p-1.5 text-left transition-colors disabled:opacity-50
                 ${on ? "bg-accent ring-1 ring-primary/20" : "hover:bg-accent/60"}`}
             >

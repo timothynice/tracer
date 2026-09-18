@@ -75,6 +75,62 @@ export function pathAnchors(d: string): [number, number][] {
   return out;
 }
 
+
+type Matrix = [number, number, number, number, number, number]; // a b c d e f
+const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
+
+function multiply(m: Matrix, n: Matrix): Matrix {
+  return [
+    m[0] * n[0] + m[2] * n[1],
+    m[1] * n[0] + m[3] * n[1],
+    m[0] * n[2] + m[2] * n[3],
+    m[1] * n[2] + m[3] * n[3],
+    m[0] * n[4] + m[2] * n[5] + m[4],
+    m[1] * n[4] + m[3] * n[5] + m[5],
+  ];
+}
+
+/** The element's own transform as a matrix. Anchors that ignore it land on an
+ *  unrotated ghost of the shape — which is exactly what the renderer does not
+ *  draw. */
+export function parseTransform(value: string | null): Matrix {
+  if (!value) return IDENTITY;
+  let m = IDENTITY;
+  for (const [, name, argText] of value.matchAll(/([a-zA-Z]+)\s*\(([^)]*)\)/g)) {
+    const a = (argText.match(NUM) ?? []).map(Number);
+    switch (name) {
+      case "matrix":
+        if (a.length >= 6) m = multiply(m, a.slice(0, 6) as Matrix);
+        break;
+      case "translate":
+        m = multiply(m, [1, 0, 0, 1, a[0] ?? 0, a[1] ?? 0]);
+        break;
+      case "scale":
+        m = multiply(m, [a[0] ?? 1, 0, 0, a[1] ?? a[0] ?? 1, 0, 0]);
+        break;
+      case "rotate": {
+        const r = ((a[0] ?? 0) * Math.PI) / 180;
+        const cos = Math.cos(r);
+        const sin = Math.sin(r);
+        const cx = a[1] ?? 0;
+        const cy = a[2] ?? 0;
+        // rotate(angle cx cy) is translate(c) rotate(angle) translate(-c)
+        m = multiply(m, [1, 0, 0, 1, cx, cy]);
+        m = multiply(m, [cos, sin, -sin, cos, 0, 0]);
+        m = multiply(m, [1, 0, 0, 1, -cx, -cy]);
+        break;
+      }
+      default:
+        break; // skewX/skewY are not emitted; ignoring beats guessing
+    }
+  }
+  return m;
+}
+
+function apply(m: Matrix, [x, y]: [number, number]): [number, number] {
+  return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+}
+
 function attrNum(el: Element, name: string, fallback = 0): number {
   const v = Number(el.getAttribute(name));
   return Number.isFinite(v) ? v : fallback;
@@ -133,13 +189,13 @@ function anchorsOf(el: Element): [number, number][] {
 // out to defs. Drawing the anchors as a polyline instead would chord straight
 // across every curve, which is not the outline the shape actually has.
 const GEOMETRY_ATTRS: Record<string, string[]> = {
-  path: ["d"],
-  rect: ["x", "y", "width", "height", "rx", "ry"],
-  circle: ["cx", "cy", "r"],
-  ellipse: ["cx", "cy", "rx", "ry"],
-  polygon: ["points"],
-  polyline: ["points"],
-  line: ["x1", "y1", "x2", "y2"],
+  path: ["d", "transform"],
+  rect: ["x", "y", "width", "height", "rx", "ry", "transform"],
+  circle: ["cx", "cy", "r", "transform"],
+  ellipse: ["cx", "cy", "rx", "ry", "transform"],
+  polygon: ["points", "transform"],
+  polyline: ["points", "transform"],
+  line: ["x1", "y1", "x2", "y2", "transform"],
 };
 
 function escapeAttr(v: string): string {
@@ -194,7 +250,8 @@ export function parseSvg(markup: string): SvgDoc | null {
     const raw = el.getAttribute("fill") ?? "#000000";
     const stroke = el.getAttribute("stroke");
     const painted = raw === "none" && stroke ? stroke : raw;
-    const anchors = anchorsOf(el);
+    const matrix = parseTransform(el.getAttribute("transform"));
+    const anchors = anchorsOf(el).map((pt) => apply(matrix, pt));
     const bounds = boundsOf(anchors);
     return {
       index,

@@ -55,3 +55,32 @@ test("outlines carry the real geometry, not a chord through the anchors", () => 
   expect(doc.shapes[1].outline).not.toContain("url(");
   expect(doc.shapes[2].outline).not.toContain("filter");
 });
+
+test("a transform moves the anchors and travels with the outline", () => {
+  // Vexel emits rotated ellipses as `rotate(a cx cy)`. Dropping the transform
+  // draws an unrotated ghost the renderer never paints, and leaves the anchors
+  // on it — which is what a rotated sticker looked like.
+  const rotated = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+<ellipse cx="200" cy="230" rx="20" ry="60" fill="#fff" transform="rotate(-90 200 230)"/></svg>`;
+  const s = parseSvg(rotated)!.shapes[0];
+  expect(s.outline).toContain('transform="rotate(-90 200 230)"');
+  // Unrotated the anchors would be 60 above and below the centre; rotated by
+  // -90 they are 60 to the left and right of it.
+  const xs = s.anchors.map(([x]) => Math.round(x)).sort((a, b) => a - b);
+  const ys = s.anchors.map(([, y]) => Math.round(y)).sort((a, b) => a - b);
+  expect(xs[0]).toBe(140);
+  expect(xs[3]).toBe(260);
+  expect(ys[0]).toBe(210);
+  expect(ys[3]).toBe(250);
+  expect(s.bounds).toEqual([140, 210, 120, 40]);
+});
+
+test("translate, scale and matrix all land where the renderer puts them", () => {
+  const doc = parseSvg(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<rect x="0" y="0" width="10" height="10" fill="#000" transform="translate(5 7)"/>
+<rect x="0" y="0" width="10" height="10" fill="#000" transform="scale(2 3)"/>
+<rect x="0" y="0" width="10" height="10" fill="#000" transform="matrix(1 0 0 1 4 4)"/></svg>`)!;
+  expect(doc.shapes[0].bounds).toEqual([5, 7, 10, 10]);
+  expect(doc.shapes[1].bounds).toEqual([0, 0, 20, 30]);
+  expect(doc.shapes[2].bounds).toEqual([4, 4, 10, 10]);
+});

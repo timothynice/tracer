@@ -37,7 +37,14 @@ def cmd_run(args) -> int:
         print("no corpus items matched", file=sys.stderr)
         return 2
     params = json.loads(args.params) if args.params else {}
+    # Default to every registered engine: a scoreboard that leaves out the
+    # engine the project exists to test is not a scoreboard.
     engines = _csv(args.engines)
+    if not engines:
+        from studi0trace.engines import registry
+
+        registry.load_builtin()
+        engines = registry.ids()
     out_dir = Path(args.out) if args.out else None
     results_path = run(items, engines, params=params, label=args.label, out_dir=out_dir, media=not args.no_media)
     results = json.loads(results_path.read_text())
@@ -196,7 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.set_defaults(fn=cmd_generate)
 
     r = sub.add_parser("run", help="score engines over the corpus")
-    r.add_argument("--engines", default="potrace,vtracer")
+    r.add_argument("--engines", default="", help="comma list; default every registered engine")
     r.add_argument("--classes", help="comma list, default all")
     r.add_argument("--ids", help="comma list of item ids")
     r.add_argument("--params", help='JSON keyed by engine id, e.g. \'{"vtracer": {"color_precision": 8}}\'')
