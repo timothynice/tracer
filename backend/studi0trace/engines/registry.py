@@ -40,7 +40,12 @@ def describe(engine: Engine) -> dict:
         "id": engine.id,
         "label": engine.label,
         "description": engine.description,
-        "primary": getattr(engine, "primary", False),
+        # Optional, and deliberately not part of the Engine protocol: a
+        # runtime_checkable protocol demands every member, so requiring it here
+        # would stop any engine that does not declare it from being an Engine
+        # at all. Absent means "not shown in the app", which is the safe default
+        # for a newly registered engine.
+        "primary": bool(getattr(engine, "primary", False)),
         "params": engine.Params.model_json_schema(),
         "defaults": engine.Params().model_dump(),
     }

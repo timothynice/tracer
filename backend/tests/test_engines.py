@@ -157,3 +157,19 @@ def test_vtracer_params_bounds():
     with pytest.raises(ValidationError):
         VTracerParams(mode="wiggly")
     assert VTracerParams(corner_threshold="45").corner_threshold == 45
+
+
+def test_primary_is_optional_for_an_engine():
+    """A third-party engine must not have to know about the app's UI.
+
+    `primary` is read off the engine if present. Putting it in the runtime
+    checkable Engine protocol would make it mandatory, and an engine that
+    never declared it would stop being an Engine.
+    """
+    registry.register(FakeEngine())
+    try:
+        assert registry.describe(registry.get("fake"))["primary"] is False
+        assert isinstance(registry.get("fake"), Engine)
+    finally:
+        registry.unregister("fake")
+    assert registry.describe(registry.get("vexel"))["primary"] is True
