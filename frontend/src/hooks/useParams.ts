@@ -26,6 +26,8 @@ export interface ParamsState {
   values: Record<string, ParamValues>;
   specs: Record<string, ParamSpec[]>;
   set: (engine: string, name: string, value: unknown) => void;
+  /** Apply a preset: its keys over the engine's defaults, not over current values. */
+  apply: (engine: string, params: ParamValues) => void;
   reset: (engine: string) => void;
 }
 
@@ -55,6 +57,18 @@ export function useParams(engines: EngineDescription[] | undefined): ParamsState
     [specs],
   );
 
+  const apply = useCallback(
+    (engine: string, params: ParamValues) => {
+      setValues((prev) => {
+        const base = normalizeValues(specs[engine] ?? [], undefined);
+        const next = { ...prev, [engine]: normalizeValues(specs[engine] ?? [], { ...base, ...params }) };
+        save(engine, next[engine]);
+        return next;
+      });
+    },
+    [specs],
+  );
+
   const reset = useCallback(
     (engine: string) => {
       setValues((prev) => {
@@ -66,5 +80,5 @@ export function useParams(engines: EngineDescription[] | undefined): ParamsState
     [specs],
   );
 
-  return { values, specs, set, reset };
+  return { values, specs, set, apply, reset };
 }

@@ -84,6 +84,17 @@ export interface UploadResponse {
 
 export type ParamValues = Record<string, unknown>;
 
+export interface Preset {
+  id: string;
+  label: string;
+  engine: string;
+  description: string;
+  /** What the preset measurably costs or buys, from the bench. */
+  detail: string;
+  sample: string;
+  params: ParamValues;
+}
+
 class TimeoutError extends Error {
   name = "TimeoutError";
 }
@@ -148,6 +159,8 @@ async function request<T>(path: string, init: RequestInit = {}, signal?: AbortSi
 export const getHealth = (signal?: AbortSignal, timeoutMs = 4000) => request<Health>("/health", {}, signal, timeoutMs);
 
 export const getEngines = (signal?: AbortSignal) => request<EngineDescription[]>("/engines", {}, signal);
+
+export const getPresets = (signal?: AbortSignal) => request<Preset[]>("/presets", {}, signal);
 
 export function uploadImage(file: File, signal?: AbortSignal): Promise<UploadResponse> {
   const form = new FormData();

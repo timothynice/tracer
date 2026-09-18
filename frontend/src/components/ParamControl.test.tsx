@@ -62,3 +62,15 @@ test("engine tabs render one tab per engine and switch", () => {
   fireEvent.mouseDown(screen.getByRole("tab", { name: /vtracer/i }));
   expect(onChange).toHaveBeenCalledWith("vtracer");
 });
+
+test("shows whole numbers in full", () => {
+  // Trailing-zero trimming belongs after a decimal point only: 70 is not 7.
+  const spec = { name: "corner_threshold", label: "Corner", type: "number", control: "slider", default: 60, min: 20, max: 150, step: 1, group: "Curves" } as const;
+  const { rerender } = render(<ParamControl spec={spec as never} value={70} onChange={() => {}} />);
+  expect(screen.getByRole("spinbutton")).toHaveValue(70);
+  rerender(<ParamControl spec={spec as never} value={100} onChange={() => {}} />);
+  expect(screen.getByRole("spinbutton")).toHaveValue(100);
+  const frac = { ...spec, step: 0.05, default: 0.4, min: 0.1, max: 2 };
+  rerender(<ParamControl spec={frac as never} value={0.4} onChange={() => {}} />);
+  expect(screen.getByRole("spinbutton")).toHaveValue(0.4);
+});

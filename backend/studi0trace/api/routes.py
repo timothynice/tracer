@@ -17,6 +17,7 @@ from studi0trace.api.schemas import (
     VectorizeResponse,
 )
 from studi0trace.engines import registry
+from studi0trace.engines.presets import Preset, all_presets
 from studi0trace.engines.base import Engine, EngineError, TraceInput
 from studi0trace.imaging.cache import UploadCache
 from studi0trace.imaging.intake import IntakeError, load_upload
@@ -42,6 +43,13 @@ async def health() -> HealthResponse:
 @router.get("/engines", response_model=list[EngineDescription])
 async def engines() -> list[EngineDescription]:
     return [EngineDescription(**registry.describe(e)) for e in registry.all()]
+
+
+@router.get("/presets", response_model=list[Preset])
+async def presets() -> list[Preset]:
+    """Named parameter bundles. Each is a trade-off; the defaults are `balanced`."""
+    known = set(registry.ids())
+    return [p for p in all_presets() if p.engine in known]
 
 
 def _intake(data: bytes, settings: Settings) -> TraceInput:

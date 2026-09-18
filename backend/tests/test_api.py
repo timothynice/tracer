@@ -179,3 +179,20 @@ def test_unhandled_error_is_json_500_with_cors(client):
     assert r.status_code == 500
     assert r.json()["detail"]["code"] == "internal_error"
     assert r.headers["access-control-allow-origin"] == ORIGIN
+
+
+def test_presets_are_bundles_for_known_engines(client):
+    body = client.get("/presets").json()
+    ids = [p["id"] for p in body]
+    assert "balanced" in ids
+    known = set(client.get("/health").json()["engines"])
+    assert {p["engine"] for p in body} <= known
+    balanced = next(p for p in body if p["id"] == "balanced")
+    assert balanced["params"] == {}, "the default preset changes nothing"
+    # Every preset must validate against the engine it names, or picking it
+    # would fail at trace time instead of here.
+    from studi0trace.engines import registry
+
+    for p in body:
+        registry.get(p["engine"]).Params(**p["params"])
+        assert p["detail"] and p["sample"]

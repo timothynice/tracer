@@ -20,6 +20,10 @@ function decimals(step: number): number {
   return s.includes(".") ? s.split(".")[1].length : 0;
 }
 
+function trim(s: string): string {
+  return s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s;
+}
+
 export function ParamControl({ spec, value, onChange, disabled, invalid }: ParamControlProps) {
   const id = useId();
   const labelId = `${id}-label`;
@@ -139,7 +143,9 @@ function NumberField({
   invalid?: boolean;
 }) {
   const [text, setText] = useState(String(value));
-  useEffect(() => setText(Number.isFinite(value) ? value.toFixed(decimals(spec.step)).replace(/\.?0+$/, "") : ""), [value, spec.step]);
+  // Trailing zeros only go after a decimal point: stripping them unconditionally
+  // turns 70 into "7" and 100 into "1".
+  useEffect(() => setText(Number.isFinite(value) ? trim(value.toFixed(decimals(spec.step))) : ""), [value, spec.step]);
 
   const commit = () => {
     const n = Number(text);

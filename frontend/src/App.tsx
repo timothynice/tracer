@@ -9,13 +9,14 @@ import { Dropzone } from "./components/Dropzone";
 import { EngineTabs } from "./components/EngineTabs";
 import { Header } from "./components/Header";
 import { ParamPanel } from "./components/ParamPanel";
+import { Presets } from "./components/Presets";
 import { Samples } from "./components/Samples";
 import { StatsStrip } from "./components/StatsStrip";
 import { useHealth } from "./hooks/useHealth";
 import { useParams } from "./hooks/useParams";
 import { useUpload } from "./hooks/useUpload";
 import { useVectorize } from "./hooks/useVectorize";
-import { ApiError, getEngines } from "./lib/api";
+import { ApiError, getEngines, getPresets } from "./lib/api";
 
 const ENGINE_KEY = "studi0trace.engine";
 const COMPARE_KEY = "studi0trace.compare";
@@ -24,6 +25,7 @@ export default function App() {
   const health = useHealth();
   const ready = health.status === "ok";
   const engines = useQuery({ queryKey: ["engines"], queryFn: ({ signal }) => getEngines(signal), enabled: ready });
+  const presets = useQuery({ queryKey: ["presets"], queryFn: ({ signal }) => getPresets(signal), enabled: ready });
   const upload = useUpload();
   const params = useParams(engines.data);
 
@@ -129,6 +131,16 @@ export default function App() {
             <aside aria-label="Controls" className="motion-rise card h-fit p-4 [animation-delay:140ms] lg:sticky lg:top-20">
               {engines.data && active ? (
                 <>
+                  {presets.data && presets.data.some((p) => p.engine === active.id) && (
+                    <div className="mb-6 border-b pb-6">
+                      <Presets
+                        presets={presets.data.filter((p) => p.engine === active.id)}
+                        defaults={active.defaults}
+                        values={params.values[active.id] ?? active.defaults}
+                        onPick={(p) => params.apply(active.id, p.params)}
+                      />
+                    </div>
+                  )}
                   <EngineTabs engines={engines.data} value={active.id} onChange={pickEngine}>
                     {(e) => (
                       <ParamPanel

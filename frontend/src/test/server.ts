@@ -2,7 +2,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 
-import { API_URL, type EngineDescription } from "@/lib/api";
+import { API_URL, type EngineDescription, type Preset } from "@/lib/api";
 
 export const ENGINES: EngineDescription[] = [
   {
@@ -33,11 +33,17 @@ export const ENGINES: EngineDescription[] = [
   },
 ];
 
+export const PRESETS: Preset[] = [
+  { id: "balanced", label: "Balanced", engine: "potrace", description: "Everything on.", detail: "ΔE 0.54 · 6 paths", sample: "balanced.png", params: {} },
+  { id: "crisp", label: "Crisp", engine: "potrace", description: "Harder threshold.", detail: "ΔE 0.67 · 5 paths", sample: "logo.png", params: { threshold: 200, invert: true } },
+];
+
 export const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M16 16h32v32H16z" fill="#000"/></svg>';
 
 export const handlers = [
   http.get(`${API_URL}/health`, () => HttpResponse.json({ status: "ok", version: "0.2.0", engines: ["potrace", "vtracer"] })),
   http.get(`${API_URL}/engines`, () => HttpResponse.json(ENGINES)),
+  http.get(`${API_URL}/presets`, () => HttpResponse.json(PRESETS)),
   http.post(`${API_URL}/uploads`, () => HttpResponse.json({ image_id: "a".repeat(32), width: 64, height: 64, format: "PNG" })),
   http.post(`${API_URL}/vectorize`, async ({ request }) => {
     const form = await request.formData();
