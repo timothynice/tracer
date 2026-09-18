@@ -159,9 +159,48 @@ gradient stair-stepping, plus path/node/byte counts and time. Classes:
 
 ## Deploy
 
-`render.yaml` defines two Render services: the backend from
-`backend/Dockerfile`, the frontend as a static site. `docker build backend`
-produces a self-contained image with potrace installed.
+Two independent services, described in `render.yaml` and deployed from `main`:
+
+```
+┌─ tracer-frontend ──────────┐        ┌─ tracer-backend ─────────────┐
+│ Render static site          │        │ Render web service (Docker)  │
+│ frontend/dist, built by Vite│  HTTPS │ backend/Dockerfile + uvicorn │
+│ VITE_API_URL baked in       │ ─────▶ │ ALLOWED_ORIGINS gates CORS   │
+└─────────────────────────────┘        └──────────────────────────────┘
+```
+
+The frontend is **static files only** — there is no server-side rendering and
+no Node process in production. `VITE_API_URL` is substituted at build time, so
+the backend URL is baked into the bundle: change it and you must rebuild, not
+just restart.
+
+The backend is a single container: `backend/Dockerfile` installs potrace,
+builds the wheel and runs uvicorn. It is stateless apart from an in-memory
+upload cache (LRU with a sliding TTL), so it can be restarted or scaled without
+coordination — but uploads do not survive a restart, and a second instance will
+not see the first one's `image_id`. The client already handles that: an expired
+id returns 404 `image_expired` and it re-uploads once.
+
+### Pointing a domain at it
+
+Both services take custom domains on Render's free tier; only the certificate
+and DNS change, no code:
+
+1. Render → each service → **Settings → Custom Domains → Add**, e.g.
+   `studi0trace.com` for the frontend and `api.studi0trace.com` for the backend.
+2. Add the CNAME records Render shows you at your registrar. Certificates are
+   issued automatically.
+3. Add the new frontend origin to the backend's `ALLOWED_ORIGINS`, and set the
+   frontend's `VITE_API_URL` to the new API domain — **then redeploy the
+   frontend**, since that value is compiled in.
+
+### Free tier, honestly
+
+The backend sleeps after inactivity, so the first request after a quiet period
+pays 30–50 s of cold start, and the shared CPU makes a 512 px trace take
+seconds rather than the ~0.9 s it takes locally. Taking the backend off the
+free instance type is the single change that fixes both; nothing else about the
+deployment needs to move.
 
 ## Design docs
 
