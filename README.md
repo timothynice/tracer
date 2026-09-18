@@ -45,14 +45,16 @@ lower is better):
 
 | class | Potrace | VTracer | **Vexel** |
 |---|---|---|---|
-| logo | 11.7 | 1.11 | **0.33** |
-| flat | 20.4 | 0.97 | **0.68** |
+| logo | 11.4 | 1.20 | **0.40** |
+| flat | 20.4 | 0.97 | **0.67** |
 | gradient | 23.2 | 10.40 | **0.89** |
 | shadow | 14.8 | 3.24 | **0.44** |
 
-Vexel has the lowest ΔE on **65 of 69** corpus items, and gets there with far
-less geometry: 6.0 paths and 5.3 KB per image on average against VTracer's 23.3
-paths and 12.4 KB. It is pure Python, averaging ~0.9 s an image.
+Vexel has the lowest ΔE on **67 of 71** corpus items, and gets there with far
+less geometry: 9.9 paths and 9.5 KB per image on average against VTracer's 33.3
+paths and 17.8 KB. It is pure Python, averaging ~1.9 s an image — the two real
+logos in the corpus are 768 px and one of them is a dense illustration, so that
+mean is dominated by the hardest items rather than by a typical mark.
 
 Reproduce it yourself — the corpus is generated, not shipped:
 
