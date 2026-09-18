@@ -154,6 +154,7 @@ class VexelEngine:
     label: ClassVar[str] = "Vexel"
     description: ClassVar[str] = "Studi0's fidelity-first engine: gradient-aware regions, sub-pixel edges, whole-shape fitting."
     Params: ClassVar[type[BaseModel]] = VexelParams
+    primary: ClassVar[bool] = True
 
     def trace(self, image: TraceInput, params: BaseModel) -> TraceResult:
         p = params if isinstance(params, VexelParams) else VexelParams.model_validate(params)

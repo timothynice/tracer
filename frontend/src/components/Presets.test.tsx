@@ -20,7 +20,9 @@ test("picking a preset hands back its whole bundle", () => {
   expect(onPick).toHaveBeenCalledWith(PRESETS[1]);
 });
 
-test("shows what each preset costs, so the choice is informed", () => {
-  render(<Presets presets={PRESETS} defaults={defaults} values={defaults} onPick={() => {}} />);
+test("shows what the chosen preset costs, so the choice is informed", () => {
+  const { rerender } = render(<Presets presets={PRESETS} defaults={defaults} values={defaults} onPick={() => {}} />);
+  expect(screen.getByText("ΔE 0.54 · 6 paths")).toBeInTheDocument();
+  rerender(<Presets presets={PRESETS} defaults={defaults} values={{ ...defaults, threshold: 200, invert: true }} onPick={() => {}} />);
   expect(screen.getByText("ΔE 0.67 · 5 paths")).toBeInTheDocument();
 });

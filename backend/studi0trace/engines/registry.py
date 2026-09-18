@@ -40,6 +40,7 @@ def describe(engine: Engine) -> dict:
         "id": engine.id,
         "label": engine.label,
         "description": engine.description,
+        "primary": getattr(engine, "primary", False),
         "params": engine.Params.model_json_schema(),
         "defaults": engine.Params().model_dump(),
     }

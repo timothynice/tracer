@@ -41,6 +41,9 @@ class Engine(Protocol):
     label: ClassVar[str]
     description: ClassVar[str]
     Params: ClassVar[type[BaseModel]]
+    #: Shown in the app's own UI. The others stay on the API and in the bench,
+    #: where comparing engines is the point.
+    primary: ClassVar[bool]
 
     def trace(self, image: TraceInput, params: BaseModel) -> TraceResult: ...
 

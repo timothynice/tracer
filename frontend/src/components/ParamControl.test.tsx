@@ -35,14 +35,27 @@ test("select shows the current option", () => {
   expect(screen.getByRole("combobox", { name: "Turn policy" })).toHaveTextContent("majority");
 });
 
-test("panel groups by ui.group and resets", async () => {
+test("panel groups by ui.group into drawers, counts what changed, and resets", async () => {
   const onReset = vi.fn();
   const values = { threshold: 10, invert: true, turnpolicy: "black", alphamax: 0.5 };
   render(<ParamPanel engine="potrace" specs={specs} values={values} onChange={() => {}} onReset={onReset} />);
   expect(screen.getByRole("region", { name: "Bitmap" })).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "Curves" })).toBeInTheDocument();
+  // Drawers start closed; the header carries how many values differ from default.
+  const bitmap = screen.getByRole("button", { name: /^Bitmap/ });
+  expect(bitmap).toHaveAttribute("aria-expanded", "false");
+  expect(bitmap).toHaveTextContent("2"); // threshold and invert
+  expect(screen.queryByRole("spinbutton", { name: "Threshold" })).not.toBeInTheDocument();
+  await userEvent.click(bitmap);
+  expect(bitmap).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("spinbutton", { name: "Threshold" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: /reset to defaults/i }));
   expect(onReset).toHaveBeenCalled();
+});
+
+test("a drawer holding an invalid field opens itself", () => {
+  render(<ParamPanel engine="potrace" specs={specs} values={ENGINES[0].defaults} onChange={() => {}} onReset={() => {}} invalidField="threshold" />);
+  expect(screen.getByRole("button", { name: /^Bitmap/ })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("reset is disabled when values equal defaults", () => {

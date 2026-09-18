@@ -1,5 +1,5 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import { AlertCircle, Columns2, Layers2, Loader2, Maximize, Minus, Plus, RotateCw, Spline, SplitSquareHorizontal } from "lucide-react";
+import { AlertCircle, CircleDot, Columns2, Layers2, Loader2, Maximize, Minus, PenTool, Plus, RotateCw, Spline, SplitSquareHorizontal } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent } from "react";
 
 import { formatPercent } from "@/lib/format";
@@ -23,6 +23,9 @@ export interface CanvasProps {
   busyLabel?: string;
   errorMessage?: string;
   onRetry?: () => void;
+  /** Display toggles owned by the toolbar: how the vector is drawn, not what it is. */
+  display?: { points: boolean; outlines: boolean };
+  onDisplayChange?: (patch: { points?: boolean; outlines?: boolean }) => void;
   /** Drawn in the vector's own coordinate space, on top of everything. */
   marks?: (scale: number) => ReactNode;
   /** Rendered inside the viewport, e.g. the inspector panel. */
@@ -38,7 +41,7 @@ interface Transform {
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 32;
 
-export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, errorMessage, onRetry, marks, panel }: CanvasProps) {
+export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, errorMessage, onRetry, marks, panel, display, onDisplayChange }: CanvasProps) {
   const [mode, setMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "split");
   const [split, setSplit] = useState(0.5);
   const [overlay, setOverlay] = useState(0.7);
@@ -146,7 +149,7 @@ export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, err
   ) : null;
 
   return (
-    <section aria-label="Canvas" className="card flex flex-col overflow-hidden">
+    <section aria-label="Canvas" className="card flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <Tabs.Root value={mode} onValueChange={pickMode}>
           <Tabs.List aria-label="View mode" className="inline-flex h-9 rounded-md bg-muted p-1">
@@ -170,19 +173,46 @@ export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, err
           </label>
         )}
 
-        <div className="ml-auto inline-flex items-center gap-1" role="group" aria-label="Zoom">
-          <button type="button" className="btn-ghost btn-icon h-9 w-9" aria-label="Zoom out" onClick={() => zoomAt(1 / 1.25, paneW / 2, size.h / 2)}>
-            <Minus className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <button type="button" className="tabular btn-ghost h-9 min-w-[3.5rem] px-2 text-xs" aria-label="Zoom to 100%" onClick={() => setT({ scale: 1, x: (paneW - width) / 2, y: (size.h - height) / 2 })}>
-            {formatPercent(t.scale)}
-          </button>
-          <button type="button" className="btn-ghost btn-icon h-9 w-9" aria-label="Zoom in" onClick={() => zoomAt(1.25, paneW / 2, size.h / 2)}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <button type="button" className="btn-ghost btn-icon h-9 w-9" aria-label="Fit to view" onClick={() => setT(fitTransform())}>
-            <Maximize className="h-4 w-4" aria-hidden="true" />
-          </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          {display && onDisplayChange && (
+            <div className="inline-flex h-9 items-center rounded-md bg-muted p-1" role="group" aria-label="Show">
+              <button
+                type="button"
+                aria-pressed={display.points}
+                aria-label="Show anchor points"
+                title="Anchor points"
+                onClick={() => onDisplayChange({ points: !display.points })}
+                className={`inline-flex h-7 w-7 items-center justify-center rounded-sm transition-colors ${display.points ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <CircleDot className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                aria-pressed={display.outlines}
+                aria-label="Show outlines"
+                title="Outlines"
+                onClick={() => onDisplayChange({ outlines: !display.outlines })}
+                className={`inline-flex h-7 w-7 items-center justify-center rounded-sm transition-colors ${display.outlines ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <PenTool className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+
+          <div className="inline-flex h-9 items-center rounded-md bg-muted p-1" role="group" aria-label="Zoom">
+            <button type="button" className="inline-flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground" aria-label="Zoom out" onClick={() => zoomAt(1 / 1.25, paneW / 2, size.h / 2)}>
+              <Minus className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button type="button" className="tabular inline-flex h-7 min-w-[3.25rem] items-center justify-center rounded-sm px-1 text-xs font-medium transition-colors hover:bg-background" aria-label="Zoom to 100%" onClick={() => setT({ scale: 1, x: (paneW - width) / 2, y: (size.h - height) / 2 })}>
+              {formatPercent(t.scale)}
+            </button>
+            <button type="button" className="inline-flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground" aria-label="Zoom in" onClick={() => zoomAt(1.25, paneW / 2, size.h / 2)}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button type="button" className="inline-flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground" aria-label="Fit to view" onClick={() => setT(fitTransform())}>
+              <Maximize className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -191,7 +221,7 @@ export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, err
       <div
         ref={viewport}
         data-mode={mode}
-        className="checker relative h-[min(70vh,720px)] min-h-[360px] cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing"
+        className="checker relative min-h-[16rem] flex-1 cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing"
         onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

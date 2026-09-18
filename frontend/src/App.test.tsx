@@ -18,5 +18,8 @@ test("renders the brand, connects, and shows the empty state", async () => {
   );
   expect(screen.getByText("Studi0Trace")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /upload an image/i })).toBeInTheDocument();
-  await waitFor(() => expect(screen.getByText(/potrace, vtracer/)).toBeInTheDocument());
+  // The header reports the connection, not the engine roster: engines the app
+  // does not show still exist on the API and in the bench.
+  await waitFor(() => expect(screen.getByText(/Connected/)).toBeInTheDocument());
+  expect(screen.queryByText(/vtracer/i)).not.toBeInTheDocument();
 });

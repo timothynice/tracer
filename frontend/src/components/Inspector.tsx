@@ -27,15 +27,6 @@ export interface InspectorProps {
   onChange: (patch: Partial<InspectorState>) => void;
 }
 
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label className="flex cursor-pointer items-center justify-between gap-3 py-1 text-xs">
-      <span>{label}</span>
-      <input type="checkbox" className="h-3.5 w-3.5 accent-[hsl(var(--primary))]" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-    </label>
-  );
-}
-
 /** Shapes small enough to be specks, given the current threshold. */
 export function tinyShapes(doc: SvgDoc, minArea: number): number[] {
   return minArea <= 0 ? [] : doc.shapes.filter((s) => s.area <= minArea).map((s) => s.index);
@@ -88,12 +79,6 @@ export function Inspector({ doc, bytes, elapsedMs, engineLabel, edited, state, o
           <dt className="text-muted-foreground">Time</dt>
           <dd className="text-right font-medium">{formatMs(elapsedMs)}</dd>
         </dl>
-
-        <section className="space-y-1 border-t pt-3">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Show</h4>
-          <Toggle label="Anchor points" checked={state.points} onChange={(v) => onChange({ points: v })} />
-          <Toggle label="Outlines" checked={state.outlines} onChange={(v) => onChange({ outlines: v })} />
-        </section>
 
         <section className="space-y-2 border-t pt-3">
           <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Clean up</h4>

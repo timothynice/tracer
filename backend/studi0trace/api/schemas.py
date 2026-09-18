@@ -38,6 +38,8 @@ class EngineDescription(BaseModel):
     id: str
     label: str
     description: str
+    #: Whether the app shows this engine. All engines stay callable either way.
+    primary: bool = False
     params: dict[str, Any]
     defaults: dict[str, Any]
 

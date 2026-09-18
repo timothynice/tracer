@@ -5,7 +5,7 @@ export function StatusPill({ status, health, attempts }: Pick<HealthState, "stat
     return (
       <span className="pill" title={`Backend v${health.version}`}>
         <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
-        <span className="hidden sm:inline">v{health.version} ·</span> {health.engines.join(", ")}
+        Connected <span className="hidden sm:inline">· v{health.version}</span>
       </span>
     );
   }

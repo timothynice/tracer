@@ -49,9 +49,12 @@ export function Actions({ svg, filename, engine, width, height }: ActionsProps) 
         <Download className="h-4 w-4" aria-hidden="true" />
         Download SVG
       </button>
-      <div className="inline-flex items-center rounded-md border bg-background" role="group" aria-label="Download PNG">
-        <span className="flex h-9 items-center gap-1.5 pl-3 pr-2 text-sm text-muted-foreground">
-          <ImageIcon className="h-4 w-4" aria-hidden="true" /> PNG
+
+      {/* Secondary by weight, not by being harder to use: ghost fill, same height. */}
+      <div className="inline-flex h-9 items-center rounded-md bg-muted p-1" role="group" aria-label="Download PNG">
+        <span className="flex items-center gap-1.5 pl-1.5 pr-1 text-xs font-medium text-muted-foreground">
+          <ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />
+          PNG
         </span>
         {PNG_SCALES.map((s) => (
           <button
@@ -59,14 +62,15 @@ export function Actions({ svg, filename, engine, width, height }: ActionsProps) 
             type="button"
             disabled={disabled || busy}
             onClick={() => void png(s)}
-            className="tabular h-9 border-l px-2.5 text-sm font-medium hover:bg-accent disabled:opacity-50"
+            className="tabular inline-flex h-7 items-center justify-center rounded-sm px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-50"
             aria-label={`Download PNG at ${s}x`}
           >
             {s}×
           </button>
         ))}
       </div>
-      <button type="button" className="btn-outline btn-sm" disabled={disabled} onClick={() => void copy()} aria-live="polite">
+
+      <button type="button" className="btn-ghost btn-sm text-muted-foreground hover:text-foreground" disabled={disabled} onClick={() => void copy()} aria-live="polite">
         {copied ? <Check className="h-4 w-4 text-success" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
         {copied ? "Copied" : "Copy SVG"}
       </button>

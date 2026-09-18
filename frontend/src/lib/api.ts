@@ -50,6 +50,8 @@ export interface EngineDescription {
   id: string;
   label: string;
   description: string;
+  /** Whether the app shows it. Non-primary engines stay callable for benchmarks. */
+  primary: boolean;
   params: EngineSchema;
   defaults: Record<string, unknown>;
 }

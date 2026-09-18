@@ -9,6 +9,7 @@ export const ENGINES: EngineDescription[] = [
     id: "potrace",
     label: "Potrace",
     description: "Classic black & white outline tracing.",
+    primary: true,
     params: {
       properties: {
         threshold: { type: "integer", default: 128, minimum: 0, maximum: 255, description: "Luminance cut-off", ui: { control: "slider", group: "Bitmap" } },
@@ -23,6 +24,7 @@ export const ENGINES: EngineDescription[] = [
     id: "vtracer",
     label: "VTracer",
     description: "Colour-preserving tracing.",
+    primary: false,
     params: {
       properties: {
         color_precision: { type: "integer", default: 6, minimum: 1, maximum: 8, ui: { control: "slider", group: "Colour", label: "Colour precision" } },
