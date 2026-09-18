@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Layers } from "lucide-react";
 import { toast } from "sonner";
 
 import { Actions } from "./components/Actions";
@@ -8,6 +9,7 @@ import { CompareTable } from "./components/CompareTable";
 import { Dropzone } from "./components/Dropzone";
 import { EngineTabs } from "./components/EngineTabs";
 import { Header } from "./components/Header";
+import { EMPTY_INSPECTOR, Inspector, InspectorOverlay, tinyShapes, type InspectorState } from "./components/Inspector";
 import { ParamPanel } from "./components/ParamPanel";
 import { Presets } from "./components/Presets";
 import { Samples } from "./components/Samples";
@@ -17,6 +19,7 @@ import { useParams } from "./hooks/useParams";
 import { useUpload } from "./hooks/useUpload";
 import { useVectorize } from "./hooks/useVectorize";
 import { ApiError, getEngines, getPresets } from "./lib/api";
+import { parseSvg } from "./lib/svgdoc";
 
 const ENGINE_KEY = "studi0trace.engine";
 const COMPARE_KEY = "studi0trace.compare";
@@ -89,6 +92,21 @@ export default function App() {
         : undefined;
   const retry = useCallback(() => (upload.error ? upload.retry() : trace.refetch()), [upload, trace]);
 
+  // Inspection works on the SVG the engine returned; export gets the cleaned one.
+  const [inspector, setInspector] = useState<InspectorState>(EMPTY_INSPECTOR);
+  const patchInspector = useCallback((patch: Partial<InspectorState>) => setInspector((prev) => ({ ...prev, ...patch })), []);
+  const doc = useMemo(() => (result?.svg ? parseSvg(result.svg) : null), [result?.svg]);
+  // A new trace invalidates shape indices, so per-shape state cannot carry over.
+  useEffect(() => setInspector((prev) => ({ ...prev, hidden: new Set(), highlight: null, minArea: 0 })), [result?.svg]);
+  const dropped = useMemo(() => {
+    if (!doc) return new Set<number>();
+    const out = new Set(inspector.hidden);
+    for (const i of tinyShapes(doc, inspector.minArea)) out.add(i);
+    return out;
+  }, [doc, inspector.hidden, inspector.minArea]);
+  const exportSvg = useMemo(() => (doc && dropped.size ? doc.render(dropped) : result?.svg ?? undefined), [doc, dropped, result?.svg]);
+  const liveState = useMemo(() => ({ ...inspector, hidden: dropped }), [inspector, dropped]);
+
   return (
     <div className="min-h-dvh">
       <Header health={health} onNew={view ? upload.clear : undefined} />
@@ -112,18 +130,42 @@ export default function App() {
               <div className="motion-rise">
                 <Canvas
                   sourceUrl={view.previewUrl}
-                  svg={result?.svg ?? undefined}
+                  svg={exportSvg}
                   width={view.width}
                   height={view.height}
                   updating={busy}
                   busyLabel={busyLabel}
                   errorMessage={failure}
                   onRetry={retry}
+                  marks={doc ? (scale) => <InspectorOverlay doc={doc} state={liveState} scale={scale} /> : undefined}
+                  panel={
+                    doc ? (
+                      inspector.open ? (
+                        <Inspector doc={doc} bytes={exportSvg?.length ?? 0} state={liveState} onChange={patchInspector} />
+                      ) : (
+                        <button
+                          type="button"
+                          data-overlay-ui
+                          className="btn-ghost btn-icon absolute left-3 top-3 z-30 h-9 w-9 border bg-card/90 shadow-sm backdrop-blur"
+                          aria-label="Inspect the vector"
+                          title="Inspect the vector"
+                          onClick={() => patchInspector({ open: true })}
+                        >
+                          <Layers className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                      )
+                    ) : undefined
+                  }
                 />
               </div>
               <div className="motion-rise card flex flex-wrap items-center justify-between gap-4 p-4 [animation-delay:70ms]">
-                <StatsStrip engineLabel={active?.label ?? engine} result={result} updating={busy} />
-                <Actions svg={result?.svg ?? undefined} filename={view.file.name} engine={engine} width={view.width} height={view.height} />
+                <StatsStrip
+                  engineLabel={active?.label ?? engine}
+                  result={result}
+                  updating={busy}
+                  edited={doc && dropped.size ? { paths: doc.shapes.length - dropped.size, bytes: exportSvg?.length ?? 0 } : undefined}
+                />
+                <Actions svg={exportSvg} filename={view.file.name} engine={engine} width={view.width} height={view.height} />
               </div>
               {compare && engines.data && <CompareTable engines={engines.data} results={trace.results} active={engine} onPick={pickEngine} updating={trace.updating} />}
             </div>

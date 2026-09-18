@@ -1,6 +1,6 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { AlertCircle, Columns2, Layers2, Loader2, Maximize, Minus, Plus, RotateCw, Spline, SplitSquareHorizontal } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent } from "react";
 
 import { formatPercent } from "@/lib/format";
 
@@ -23,6 +23,10 @@ export interface CanvasProps {
   busyLabel?: string;
   errorMessage?: string;
   onRetry?: () => void;
+  /** Drawn in the vector's own coordinate space, on top of everything. */
+  marks?: (scale: number) => ReactNode;
+  /** Rendered inside the viewport, e.g. the inspector panel. */
+  panel?: ReactNode;
 }
 
 interface Transform {
@@ -34,7 +38,7 @@ interface Transform {
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 32;
 
-export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, errorMessage, onRetry }: CanvasProps) {
+export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, errorMessage, onRetry, marks, panel }: CanvasProps) {
   const [mode, setMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "split");
   const [split, setSplit] = useState(0.5);
   const [overlay, setOverlay] = useState(0.7);
@@ -126,6 +130,11 @@ export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, err
   );
 
   const source = <img src={sourceUrl} alt="Source raster" draggable={false} className="absolute left-0 top-0 max-w-none select-none" style={{ ...imgStyle, imageRendering: t.scale > 3 ? "pixelated" : "auto" }} />;
+  const marksNode = marks ? (
+    <div className="pointer-events-none absolute left-0 top-0" style={imgStyle}>
+      {marks(t.scale)}
+    </div>
+  ) : null;
   const vector = svg ? (
     <div
       aria-label="Vector result"
@@ -192,7 +201,7 @@ export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, err
         {mode === "side" ? (
           <>
             <div data-testid="source-pane" className="absolute inset-y-0 left-0 w-1/2 overflow-hidden">{source}</div>
-            <div className="absolute inset-y-0 right-0 w-1/2 overflow-hidden border-l">{vector}</div>
+            <div className="absolute inset-y-0 right-0 w-1/2 overflow-hidden border-l">{vector}{marksNode}</div>
             <span className="pointer-events-none absolute bottom-2 left-2 pill">Source</span>
             <span className="pointer-events-none absolute bottom-2 right-2 pill">Vector</span>
           </>
@@ -211,10 +220,21 @@ export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, err
             {mode === "split" && (
               <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${split * 100}%)` }}>
                 {vector}
+                {marksNode}
               </div>
             )}
-            {mode === "overlay" && <div className="absolute inset-0" style={{ opacity: overlay }}>{vector}</div>}
-            {mode === "vector" && vector}
+            {mode === "overlay" && (
+              <>
+                <div className="absolute inset-0" style={{ opacity: overlay }}>{vector}</div>
+                {marksNode}
+              </>
+            )}
+            {mode === "vector" && (
+              <>
+                {vector}
+                {marksNode}
+              </>
+            )}
             {mode === "split" && (
               <>
                 <div
@@ -242,6 +262,8 @@ export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, err
             )}
           </>
         )}
+
+        {panel}
 
         {svg && errorMessage && (
           <div className="absolute inset-x-0 bottom-0 m-3 rounded-md bg-destructive/90 px-3 py-2 text-sm text-destructive-foreground shadow-md" role="alert">
