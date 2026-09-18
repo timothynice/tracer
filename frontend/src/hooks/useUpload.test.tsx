@@ -50,3 +50,26 @@ test("reupload refreshes the image id", async () => {
   expect(id).toBe("b".repeat(32));
   await waitFor(() => expect(result.current.image?.imageId).toBe("b".repeat(32)));
 });
+
+test("shows the dropped file immediately, before the server answers", async () => {
+  let release: (() => void) | null = null;
+  const held = new Promise<void>((r) => (release = r));
+  server.use(
+    http.post(`${API_URL}/uploads`, async () => {
+      await held;
+      return HttpResponse.json({ image_id: "c".repeat(32), width: 64, height: 64, format: "PNG" });
+    }),
+  );
+  const { result } = renderHook(() => useUpload());
+  act(() => void result.current.upload(file()));
+  // The workspace can open on this preview while the upload is still in flight.
+  await waitFor(() => expect(result.current.preview?.previewUrl).toBeTruthy());
+  expect(result.current.image).toBeNull();
+  expect(result.current.uploading).toBe(true);
+  await act(async () => {
+    release!();
+    await held;
+  });
+  await waitFor(() => expect(result.current.image?.imageId).toBe("c".repeat(32)));
+  expect(result.current.preview?.previewUrl).toBe(result.current.image?.previewUrl);
+});

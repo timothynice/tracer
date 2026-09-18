@@ -78,22 +78,43 @@ class VexelParams(BaseModel):
     )
 
 
+def _touching_pairs(labels: np.ndarray, of_interest: set[int]) -> set[tuple[int, int]]:
+    """8-connected neighbour pairs (a < b) among `of_interest`, in one pass.
+
+    Equivalent to asking whether a 3x3 dilation of one region meets the other,
+    but without materialising a mask per region: on busy art that is thousands
+    of full-frame arrays and gigabytes of peak memory.
+    """
+    h, w = labels.shape
+    out: set[tuple[int, int]] = set()
+    for dy, dx in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        a = labels[max(0, -dy) : h - max(0, dy), max(0, -dx) : w - max(0, dx)]
+        b = labels[max(0, dy) : h - max(0, -dy), max(0, dx) : w - max(0, -dx)]
+        diff = a != b
+        if not diff.any():
+            continue
+        pa, pb = a[diff], b[diff]
+        keep = np.isin(pa, list(of_interest)) & np.isin(pb, list(of_interest))
+        if not keep.any():
+            continue
+        lo = np.minimum(pa[keep], pb[keep])
+        hi = np.maximum(pa[keep], pb[keep])
+        out.update(map(tuple, np.unique(np.stack([lo, hi], axis=1), axis=0).tolist()))
+    return out
+
+
 def _group_thin(thin_labels: list[int], labels: np.ndarray, rgb: np.ndarray, alpha: np.ndarray, fill_at, colour_tol: float = 30.0) -> list[list[int]]:
     """Union-find over thin regions that touch (within one pixel) and have
     similar ink colour. Returns groups of labels."""
     if not thin_labels:
         return []
-    from scipy import ndimage
 
     inks: dict[int, np.ndarray] = {}
-    grown: dict[int, np.ndarray] = {}
-    struct = ndimage.generate_binary_structure(2, 2)
     for lab in thin_labels:
         m = labels == lab
         field = thin_coverage(m, labels, rgb, alpha, fill_at)
         w = np.maximum(field[m], 1e-3) ** 2
         inks[lab] = np.average(rgb[m], axis=0, weights=w)
-        grown[lab] = ndimage.binary_dilation(m, struct)
     parent = {lab: lab for lab in thin_labels}
 
     def find(x: int) -> int:
@@ -102,11 +123,14 @@ def _group_thin(thin_labels: list[int], labels: np.ndarray, rgb: np.ndarray, alp
             x = parent[x]
         return x
 
+    touching = _touching_pairs(labels, set(thin_labels))
+    # Same order the pairwise scan used, so the union-find roots — and every
+    # ordering decision downstream of them — are unchanged.
     for i, a in enumerate(thin_labels):
         for b in thin_labels[i + 1 :]:
             if np.linalg.norm(inks[a] - inks[b]) > colour_tol:
                 continue
-            if (grown[a] & (labels == b)).any():
+            if (min(a, b), max(a, b)) in touching:
                 parent[find(a)] = find(b)
     groups: dict[int, list[int]] = {}
     for lab in thin_labels:

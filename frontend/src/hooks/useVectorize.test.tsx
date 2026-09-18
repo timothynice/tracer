@@ -91,3 +91,48 @@ test("re-uploads once when the server reports image_expired", async () => {
   expect(attempt).toBe(2);
   expect(result.current.data?.image_id).toBe("b".repeat(32));
 });
+
+test("a new image drops the previous image's result instead of showing it", async () => {
+  let current = image;
+  const { result, rerender } = renderHook(
+    () => useVectorize({ image: current, engines: ["potrace"], params: {}, reupload: async () => null, debounceMs: 5 }),
+    { wrapper: wrapper() },
+  );
+  await waitFor(() => expect(result.current.results?.potrace.svg).toBe(SVG));
+
+  server.use(
+    http.post(`${API_URL}/vectorize`, async () => {
+      await new Promise((r) => setTimeout(r, 60));
+      return HttpResponse.json({
+        success: true, image_id: "c".repeat(32), width: 64, height: 64, parameters_used: {},
+        results: { potrace: { svg: "<svg data-second/>", elapsed_ms: 1, stats: { paths: 1, nodes: 1, bytes: 1, gradients: 0, unique_fills: 1 } } },
+      });
+    }),
+  );
+  current = { ...image, hash: "h2", imageId: "c".repeat(32) };
+  rerender();
+  // keepPreviousData is for parameter tweaks; across images the old vector
+  // belongs to a different picture and must not be shown.
+  expect(result.current.results).toBeUndefined();
+  await waitFor(() => expect(result.current.results?.potrace.svg).toBe("<svg data-second/>"));
+});
+
+test("refetch() recovers after a failed request", async () => {
+  let calls = 0;
+  server.use(
+    http.post(`${API_URL}/vectorize`, async () => {
+      calls += 1;
+      if (calls === 1) return new HttpResponse("", { status: 502, statusText: "Bad Gateway" });
+      return HttpResponse.json({
+        success: true, image_id: image.imageId, width: 64, height: 64, parameters_used: {},
+        results: { potrace: { svg: SVG, elapsed_ms: 1, stats: { paths: 1, nodes: 1, bytes: 1, gradients: 0, unique_fills: 1 } } },
+      });
+    }),
+  );
+  const { result } = renderHook(() => useVectorize({ image, engines: ["potrace"], params: {}, reupload: async () => null, debounceMs: 5 }), { wrapper: wrapper() });
+  await waitFor(() => expect(result.current.error).toBeTruthy());
+  expect(result.current.results).toBeUndefined();
+  result.current.refetch();
+  await waitFor(() => expect(result.current.results?.potrace.svg).toBe(SVG));
+  expect(result.current.error).toBeNull();
+});

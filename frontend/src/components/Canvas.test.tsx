@@ -41,3 +41,43 @@ test("zoom controls change the percentage", () => {
   fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
   expect(screen.getByRole("button", { name: "Zoom to 100%" })).toHaveTextContent("125%");
 });
+
+test("split mode leaves the vector side empty until a vector exists", () => {
+  localStorage.setItem("studi0trace.view", "split");
+  const { rerender } = render(<Canvas {...props} svg={undefined} />);
+  // The source is clipped to the left of the divider, so nothing is painted on
+  // the right: an unclipped source there would read as a finished vector.
+  expect(screen.getByTestId("source-pane")).toHaveStyle({ clipPath: "inset(0 50% 0 0)" });
+  rerender(<Canvas {...props} />);
+  expect(screen.getByRole("img", { name: "Vector result" })).toBeInTheDocument();
+});
+
+test("a failed request shows a persistent error with a retry, not 'No vector yet'", () => {
+  const onRetry = vi.fn();
+  render(<Canvas {...props} svg={undefined} errorMessage="Server error (502)" onRetry={onRetry} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("Server error (502)");
+  expect(screen.queryByText("No vector yet")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(onRetry).toHaveBeenCalled();
+});
+
+test("while busy it names the phase instead of claiming there is no vector", () => {
+  render(<Canvas {...props} svg={undefined} updating busyLabel="Uploading…" />);
+  expect(screen.getByText("Uploading…")).toBeInTheDocument();
+  expect(screen.queryByText("No vector yet")).not.toBeInTheDocument();
+});
+
+test("the canvas does not swallow clicks on its overlay controls", () => {
+  const onRetry = vi.fn();
+  render(<Canvas {...props} svg={undefined} errorMessage="Server error (502)" onRetry={onRetry} />);
+  const button = screen.getByRole("button", { name: /try again/i });
+  // Panning captures the pointer on the viewport, which retargets the click
+  // away from anything drawn on top of it unless the drag is declined.
+  fireEvent.pointerDown(button, { button: 0, pointerId: 1 });
+  const img = screen.getByAltText("Source raster");
+  const before = img.style.transform;
+  fireEvent.pointerMove(button, { clientX: 120, clientY: 40, pointerId: 1 });
+  expect(img.style.transform).toBe(before); // no pan started
+  fireEvent.click(button);
+  expect(onRetry).toHaveBeenCalled();
+});

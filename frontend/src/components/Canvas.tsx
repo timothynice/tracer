@@ -1,5 +1,5 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import { Columns2, Layers2, Maximize, Minus, Plus, Spline, SplitSquareHorizontal } from "lucide-react";
+import { AlertCircle, Columns2, Layers2, Loader2, Maximize, Minus, Plus, RotateCw, Spline, SplitSquareHorizontal } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent } from "react";
 
 import { formatPercent } from "@/lib/format";
@@ -19,7 +19,10 @@ export interface CanvasProps {
   width: number;
   height: number;
   updating?: boolean;
+  /** What the wait is for, e.g. "Uploading…" — shown while `updating` and no vector. */
+  busyLabel?: string;
   errorMessage?: string;
+  onRetry?: () => void;
 }
 
 interface Transform {
@@ -31,7 +34,7 @@ interface Transform {
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 32;
 
-export function Canvas({ sourceUrl, svg, width, height, updating, errorMessage }: CanvasProps) {
+export function Canvas({ sourceUrl, svg, width, height, updating, busyLabel, errorMessage, onRetry }: CanvasProps) {
   const [mode, setMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "split");
   const [split, setSplit] = useState(0.5);
   const [overlay, setOverlay] = useState(0.7);
@@ -64,12 +67,13 @@ export function Canvas({ sourceUrl, svg, width, height, updating, errorMessage }
   }, [paneW, size.h, width, height]);
 
   useEffect(() => {
-    if (!fitted && paneW && size.h) {
+    if (!fitted && paneW && size.h && width && height) {
       setT(fitTransform());
       setFitted(true);
     }
-  }, [fitted, paneW, size.h, fitTransform]);
-  useEffect(() => setFitted(false), [sourceUrl, mode]);
+  }, [fitted, paneW, size.h, width, height, fitTransform]);
+  // Dimensions arrive after the preview does, so a size change refits too.
+  useEffect(() => setFitted(false), [sourceUrl, mode, width, height]);
 
   const zoomAt = useCallback(
     (factor: number, cx: number, cy: number) => {
@@ -92,6 +96,10 @@ export function Canvas({ sourceUrl, svg, width, height, updating, errorMessage }
   const drag = useRef<{ x: number; y: number; tx: number; ty: number; kind: "pan" | "split" } | null>(null);
   const onPointerDown = (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
+    // Controls painted over the canvas keep their own clicks: capturing the
+    // pointer here retargets the following click to the viewport, which is how
+    // a Retry button ends up doing nothing at all.
+    if ((e.target as HTMLElement).closest("[data-overlay-ui]")) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY, tx: t.x, ty: t.y, kind: "pan" };
   };
@@ -122,7 +130,7 @@ export function Canvas({ sourceUrl, svg, width, height, updating, errorMessage }
     <div
       aria-label="Vector result"
       role="img"
-      className={`absolute left-0 top-0 transition-opacity [&>svg]:block [&>svg]:h-full [&>svg]:w-full ${updating ? "opacity-60" : ""}`}
+      className={`absolute left-0 top-0 motion-fade [&>svg]:block [&>svg]:h-full [&>svg]:w-full ${updating ? "opacity-60" : ""}`}
       style={imgStyle}
       dangerouslySetInnerHTML={{ __html: svg }}
     />
@@ -183,14 +191,23 @@ export function Canvas({ sourceUrl, svg, width, height, updating, errorMessage }
       >
         {mode === "side" ? (
           <>
-            <div className="absolute inset-y-0 left-0 w-1/2 overflow-hidden">{source}</div>
+            <div data-testid="source-pane" className="absolute inset-y-0 left-0 w-1/2 overflow-hidden">{source}</div>
             <div className="absolute inset-y-0 right-0 w-1/2 overflow-hidden border-l">{vector}</div>
             <span className="pointer-events-none absolute bottom-2 left-2 pill">Source</span>
             <span className="pointer-events-none absolute bottom-2 right-2 pill">Vector</span>
           </>
         ) : (
           <>
-            {mode !== "vector" && source}
+            {/* In split the source is clipped to its own side. Letting it run
+                under the empty half would show the raster where the vector
+                belongs, and read as a finished trace. */}
+            {mode === "split" ? (
+              <div data-testid="source-pane" className="absolute inset-0" style={{ clipPath: `inset(0 ${(1 - split) * 100}% 0 0)` }}>
+                {source}
+              </div>
+            ) : (
+              mode !== "vector" && source
+            )}
             {mode === "split" && (
               <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${split * 100}%)` }}>
                 {vector}
@@ -226,13 +243,35 @@ export function Canvas({ sourceUrl, svg, width, height, updating, errorMessage }
           </>
         )}
 
-        {errorMessage && (
+        {svg && errorMessage && (
           <div className="absolute inset-x-0 bottom-0 m-3 rounded-md bg-destructive/90 px-3 py-2 text-sm text-destructive-foreground shadow-md" role="alert">
             {errorMessage}
           </div>
         )}
-        {!svg && !errorMessage && (
-          <div className="pointer-events-none absolute inset-x-0 top-3 text-center text-xs text-muted-foreground">{updating ? "Tracing…" : "No vector yet"}</div>
+
+        {!svg && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center p-6">
+            {errorMessage ? (
+              <div role="alert" data-overlay-ui className="motion-rise pointer-events-auto max-w-sm rounded-lg border bg-card/95 p-4 text-center shadow-elevated backdrop-blur">
+                <AlertCircle className="mx-auto h-5 w-5 text-destructive" aria-hidden="true" />
+                <p className="mt-2 text-sm font-medium">Tracing failed</p>
+                <p className="mt-1 text-sm text-muted-foreground">{errorMessage}</p>
+                {onRetry && (
+                  <button type="button" className="btn-secondary btn-sm mt-3" onClick={onRetry}>
+                    <RotateCw className="h-4 w-4" aria-hidden="true" />
+                    Try again
+                  </button>
+                )}
+              </div>
+            ) : updating ? (
+              <div className="motion-fade flex items-center gap-2.5 rounded-full border bg-card/90 px-4 py-2 shadow-sm backdrop-blur" aria-live="polite">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
+                <p className="text-sm font-medium">{busyLabel ?? "Tracing…"}</p>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No vector yet</p>
+            )}
+          </div>
         )}
       </div>
     </section>

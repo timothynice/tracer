@@ -71,19 +71,35 @@ export default function App() {
   const disabledReason = health.status === "down" ? "Server unreachable — retrying…" : ready ? undefined : "Waking the server…";
   const result = active ? trace.results?.[active.id] : undefined;
 
+  // The workspace opens on the local preview, so the source is on screen while
+  // the upload and the trace are still in flight.
+  const view = upload.preview;
+  const busy = upload.uploading || (!!view && !upload.error && trace.updating);
+  const busyLabel = upload.uploading ? "Uploading…" : "Tracing…";
+  // A request that never returned a result (502, network, timeout) has to reach
+  // the canvas; a toast alone leaves it sitting on "No vector yet".
+  const failure = result?.error
+    ? `${active?.label ?? engine} failed: ${result.error.message}`
+    : upload.error
+      ? upload.error.message
+      : trace.error && !result
+        ? trace.error.message
+        : undefined;
+  const retry = useCallback(() => (upload.error ? upload.retry() : trace.refetch()), [upload, trace]);
+
   return (
     <div className="min-h-dvh">
-      <Header health={health} onNew={upload.image ? upload.clear : undefined} />
+      <Header health={health} onNew={view ? upload.clear : undefined} />
 
       <main className="mx-auto max-w-[1400px] px-4 py-6 md:px-6 md:py-8">
-        {!upload.image ? (
-          <div className="mx-auto max-w-2xl space-y-6 pt-6 md:pt-16">
+        {!view ? (
+          <div className="motion-fade mx-auto max-w-2xl space-y-6 pt-6 md:pt-16">
             <div className="space-y-2 text-center">
               <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Raster in. Faithful vectors out.</h1>
               <p className="text-muted-foreground">Trace logos, flat art and gradient illustrations to SVG, and compare engines side by side.</p>
             </div>
-            <Dropzone onFile={onFile} disabled={!ready || upload.uploading} disabledReason={disabledReason} />
-            <Samples onPick={onFile} disabled={!ready || upload.uploading} />
+            <Dropzone onFile={onFile} disabled={!ready} disabledReason={disabledReason} />
+            <Samples onPick={onFile} disabled={!ready} />
             {health.status === "waking" && (
               <p className="text-center text-xs text-muted-foreground">Free-tier servers sleep after inactivity and take up to a minute to wake. Hang tight.</p>
             )}
@@ -91,22 +107,26 @@ export default function App() {
         ) : (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_336px]">
             <div className="min-w-0 space-y-4">
-              <Canvas
-                sourceUrl={upload.image.previewUrl}
-                svg={result?.svg ?? undefined}
-                width={upload.image.width}
-                height={upload.image.height}
-                updating={trace.updating}
-                errorMessage={result?.error ? `${active?.label ?? engine} failed: ${result.error.message}` : undefined}
-              />
-              <div className="card flex flex-wrap items-center justify-between gap-4 p-4">
-                <StatsStrip engineLabel={active?.label ?? engine} result={result} updating={trace.updating} />
-                <Actions svg={result?.svg ?? undefined} filename={upload.image.file.name} engine={engine} width={upload.image.width} height={upload.image.height} />
+              <div className="motion-rise">
+                <Canvas
+                  sourceUrl={view.previewUrl}
+                  svg={result?.svg ?? undefined}
+                  width={view.width}
+                  height={view.height}
+                  updating={busy}
+                  busyLabel={busyLabel}
+                  errorMessage={failure}
+                  onRetry={retry}
+                />
+              </div>
+              <div className="motion-rise card flex flex-wrap items-center justify-between gap-4 p-4 [animation-delay:70ms]">
+                <StatsStrip engineLabel={active?.label ?? engine} result={result} updating={busy} />
+                <Actions svg={result?.svg ?? undefined} filename={view.file.name} engine={engine} width={view.width} height={view.height} />
               </div>
               {compare && engines.data && <CompareTable engines={engines.data} results={trace.results} active={engine} onPick={pickEngine} updating={trace.updating} />}
             </div>
 
-            <aside aria-label="Controls" className="card h-fit p-4 lg:sticky lg:top-20">
+            <aside aria-label="Controls" className="motion-rise card h-fit p-4 [animation-delay:140ms] lg:sticky lg:top-20">
               {engines.data && active ? (
                 <>
                   <EngineTabs engines={engines.data} value={active.id} onChange={pickEngine}>

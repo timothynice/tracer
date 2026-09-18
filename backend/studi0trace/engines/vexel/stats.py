@@ -49,6 +49,13 @@ def phi(xn: np.ndarray, yn: np.ndarray) -> np.ndarray:
     return np.stack([np.ones_like(xn), xn, yn, xn * xn, xn * yn, yn * yn], axis=-1)
 
 
+# Per pixel the moment/cross/square rows come to ~850 bytes of float64. Built
+# for a whole image at once that is ~0.9 GB at one megapixel, which is what took
+# the service down; chunking bounds it without changing the summation order, so
+# the result stays bit-identical.
+_CHUNK = 1 << 16
+
+
 def accumulate(labels: np.ndarray, xn: np.ndarray, yn: np.ndarray, colours: np.ndarray) -> np.ndarray:
     """Stats rows for labels 0..K (row 0 unused). colours: (H, W, C)."""
     k = int(labels.max()) + 1
@@ -56,18 +63,22 @@ def accumulate(labels: np.ndarray, xn: np.ndarray, yn: np.ndarray, colours: np.n
     lab = labels.ravel()
     x = xn.ravel()
     y = yn.ravel()
-    col = colours.reshape(-1, n_ch).astype(np.float64)
+    col = colours.reshape(-1, n_ch)
 
-    moments = np.empty((x.size, N_MOMENTS))
-    for i, (a, b) in enumerate(MOMENT_ORDER):
-        moments[:, i] = (x**a) * (y**b)
-    basis = moments[:, :6]  # φ
-    cross = (col[:, :, None] * basis[:, None, :]).reshape(x.size, -1)  # channel-major (c, φ)
-    sq = col * col
+    out = np.zeros((k, N_MOMENTS + 6 * n_ch + n_ch))
+    for start in range(0, x.size, _CHUNK):
+        stop = min(start + _CHUNK, x.size)
+        xc = x[start:stop]
+        yc = y[start:stop]
+        cc = col[start:stop].astype(np.float64)
 
-    rows = np.concatenate([moments, cross, sq], axis=1)
-    out = np.zeros((k, rows.shape[1]))
-    np.add.at(out, lab, rows)
+        moments = np.empty((stop - start, N_MOMENTS))
+        for i, (a, b) in enumerate(MOMENT_ORDER):
+            moments[:, i] = (xc**a) * (yc**b)
+        basis = moments[:, :6]  # φ
+        cross = (cc[:, :, None] * basis[:, None, :]).reshape(stop - start, -1)  # channel-major (c, φ)
+        rows = np.concatenate([moments, cross, cc * cc], axis=1)
+        np.add.at(out, lab[start:stop], rows)
     return out
 
 

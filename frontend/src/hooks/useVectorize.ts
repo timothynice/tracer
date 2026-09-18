@@ -52,23 +52,29 @@ export function useVectorize({ image, engines, params, enabled = true, reupload,
     gcTime: 10 * 60 * 1000,
     queryFn: async ({ signal }) => {
       if (!image) throw new Error("no image");
+      const hash = image.hash;
       const parameters = Object.fromEntries(engineList.map((e) => [e, params[e] ?? {}]));
       try {
-        return await vectorize({ imageId: image.imageId, engines: engineList, parameters }, signal);
+        return { ...(await vectorize({ imageId: image.imageId, engines: engineList, parameters }, signal)), hash };
       } catch (err) {
         if (err instanceof ApiError && err.code === "image_expired") {
           const fresh = await reupload();
           if (!fresh) throw err;
-          return await vectorize({ imageId: fresh, engines: engineList, parameters }, signal);
+          return { ...(await vectorize({ imageId: fresh, engines: engineList, parameters }, signal)), hash };
         }
         throw err;
       }
     },
   });
 
+  // keepPreviousData holds the last result across key changes, which is what we
+  // want while parameters are being dragged — but a result from a *different*
+  // image is a picture of something else, so it is dropped.
+  const data = query.data?.hash === image?.hash ? query.data : undefined;
+
   return {
-    results: query.data?.results,
-    data: query.data,
+    results: data?.results,
+    data,
     updating: query.isFetching || settled !== liveKeyString,
     stale: query.isPlaceholderData || settled !== liveKeyString,
     error: query.error,

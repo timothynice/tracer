@@ -122,6 +122,10 @@ async function toApiError(res: Response): Promise<ApiError> {
     const d = detail as { code: string; message?: string };
     return new ApiError(d.code, d.message ?? d.code, res.status, detail);
   }
+  if (res.status >= 500) {
+    // A bare gateway error carries no body; say what it usually means here.
+    return new ApiError(`http_${res.status}`, `The server didn't finish the trace (${res.status}). Large or highly detailed images can exhaust it — try a smaller image.`, res.status, body);
+  }
   return new ApiError(`http_${res.status}`, typeof detail === "string" ? detail : res.statusText || "Request failed", res.status, body);
 }
 
