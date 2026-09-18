@@ -85,6 +85,7 @@ The backend suite includes a concurrency test (two 0.4 s traces must finish in
 |---|---|
 | `GET /health` | `{status, version, engines}` |
 | `GET /engines` | Each engine's `id`, `label`, `description`, JSON Schema `params` and `defaults`. The UI renders every control from this — adding an engine or a parameter needs no frontend change. |
+| `GET /presets` | Named parameter bundles: `id`, `label`, `engine`, `description`, `detail` (what it measurably costs, from the bench) and `params`. A preset layers over the engine's **defaults**, never over current values. |
 | `POST /uploads` | multipart `file` → `{image_id, width, height, format}`. Validated once and kept server-side (LRU, sliding 30 min TTL) so re-tracing while tuning doesn't re-send the file. |
 | `POST /vectorize` | multipart: `image_id` **or** `file`, `parameters` (JSON keyed by engine id), `engines` (comma list; default all). Returns `results.{engine}.{svg, elapsed_ms, stats | error}`, `image_id`, `width`, `height`. Expired id → 404 `image_expired`; the client re-uploads and retries once. |
 
