@@ -147,6 +147,9 @@ export function Inspector({ doc, bytes, elapsedMs, engineLabel, edited, state, o
   );
 }
 
+/** Half of the two-tone overlay pair. Fixed rather than themed — see below. */
+const INK = "#0f172a";
+
 /** The marks drawn over the canvas: outlines, anchors, and the highlighted shape. */
 export function InspectorOverlay({ doc, state, scale }: { doc: SvgDoc; state: InspectorState; scale: number }) {
   if (!state.points && !state.outlines && state.highlight === null) return null;
@@ -167,20 +170,44 @@ export function InspectorOverlay({ doc, state, scale }: { doc: SvgDoc; state: In
         return (
           <g key={s.index}>
             {(state.outlines || lit) && s.outline && (
-              // The shape's own geometry, so curves stay curves.
-              <g
-                fill="none"
-                stroke={lit ? "hsl(var(--brand-accent))" : "hsl(var(--primary))"}
-                strokeWidth={(lit ? 2 : 1) * w}
-                strokeLinejoin="round"
-                opacity={lit ? 1 : 0.55}
-                dangerouslySetInnerHTML={{ __html: s.outline }}
-              />
+              // The shape's own geometry, so curves stay curves — drawn as
+              // interleaved two-tone dashes.
+              //
+              // Artwork can be any colour, so no single stroke colour is safe:
+              // a dark line reads as ink over pale art (and gets reported as a
+              // tracing bug, rightly), while a light one disappears over white.
+              // Two offset dash phases in contrasting colours always leave one
+              // visible, and dashes are never mistaken for a filled edge.
+              //
+              // The pair is fixed, not themed: how light the *artwork* is has
+              // nothing to do with whether the app is in dark mode, and a themed
+              // pair goes light-on-light the moment those disagree.
+              <>
+                <g
+                  fill="none"
+                  stroke={INK}
+                  strokeWidth={(lit ? 2 : 1) * w}
+                  strokeLinejoin="round"
+                  strokeDasharray={`${4 * w} ${4 * w}`}
+                  opacity={lit ? 0.9 : 0.7}
+                  dangerouslySetInnerHTML={{ __html: s.outline }}
+                />
+                <g
+                  fill="none"
+                  stroke="hsl(var(--brand-accent))"
+                  strokeWidth={(lit ? 2 : 1) * w}
+                  strokeLinejoin="round"
+                  strokeDasharray={`${4 * w} ${4 * w}`}
+                  strokeDashoffset={4 * w}
+                  opacity={lit ? 1 : 0.9}
+                  dangerouslySetInnerHTML={{ __html: s.outline }}
+                />
+              </>
             )}
             {lit && <rect x={x} y={y} width={bw} height={bh} fill="none" stroke="hsl(var(--brand-accent))" strokeWidth={w} strokeDasharray={`${4 * w} ${3 * w}`} />}
             {(state.points || lit) &&
               s.anchors.map(([px, py], i) => (
-                <circle key={i} cx={px} cy={py} r={r} fill="hsl(var(--background))" stroke={lit ? "hsl(var(--brand-accent))" : "hsl(var(--primary))"} strokeWidth={w} />
+                <circle key={i} cx={px} cy={py} r={r} fill="hsl(var(--brand-accent))" stroke={INK} strokeWidth={w} />
               ))}
           </g>
         );
