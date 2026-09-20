@@ -22,8 +22,13 @@ means that number was measured on the current corpus with the current build.
 
 ```bash
 cd backend && uv venv && uv pip install -e '.[dev]'   # Python ≥ 3.12
+cd backend && .venv/bin/python -m maturin develop --release -m vexel-rs/Cargo.toml
 cd frontend && npm ci                                  # Node ≥ 20
 ```
+
+The middle line builds Vexel's Rust pipeline (needs a toolchain from
+<https://rustup.rs>). Skip it and everything still works — Vexel falls back to
+its Python implementation and traces about ten times slower.
 
 Run both servers:
 
@@ -35,13 +40,36 @@ npm --prefix frontend run dev
 ## Before you open a pull request
 
 ```bash
-cd backend   && .venv/bin/python -m pytest
-cd frontend  && npm run test:run && npm run build
+cd backend           && .venv/bin/python -m pytest
+cd backend/vexel-rs  && cargo test
+cd frontend          && npm run test:run && npm run build
 ```
 
 New behaviour ships with a test. The concurrency and CORS-on-error tests in
 `backend/tests/test_api.py` are regression guards for real production
 incidents — if one of them fails, something is actually broken.
+
+## Vexel has two implementations
+
+`backend/vexel-rs/` is the Rust pipeline and is what runs;
+`backend/studi0trace/engines/vexel/*.py` is the reference it was ported from and
+the fallback when the extension is not built. **They are one algorithm.** A fix
+to a stage in one needs the same fix in the other, and
+
+```bash
+cd backend && .venv/bin/python -m tools.diffcheck
+```
+
+is what proves it landed: it runs each stage in both over the whole corpus and
+reports where they disagree — the partition's labels to the last float32 bit,
+the fills by what they paint. Where the two are allowed to differ, the tolerance
+table at the top of that file says so and says why.
+
+Run the suite against both:
+
+```bash
+cd backend && .venv/bin/python -m pytest && VEXEL_BACKEND=python .venv/bin/python -m pytest
+```
 
 ## Conventions worth knowing
 

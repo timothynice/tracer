@@ -5,6 +5,7 @@ scoreboard that says which trace is more true to the source image.
 
 ```
 backend/   FastAPI service + engines + bench     (Python ≥ 3.12)
+backend/vexel-rs/   Vexel's pipeline in Rust, built as an extension module
 frontend/  Studi0Trace web app: React 18 + TS + Tailwind on the Studi0 design system (Node ≥ 20)
 ```
 
@@ -13,9 +14,8 @@ Engines: **Potrace** (1-bit outlines), **VTracer** (colour layers), and
 
 ### Vexel
 
-Vexel (`backend/studi0trace/engines/vexel/`) is built for logos, flat art and
-illustrations with gradients and soft shadows. Instead of quantising colours
-and tracing bands, it:
+Vexel is built for logos, flat art and illustrations with gradients and soft
+shadows. Instead of quantising colours and tracing bands, it:
 
 1. finds discontinuities as *ridges* of the colour gradient (Canny-style
    non-maximum suppression), so steep smooth ramps stay whole and thin strokes
@@ -45,16 +45,31 @@ lower is better):
 
 | class | Potrace | VTracer | **Vexel** |
 |---|---|---|---|
-| logo | 11.4 | 1.20 | **0.40** |
-| flat | 20.4 | 0.97 | **0.67** |
-| gradient | 23.2 | 10.40 | **0.89** |
-| shadow | 14.8 | 3.24 | **0.44** |
+| logo | 11.4 | 1.20 | **0.36** |
+| flat | 20.4 | 0.97 | **0.64** |
+| gradient | 23.2 | 10.40 | **0.88** |
+| shadow | 14.8 | 3.24 | **0.42** |
 
 Vexel has the lowest ΔE on **67 of 71** corpus items, and gets there with far
-less geometry: 9.9 paths and 9.5 KB per image on average against VTracer's 33.3
-paths and 17.8 KB. It is pure Python, averaging ~1.9 s an image — the two real
-logos in the corpus are 768 px and one of them is a dense illustration, so that
-mean is dominated by the hardest items rather than by a typical mark.
+less geometry: 9.8 paths and 9.5 KB per image on average against VTracer's 33.3
+paths and 17.8 KB.
+
+### Vexel is Rust
+
+The pipeline lives in `backend/vexel-rs/` and is built as an extension module.
+It averages **0.18 s an image** against the Python implementation's 1.9 s —
+**10.3× over the corpus**, and 18.7× on the logo class, where the two 768 px
+real logos are. The Python pipeline is still in `engines/vexel/*.py`: it is the
+reference the Rust one was ported from, the fallback when the extension is not
+built, and the oracle `tools/diffcheck.py` compares every stage against.
+
+Set `VEXEL_BACKEND=python` to force the reference, `rust` to require the
+extension. The default is the extension when it imports.
+
+Design, measurements and the two defects the port turned up —
+`skimage.morphology.medial_axis` is seeded from the OS and so not reproducible,
+and two corpus items were being scored on a lucky random sample — are in
+`docs/superpowers/specs/2026-09-20-vexel-rust-port-design.md`.
 
 Reproduce it yourself — the corpus is generated, not shipped:
 
@@ -64,17 +79,23 @@ python -m bench generate            # rebuild the corpus from bench/synth.py
 python -m bench run                 # every registered engine
 ```
 
-Design and research notes: `docs/superpowers/specs/2026-09-17-vexel-engine-design.md`.
+Design and research notes: `docs/superpowers/specs/2026-09-17-vexel-engine-design.md`,
+and `2026-09-20-vexel-rust-port-design.md` for the Rust implementation.
 
 ## Run it
 
-Backend (needs the `potrace` binary: `brew install potrace` / `apt install potrace`):
+Backend (needs the `potrace` binary: `brew install potrace` / `apt install
+potrace`, and a Rust toolchain for Vexel: <https://rustup.rs>):
 
 ```bash
 cd backend
 uv venv .venv && uv pip install -p .venv/bin/python -e '.[dev]'
+.venv/bin/python -m maturin develop --release -m vexel-rs/Cargo.toml   # Vexel
 .venv/bin/uvicorn studi0trace.main:app --reload        # http://localhost:8000
 ```
+
+Without the last step everything still works — Vexel falls back to its Python
+implementation and traces about ten times slower.
 
 Frontend:
 
@@ -89,12 +110,24 @@ npm run dev                                            # http://localhost:5173
 ## Tests
 
 ```bash
-cd backend && .venv/bin/python -m pytest
-cd frontend && npm run test:run
+cd backend           && .venv/bin/python -m pytest
+cd backend/vexel-rs  && cargo test
+cd frontend          && npm run test:run
 ```
 
 The backend suite includes a concurrency test (two 0.4 s traces must finish in
-< 0.7 s) and asserts CORS headers on every error path, including 500s.
+< 0.7 s) and asserts CORS headers on every error path, including 500s. It runs
+against whichever Vexel backend is installed; `VEXEL_BACKEND=python pytest`
+exercises the other one.
+
+`tools/diffcheck.py` compares the two Vexel implementations stage by stage over
+the whole corpus — the partition's labels to the last float32 bit, the fills by
+what they paint:
+
+```bash
+cd backend && .venv/bin/python -m tools.diffcheck            # every stage
+.venv/bin/python -m tools.diffcheck labels0 --filter 128     # one stage, some items
+```
 
 ## API
 
@@ -176,8 +209,11 @@ no Node process in production. `VITE_API_URL` is substituted at build time, so
 the backend URL is baked into the bundle: change it and you must rebuild, not
 just restart.
 
-The backend is a single container: `backend/Dockerfile` installs potrace,
-builds the wheel and runs uvicorn. It is stateless apart from an in-memory
+The backend is a single container: `backend/Dockerfile` builds the Vexel crate
+in its own stage, installs potrace and the two wheels, and runs uvicorn. It
+fails the build rather than the first request if the extension did not land — a
+silent fall back to the Python pipeline would only show up as every trace taking
+ten times as long. It is stateless apart from an in-memory
 upload cache (LRU with a sliding TTL), so it can be restarted or scaled without
 coordination — but uploads do not survive a restart, and a second instance will
 not see the first one's `image_id`. The client already handles that: an expired
@@ -199,10 +235,11 @@ and DNS change, no code:
 ### Free tier, honestly
 
 The backend sleeps after inactivity, so the first request after a quiet period
-pays 30–50 s of cold start, and the shared CPU makes a 512 px trace take
-seconds rather than the ~0.9 s it takes locally. Taking the backend off the
-free instance type is the single change that fixes both; nothing else about the
-deployment needs to move.
+pays 30–50 s of cold start. The shared CPU also costs more than it used to:
+Vexel is parallel now, so a 512 px trace that takes ~0.2 s on a laptop's twelve
+threads gets most of the way back to a second on a single shared core. Taking
+the backend off the free instance type is the one change that fixes both;
+nothing else about the deployment needs to move.
 
 ## Design docs
 

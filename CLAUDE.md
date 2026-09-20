@@ -6,8 +6,18 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 ## Layout
 
 - `backend/studi0trace/` — FastAPI app (`main.py`), `api/`, `engines/`, `imaging/`
+- `backend/vexel-rs/` — Vexel's pipeline in Rust, built into the `vexel_rs`
+  extension module with `maturin develop --release -m vexel-rs/Cargo.toml`.
+  This is what runs; `engines/vexel/*.py` is the reference it was ported from
+  and the fallback when the extension is missing. `VEXEL_BACKEND=python|rust`
+  selects explicitly. **Change one and you change both** — a fix to a stage in
+  Python needs the same fix in `vexel-rs/src/`, and `tools/diffcheck.py` is what
+  proves it landed.
+- `backend/tools/diffcheck.py` — runs a pipeline stage in both implementations
+  over the corpus and reports where they disagree
 - `backend/bench/` — Vexel Bench (`python -m bench …`)
-- `backend/tests/` — pytest; run `cd backend && .venv/bin/python -m pytest`
+- `backend/tests/` — pytest; run `cd backend && .venv/bin/python -m pytest`.
+  Rust tests: `cd backend/vexel-rs && cargo test`
 - `frontend/` — Studi0Trace React 18 + TS app; `npm run test:run`, `npm run build`
   (`src/components`, `src/hooks`, `src/lib`; tokens in `src/styles.css`)
 - `docs/superpowers/specs|plans/` — design specs and implementation plans
@@ -24,6 +34,10 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   `tests/test_api.py` are regression guards for real production incidents.
 - Any tracing quality change must be run through the bench and compared against
   `backend/bench/baselines/` before it is called an improvement.
+- The Rust engine is not allowed to diverge from the Python one by accident.
+  `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
+  the fills to a colour level; where the two are allowed to differ, the
+  tolerance table says so and says why.
 - Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`.
 - Frontend follows the Studi0 design system (semantic HSL tokens, Poppins,
   `.dark` on `<html>`, `h-10 rounded-md` buttons, sticky blurred header). Never

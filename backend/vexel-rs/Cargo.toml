@@ -1,0 +1,28 @@
+[package]
+name = "vexel-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Vexel: raster-to-SVG tracing, the engine behind Studi0Trace"
+license = "MIT"
+
+[lib]
+name = "vexel_rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Optional so that `cargo test` builds the engine on its own: with
+# `extension-module` on, the CPython symbols are left for the interpreter to
+# resolve and a test binary cannot link.
+# abi3-py312 makes one wheel work on every CPython from 3.12 up, so the image
+# does not have to build against the exact interpreter it will run on.
+pyo3 = { version = "0.22", features = ["abi3-py312"], optional = true }
+rayon = "1.10"
+
+[features]
+default = []
+extension-module = ["dep:pyo3", "pyo3/extension-module"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

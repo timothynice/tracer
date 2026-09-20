@@ -1,6 +1,13 @@
-"""Vexel engine: orchestrates the pipeline and registers with the engine seam."""
+"""Vexel engine: orchestrates the pipeline and registers with the engine seam.
+
+Two implementations of the pipeline live behind this seam. `vexel_rs` is the
+Rust one and is used when it imports; the Python below is the reference it was
+ported from, and stays the definition of what Vexel does. `VEXEL_BACKEND`
+selects explicitly (`rust` | `python`), which is how the two are compared.
+"""
 from __future__ import annotations
 
+import os
 import time
 from typing import ClassVar, Literal
 
@@ -28,6 +35,23 @@ from studi0trace.engines.vexel.weights import interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
 _CROSS = ndimage.generate_binary_structure(2, 1)
+
+try:  # pragma: no cover - exercised by whichever backend is installed
+    import vexel_rs as _vexel_rs
+except ImportError:  # the crate is not built in this checkout
+    _vexel_rs = None
+
+
+def backend() -> str:
+    """Which implementation `trace()` will use: "rust" or "python"."""
+    want = os.environ.get("VEXEL_BACKEND", "").strip().lower()
+    if want == "python":
+        return "python"
+    if want == "rust":
+        if _vexel_rs is None:
+            raise RuntimeError("VEXEL_BACKEND=rust but the vexel_rs extension is not installed")
+        return "rust"
+    return "rust" if _vexel_rs is not None else "python"
 
 
 class VexelParams(BaseModel):
@@ -165,7 +189,14 @@ class VexelEngine:
         p = params if isinstance(params, VexelParams) else VexelParams.model_validate(params)
         started = time.perf_counter()
         rgba = np.asarray(image.image.convert("RGBA"), dtype=np.uint8)
-        svg = trace_rgba(rgba, p)
+        if backend() == "rust":
+            # The bytes are copied because the trace runs with the GIL released,
+            # so it cannot hold a reference into a Python buffer. One copy of
+            # 4·w·h against a couple of hundred milliseconds of tracing.
+            height, width = rgba.shape[:2]
+            svg = _vexel_rs.trace(rgba.tobytes(), width, height, p.model_dump())
+        else:
+            svg = trace_rgba(rgba, p)
         return finish(svg, image, started)
 
 

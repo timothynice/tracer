@@ -11,7 +11,15 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy import optimize
 
-MAX_FIT_SAMPLES = 2500
+# How many pixels a fill is fitted from.
+#
+# At 2 500 the radial centre search carries real sampling noise: two draws from
+# a 12 000-pixel backdrop put the fitted centre half a pixel apart and move the
+# gradient stops by ten levels, and on two corpus items the *rescue* of
+# sub-pixel lines turned on whether this particular draw happened to
+# misestimate the background's alpha. Ten times the samples costs nothing
+# measurable and removes it.
+MAX_FIT_SAMPLES = 25000
 
 
 # --- fill models ------------------------------------------------------------------
