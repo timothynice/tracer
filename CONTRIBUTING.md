@@ -71,6 +71,18 @@ Run the suite against both:
 cd backend && .venv/bin/python -m pytest && VEXEL_BACKEND=python .venv/bin/python -m pytest
 ```
 
+`VEXEL_TIMING=1` makes the Rust engine print a per-stage breakdown to stderr.
+The expensive stage moves with the image, so "the trace took 900 ms" is not
+actionable on its own:
+
+```bash
+cd backend && VEXEL_TIMING=1 .venv/bin/python -c "
+from PIL import Image; import numpy as np, vexel_rs
+from studi0trace.engines.vexel.engine import VexelParams
+a = np.asarray(Image.open('bench/corpus/real/logo/vexel-logo-768.png').convert('RGBA'), np.uint8)
+vexel_rs.trace(a.tobytes(), a.shape[1], a.shape[0], VexelParams().model_dump())"
+```
+
 ## Conventions worth knowing
 
 - **Engines are synchronous.** Only `api/` touches asyncio/anyio.
