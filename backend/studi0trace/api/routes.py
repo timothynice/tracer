@@ -17,6 +17,7 @@ from studi0trace.api.schemas import (
     VectorizeResponse,
 )
 from studi0trace.engines import registry
+from studi0trace.engines.vexel.engine import backend as vexel_backend
 from studi0trace.engines.presets import Preset, all_presets
 from studi0trace.engines.base import Engine, EngineError, TraceInput
 from studi0trace.imaging.cache import UploadCache
@@ -37,7 +38,7 @@ def current_cache(request: Request) -> UploadCache:
 
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    return HealthResponse(version=__version__, engines=registry.ids())
+    return HealthResponse(version=__version__, engines=registry.ids(), vexel=vexel_backend())
 
 
 @router.get("/engines", response_model=list[EngineDescription])

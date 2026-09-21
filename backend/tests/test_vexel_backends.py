@@ -67,6 +67,26 @@ def test_asking_for_rust_without_the_extension_is_an_error(monkeypatch):
         backend()
 
 
+def test_the_app_refuses_to_start_on_the_fallback_when_rust_is_required(monkeypatch):
+    """The deployment sets VEXEL_BACKEND=rust. If the extension did not make it
+    into the image the container must fail to come up, not serve every trace ten
+    times slower while passing its health check."""
+    from studi0trace.main import create_app
+
+    monkeypatch.setattr(vexel, "_vexel_rs", None)
+    monkeypatch.setenv("VEXEL_BACKEND", "rust")
+    with pytest.raises(RuntimeError, match="not installed"):
+        create_app()
+
+
+def test_the_app_starts_on_the_fallback_when_rust_is_not_required(monkeypatch):
+    from studi0trace.main import create_app
+
+    monkeypatch.setattr(vexel, "_vexel_rs", None)
+    monkeypatch.delenv("VEXEL_BACKEND", raising=False)
+    assert create_app() is not None
+
+
 def test_both_backends_fit_the_same_primitive_to_a_disc():
     rgba = _disc()
     params = VexelParams()

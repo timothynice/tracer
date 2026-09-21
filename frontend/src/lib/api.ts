@@ -18,6 +18,9 @@ export interface Health {
   status: string;
   version: string;
   engines: string[];
+  /** Which Vexel implementation is serving: "rust" or "python". Optional so an
+   *  older backend still parses. */
+  vexel?: string;
 }
 
 export interface UiHints {

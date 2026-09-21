@@ -3,20 +3,14 @@
   "configurations": [
     {
       "name": "backend",
-      "runtimeExecutable": "backend/.venv/bin/python",
-      "runtimeArgs": ["-m", "uvicorn", "studi0trace.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", "8000", "--reload"],
+      "runtimeExecutable": "backend/.venv/bin/uvicorn",
+      "runtimeArgs": ["studi0trace.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"],
       "port": 8000
-    },
-    {
-      "name": "bench-reports",
-      "runtimeExecutable": "backend/.venv/bin/python",
-      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "backend/bench/reports"],
-      "port": 8765
     },
     {
       "name": "frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "frontend", "--", "--host", "localhost", "--port", "5173", "--strictPort"],
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "--port", "5173", "--strictPort"],
       "port": 5173
     }
   ]

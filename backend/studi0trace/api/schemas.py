@@ -48,3 +48,7 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str
     engines: list[str]
+    # Which Vexel implementation is serving: "rust" or "python". Both produce
+    # the same SVG, but the Python one is ten times slower, so a deployment
+    # that quietly fell back to it looks healthy and is not.
+    vexel: str

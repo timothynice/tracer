@@ -34,6 +34,12 @@ def test_health_lists_engines(client):
     assert {"potrace", "vtracer"} <= set(body["engines"])
 
 
+def test_health_names_the_vexel_backend(client):
+    """A deployment that fell back to the Python pipeline is ten times slower
+    and otherwise indistinguishable; /health is how that gets caught."""
+    assert client.get("/health").json()["vexel"] in {"rust", "python"}
+
+
 def test_engines_expose_schema_and_defaults(client):
     body = client.get("/engines").json()
     potrace = next(e for e in body if e["id"] == "potrace")

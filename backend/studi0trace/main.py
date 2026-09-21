@@ -14,6 +14,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from studi0trace import __version__
 from studi0trace.api.routes import router
 from studi0trace.engines import registry
+from studi0trace.engines.vexel.engine import backend as vexel_backend
 from studi0trace.imaging.cache import UploadCache
 from studi0trace.settings import Settings, get_settings
 
@@ -61,6 +62,12 @@ class ErrorBoundary:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     registry.load_builtin()
+
+    # Resolve the Vexel backend once, at startup. With VEXEL_BACKEND=rust set —
+    # which is what the deployment does — this raises if the extension did not
+    # make it into the image, so the container fails to come up instead of
+    # serving every trace ten times slower and looking healthy while it does.
+    log.info("vexel backend: %s", vexel_backend())
 
     app = FastAPI(title="Studi0Trace API", version=__version__)
     app.state.settings = settings
