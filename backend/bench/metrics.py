@@ -6,6 +6,7 @@ so transparent logos are judged on both shape and transparency.
 from __future__ import annotations
 
 import math
+import re
 
 import numpy as np
 from scipy import ndimage
@@ -15,7 +16,7 @@ from skimage.metrics import structural_similarity
 from skimage.morphology import dilation, disk
 
 from bench.config import DEFAULT_WEIGHTS, Weights
-from bench.raster import luminance, to_rgb_on_white
+from bench.raster import luminance, rasterize, to_rgb_on_white
 from studi0trace.imaging.svg import svg_stats
 
 
@@ -105,6 +106,45 @@ def composite(raw: dict, weights: Weights = DEFAULT_WEIGHTS) -> dict[str, float]
     return {"fidelity": fidelity, "smoothness": smoothness, "economy": economy, "score": score}
 
 
+_ELEMENT = re.compile(r"<(path|circle|ellipse|rect|polygon|polyline|line|g|image|use|text)\b[^>]*(?:/>|>.*?</\1>)", re.DOTALL)
+_BODY = re.compile(r"(<svg\b[^>]*>)(.*)(</svg>)", re.DOTALL)
+
+
+def seam_index(svg: str, width: int, height: int, scale: int = 4) -> float:
+    """Parts per million of the frame that no shape paints.
+
+    Every other metric here compares one flattened render against the source, and
+    a hairline where two shapes fail to meet averages away to almost nothing at
+    1x — a 49x worsening of it moves `score` by 0.007. It is nonetheless the most
+    obvious defect in the output: the backdrop showing through the artwork,
+    dark in a dark preview, white in an exported file.
+
+    So this measures it directly and structurally rather than by comparing
+    colours. Each painted element is rendered on its own at `scale`, and their
+    coverages are composited. Wherever the total stays below a half, the shapes
+    do not tile: neither of the two that share that edge covers it. Lower is
+    better and zero is correct; the outermost pixel is excluded, because a shape
+    is under no obligation to reach the edge of the canvas.
+    """
+    body = _BODY.search(svg)
+    if not body:
+        return 0.0
+    head, inner, tail = body.group(1), body.group(2), body.group(3)
+    defs = re.search(r"<defs\b.*?</defs>", inner, re.DOTALL)
+    prelude = defs.group(0) if defs else ""
+    elements = [m.group(0) for m in _ELEMENT.finditer(inner[len(prelude):] if inner.startswith(prelude) else inner.replace(prelude, "", 1))]
+    if len(elements) < 2:
+        return 0.0
+
+    covered = np.zeros((height * scale, width * scale), np.float32)
+    for element in elements:
+        rendered = rasterize(head + prelude + element + tail, width * scale, height * scale)
+        alpha = rendered[..., 3].astype(np.float32) / 255.0
+        covered += alpha * (1.0 - covered)  # source-over, as the renderer stacks them
+    inside = covered[1:-1, 1:-1]
+    return 1e6 * float((inside < 0.5).mean())
+
+
 def all_metrics(
     src_rgba: np.ndarray,
     out_rgba: np.ndarray,
@@ -126,6 +166,7 @@ def all_metrics(
         "alpha_mae": alpha_mae(src_rgba, out_rgba),
         "banding_index": banding,
         "smooth_fraction": smooth_fraction,
+        "seam_ppm": seam_index(svg, src_rgba.shape[1], src_rgba.shape[0]),
         **stats,
         "path_ratio": (stats["paths"] / truth_paths) if truth_paths else None,
         "elapsed_ms": elapsed_ms,

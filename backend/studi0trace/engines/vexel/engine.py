@@ -19,10 +19,11 @@ from skimage.segmentation import relabel_sequential
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
 from studi0trace.engines.vexel.boundary import contours, coverage_field, thin_coverage
-from studi0trace.engines.vexel.curves import CurveParams, fit_shape, shape_svg
+from studi0trace.engines.vexel.curves import CurveParams, PathShape, fit_shape, shape_svg
 from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import MergeParams, adjacency, merge_regions
-from studi0trace.engines.vexel.order import enclosure, paint_order, shape_mask
+from studi0trace.engines.vexel.order import enclosure, paint_order, shape_labels, shape_mask
+from studi0trace.engines.vexel import topology
 from studi0trace.engines.vexel.overlaps import decompose_overlaps
 from studi0trace.engines.vexel.shadows import ShadowPlan, detect_shadows, shadow_filter_svg
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels
@@ -170,6 +171,29 @@ def _group_thin(thin_labels: list[int], labels: np.ndarray, rgb: np.ndarray, alp
     for lab in thin_labels:
         groups.setdefault(find(lab), []).append(lab)
     return list(groups.values())
+
+
+def _ring_area(poly: np.ndarray) -> float:
+    if len(poly) < 3:
+        return 0.0
+    x, y = poly[:, 0], poly[:, 1]
+    return abs(0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+def _shape_from_rings(bnd, rings, member, params: CurveParams):
+    """A shape's geometry, assembled from the arcs its rings walk.
+
+    A whole-shape primitive is still tried, but only for a shape that is one
+    closed ring: a circle or a rectangle is a claim about the whole outline, and
+    a shape whose outline is stitched from arcs it shares with several
+    neighbours is not one. The arcs themselves are already fitted, so this
+    reuses them and nothing is described twice.
+    """
+    if len(rings) == 1 and params.shape_fitting:
+        primitive = fit_shape([bnd.polyline(rings[0])], params)
+        if not isinstance(primitive, PathShape):
+            return primitive
+    return PathShape(contours=[bnd.segments(r, member) for r in rings])
 
 
 def _is_invisible(fill) -> bool:
@@ -420,6 +444,14 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             out[sel] = fills[int(lab_u)].evaluate(qx[sel], qy[sel]) if int(lab_u) in fills else fill_at(q_lab, qx[sel], qy[sel])
         return out
 
+    # The boundary, once: every edge between two regions is placed sub-pixel and
+    # fitted a single time, so the two regions that share it are handed the same
+    # curve and cannot leave a hairline between them.
+    bnd = topology.build(
+        labels, prep.rgb, prep.alpha, fill_at, curve_params,
+        rank={lab: i for i, lab in enumerate(order)} if stacked else None,
+    )
+
     defs: list[str] = []
     elements: list[str] = []
     for i, lab in enumerate(order):
@@ -448,13 +480,12 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 defs.append(d)
             elements.append(shape_svg(shape, attrs + extra, p.path_precision))
             continue
-        mask = shape_mask(labels, lab, enc, stacked, invisible)
-        field = coverage_field(mask, lab, labels, prep.rgb, prep.alpha, fill_at)
-        polys = contours(field)
-        if not polys:
+        member = shape_labels(lab, enc, stacked, invisible)
+        rings = [r for r in bnd.rings(member) if r]
+        if not rings:
             continue
-        polys.sort(key=lambda c: -abs(0.5 * (np.dot(c[:, 0], np.roll(c[:, 1], -1)) - np.dot(c[:, 1], np.roll(c[:, 0], -1)))))
-        shape = fit_shape(polys, curve_params)
+        rings.sort(key=lambda r: -_ring_area(bnd.polyline(r)))
+        shape = _shape_from_rings(bnd, rings, member, curve_params)
         d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
         if d:
             defs.append(d)

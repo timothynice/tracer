@@ -20,7 +20,7 @@ from studi0trace.engines import registry
 from studi0trace.imaging.intake import load_upload
 
 NUMERIC_KEYS = (
-    "ssim", "delta_e_mean", "delta_e_p95", "edge_f1", "alpha_mae", "banding_index", "smooth_fraction",
+    "ssim", "delta_e_mean", "delta_e_p95", "edge_f1", "alpha_mae", "banding_index", "smooth_fraction", "seam_ppm",
     "paths", "nodes", "bytes", "gradients", "unique_fills", "path_ratio", "elapsed_ms",
     "fidelity", "smoothness", "economy", "score",
 )

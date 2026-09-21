@@ -21,6 +21,7 @@ pub mod refine;
 pub mod rescue;
 pub mod shadows;
 pub mod stats;
+pub mod topology;
 pub mod timing;
 pub mod strokes;
 pub mod weights;

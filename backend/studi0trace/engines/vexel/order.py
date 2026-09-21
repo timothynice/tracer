@@ -76,6 +76,22 @@ def paint_order(enc: Enclosure) -> list[int]:
     return out
 
 
+def shape_labels(label: int, enc: Enclosure, stacked: bool, invisible: set[int] | None = None) -> frozenset[int]:
+    """The labels this element paints over: its own, plus (when stacked) every
+    descendant painted on top of it. Invisible descendants — transparent holes —
+    are left out, or the hole would vanish under its parent."""
+    invisible = invisible or set()
+    out = {label}
+    if not stacked:
+        return frozenset(out)
+    stack = [c for c in enc.children.get(label, []) if c not in invisible]
+    while stack:
+        c = stack.pop()
+        out.add(c)
+        stack.extend(g for g in enc.children.get(c, []) if g not in invisible)
+    return frozenset(out)
+
+
 def shape_mask(labels: np.ndarray, label: int, enc: Enclosure, stacked: bool, invisible: set[int] | None = None) -> np.ndarray:
     """Pixels this element paints: its own, plus (when stacked) every descendant
     that will be painted on top. Invisible descendants — transparent holes — are

@@ -29,6 +29,14 @@ impl Segment {
         }
     }
 
+    pub fn set_start_pub(&mut self, v: P) {
+        self.set_start(v)
+    }
+
+    pub fn set_end_pub(&mut self, v: P) {
+        self.set_end(v)
+    }
+
     fn set_start(&mut self, v: P) {
         match self {
             Segment::Line { p0, .. } | Segment::Cubic { p0, .. } => *p0 = v,
@@ -40,6 +48,19 @@ impl Segment {
             Segment::Line { p1, .. } | Segment::Cubic { p1, .. } => *p1 = v,
         }
     }
+}
+
+/// The same curve walked the other way — what the region on the far side of a
+/// shared boundary needs, so that both describe one geometry.
+pub fn reverse_segments(segments: &[Segment]) -> Vec<Segment> {
+    segments
+        .iter()
+        .rev()
+        .map(|s| match s {
+            Segment::Line { p0, p1 } => Segment::Line { p0: *p1, p1: *p0 },
+            Segment::Cubic { p0, c1, c2, p1 } => Segment::Cubic { p0: *p1, c1: *c2, c2: *c1, p1: *p0 },
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -71,7 +92,7 @@ fn norm(a: P) -> f64 {
 }
 
 #[inline]
-fn normalize(v: P) -> P {
+pub fn normalize(v: P) -> P {
     let n = norm(v);
     if n > 1e-12 {
         [v[0] / n, v[1] / n]
@@ -729,7 +750,7 @@ pub fn snap_axis_lines(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment
 
 // --- corner sharpening -----------------------------------------------------
 
-fn line_through(points: &[P]) -> (P, P) {
+pub fn line_through(points: &[P]) -> (P, P) {
     let n = points.len();
     let cx = points.iter().map(|p| p[0]).sum::<f64>() / n as f64;
     let cy = points.iter().map(|p| p[1]).sum::<f64>() / n as f64;

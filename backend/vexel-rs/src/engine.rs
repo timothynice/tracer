@@ -4,10 +4,11 @@ use crate::boundary::{contours, coverage_field, polygon_area, thin_coverage};
 use crate::core::grid::{Grid, Image, Mask};
 use crate::core::labels::{self, LabelIndex, Labels};
 use crate::core::morphology::dilate_cross;
-use crate::curves::{fit_shape, shape_svg, CurveParams, P};
+use crate::curves::{fit_shape, shape_svg, CurveParams, Shape, P};
 use crate::fills::{fit_fill, Fill, FitParams};
 use crate::merge::{adjacency, merge_regions, MergeParams};
-use crate::order::{enclosure, paint_order, shape_mask, Enclosure};
+use crate::order::{enclosure, paint_order, shape_labels, shape_mask, Enclosure};
+use crate::topology::{self, Boundary};
 use crate::overlaps::decompose_overlaps;
 use crate::partition::{discontinuity, initial_labels};
 use crate::posterize::posterize_regions;
@@ -627,6 +628,28 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     svg
 }
 
+/// A shape's geometry, assembled from the arcs its rings walk.
+///
+/// A whole-shape primitive is still tried, but only for a shape that is one
+/// closed ring: a circle or a rectangle is a claim about the whole outline, and
+/// a shape whose outline is stitched from arcs it shares with several
+/// neighbours is not one. The arcs themselves are already fitted, so this reuses
+/// them and nothing is described twice.
+fn shape_from_rings(
+    bnd: &Boundary,
+    rings: &[Vec<(usize, bool)>],
+    member: &HashSet<i32>,
+    params: &CurveParams,
+) -> Shape {
+    if rings.len() == 1 && params.shape_fitting {
+        let primitive = fit_shape(&[bnd.polyline(&rings[0])], params);
+        if !matches!(primitive, Shape::Path { .. }) {
+            return primitive;
+        }
+    }
+    Shape::Path { contours: rings.iter().map(|r| bnd.segments(r, Some(member))).collect() }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit(
     l: &Labels,
@@ -670,6 +693,19 @@ fn emit(
             .collect()
     };
 
+    // The boundary, once: every edge between two regions is placed sub-pixel and
+    // fitted a single time, so the two regions that share it are handed the same
+    // curve and cannot leave a hairline between them.
+    let rank: HashMap<i32, usize> = order.iter().enumerate().map(|(i, lab)| (*lab, i)).collect();
+    let bnd = topology::build(
+        l,
+        &prep.rgb,
+        &prep.alpha,
+        &fill_at,
+        curve_params,
+        if stacked { Some(&rank) } else { None },
+    );
+
     let mut defs: Vec<String> = Vec::new();
     let mut elements: Vec<String> = Vec::new();
     for (i, lab) in order.iter().enumerate() {
@@ -688,23 +724,31 @@ fn emit(
             defs.push(shadow_filter_svg(shadow, &format!("s{}", i + 1), p.path_precision));
             extra = format!(" filter=\"url(#s{})\"", i + 1);
         }
-        let overridden = mask_override.contains_key(lab);
-        let mask = match mask_override.get(lab) {
-            Some(m) => m.clone(),
-            None => shape_mask(l, index, *lab, enc, stacked, invisible),
+        let shape = match mask_override.get(lab) {
+            // An overlap-decomposed shape has a footprint of its own, which is
+            // not a union of whole regions, so it is still traced on its own.
+            Some(mask) => {
+                let field = coverage_field(mask, *lab, l, &prep.rgb, &prep.alpha, &fill_at_visible);
+                let mut polys = contours(&field, 0.5);
+                if polys.is_empty() {
+                    continue;
+                }
+                polys.sort_by(|a, b| polygon_area(b).total_cmp(&polygon_area(a)));
+                fit_shape(&polys, curve_params)
+            }
+            None => {
+                let member = shape_labels(*lab, enc, stacked, invisible);
+                let mut rings = bnd.rings(&member);
+                rings.retain(|r| !r.is_empty());
+                if rings.is_empty() {
+                    continue;
+                }
+                rings.sort_by(|a, b| {
+                    polygon_area(&bnd.polyline(b)).total_cmp(&polygon_area(&bnd.polyline(a)))
+                });
+                shape_from_rings(&bnd, &rings, &member, curve_params)
+            }
         };
-        let field = if overridden {
-            coverage_field(&mask, *lab, l, &prep.rgb, &prep.alpha, &fill_at_visible)
-        } else {
-            coverage_field(&mask, *lab, l, &prep.rgb, &prep.alpha, &fill_at)
-        };
-        let mut polys = contours(&field, 0.5);
-        if polys.is_empty() {
-            continue;
-        }
-        polys.sort_by(|a, b| polygon_area(b).total_cmp(&polygon_area(a)));
-        let polys: Vec<Vec<P>> = polys;
-        let shape = fit_shape(&polys, curve_params);
         let (d, attrs) = fill.svg(&format!("g{}", i + 1), p.path_precision);
         if !d.is_empty() {
             defs.push(d);

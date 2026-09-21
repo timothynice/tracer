@@ -34,6 +34,18 @@ class Cubic:
 Segment = Line | Cubic
 
 
+def reverse_segments(segments: list[Segment]) -> list[Segment]:
+    """The same curve walked the other way — what the region on the far side of
+    a shared boundary needs, so that both describe one geometry."""
+    out: list[Segment] = []
+    for seg in reversed(segments):
+        if isinstance(seg, Line):
+            out.append(Line(seg.p1.copy(), seg.p0.copy()))
+        else:
+            out.append(Cubic(seg.p1.copy(), seg.c2.copy(), seg.c1.copy(), seg.p0.copy()))
+    return out
+
+
 @dataclass
 class Circle:
     cx: float

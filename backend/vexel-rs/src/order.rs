@@ -125,6 +125,29 @@ fn visit(enc: &Enclosure, i: i32, out: &mut Vec<i32>) {
     }
 }
 
+/// The labels this element paints over: its own, plus (when stacked) every
+/// descendant painted on top of it. Invisible descendants — transparent holes —
+/// are left out, or the hole would vanish under its parent.
+pub fn shape_labels(label: i32, enc: &Enclosure, stacked: bool, invisible: &HashSet<i32>) -> HashSet<i32> {
+    let mut out = HashSet::new();
+    out.insert(label);
+    if !stacked {
+        return out;
+    }
+    let mut stack: Vec<i32> = enc
+        .children
+        .get(&label)
+        .map(|v| v.iter().copied().filter(|c| !invisible.contains(c)).collect())
+        .unwrap_or_default();
+    while let Some(c) = stack.pop() {
+        out.insert(c);
+        if let Some(g) = enc.children.get(&c) {
+            stack.extend(g.iter().copied().filter(|x| !invisible.contains(x)));
+        }
+    }
+    out
+}
+
 /// Pixels this element paints: its own, plus (when stacked) every descendant
 /// that will be painted on top. Invisible descendants — transparent holes — are
 /// never covered, or the hole would disappear under the parent.
