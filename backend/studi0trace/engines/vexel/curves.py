@@ -399,6 +399,175 @@ def _reparametrize(points: np.ndarray, c: Cubic, u: np.ndarray) -> np.ndarray:
     return np.clip(u - step, 0.0, 1.0)
 
 
+SPLINE_MIN = 16
+SPLINE_SPANS = 24
+SPLINE_ROUNDS = 5
+SPLINE_CROWD = 0.2
+
+
+def _knot_vector(interior: list[float]) -> np.ndarray:
+    """Clamped cubic knot vector over [0, 1]."""
+    return np.concatenate([np.zeros(4), np.asarray(interior, dtype=float), np.ones(4)])
+
+
+def _bspline_basis(u: np.ndarray, knots: np.ndarray, n_ctrl: int) -> np.ndarray:
+    """Cox-de Boor, one row per sample and one column per control point."""
+    cur = np.zeros((len(u), len(knots) - 1))
+    for j in range(cur.shape[1]):
+        if knots[j + 1] > knots[j]:
+            cur[:, j] = (u >= knots[j]) & (u < knots[j + 1])
+    cur[u >= knots[-1] - 1e-12, int(np.max(np.nonzero(np.diff(knots) > 0)))] = 1.0
+    for degree in range(1, 4):
+        nxt = np.zeros((len(u), cur.shape[1] - 1))
+        for j in range(nxt.shape[1]):
+            lo = knots[j + degree] - knots[j]
+            hi = knots[j + degree + 1] - knots[j + 1]
+            if lo > 0:
+                nxt[:, j] += (u - knots[j]) / lo * cur[:, j]
+            if hi > 0:
+                nxt[:, j] += (knots[j + degree + 1] - u) / hi * cur[:, j + 1]
+        cur = nxt
+    return cur[:, :n_ctrl]
+
+
+def _solve(matrix: np.ndarray, rhs: np.ndarray) -> np.ndarray | None:
+    """Gauss-Jordan with partial pivoting, written the long way round so the Rust
+    side does the same arithmetic."""
+    n = len(rhs)
+    a = np.concatenate([matrix, rhs[:, None]], axis=1)
+    for col in range(n):
+        pivot = col + int(np.argmax(np.abs(a[col:, col])))
+        if abs(a[pivot, col]) < 1e-12:
+            return None
+        if pivot != col:
+            a[[col, pivot]] = a[[pivot, col]]
+        a[col] = a[col] / a[col, col]
+        for row in range(n):
+            if row != col and a[row, col] != 0.0:
+                a[row] = a[row] - a[row, col] * a[col]
+    return a[:, n]
+
+
+def _spline_controls(
+    points: np.ndarray, u: np.ndarray, knots: np.ndarray, n_ctrl: int, t1: np.ndarray, t2: np.ndarray
+) -> np.ndarray | None:
+    """Least-squares control points, with both ends and both end tangents pinned.
+
+    The first and last control points are the run's own ends; the second and the
+    second to last are free only along the pinned tangents, which is what keeps
+    the join to the neighbouring arc smooth. Everything between is free.
+    """
+    basis = _bspline_basis(u, knots, n_ctrl)
+    head, tail = points[0], points[-1]
+    free = n_ctrl - 4
+    design = np.zeros((2 * len(u), 2 + 2 * free))
+    design[0::2, 0], design[1::2, 0] = basis[:, 1] * t1[0], basis[:, 1] * t1[1]
+    design[0::2, 1] = basis[:, n_ctrl - 2] * t2[0]
+    design[1::2, 1] = basis[:, n_ctrl - 2] * t2[1]
+    for k in range(free):
+        design[0::2, 2 + 2 * k] = basis[:, 2 + k]
+        design[1::2, 3 + 2 * k] = basis[:, 2 + k]
+    fixed = (basis[:, 0:1] + basis[:, 1:2]) * head
+    fixed = fixed + (basis[:, n_ctrl - 2:n_ctrl - 1] + basis[:, n_ctrl - 1:n_ctrl]) * tail
+    want = np.empty(2 * len(u))
+    want[0::2], want[1::2] = (points - fixed)[:, 0], (points - fixed)[:, 1]
+    x = _solve(design.T @ design, design.T @ want)
+    if x is None or not np.all(np.isfinite(x)):
+        return None
+    ctrl = np.empty((n_ctrl, 2))
+    ctrl[0], ctrl[n_ctrl - 1] = head, tail
+    ctrl[1] = head + t1 * x[0]
+    ctrl[n_ctrl - 2] = tail + t2 * x[1]
+    for k in range(free):
+        ctrl[2 + k] = x[2 + 2 * k: 4 + 2 * k]
+    return ctrl
+
+
+def _insert_knot(ctrl: np.ndarray, knots: np.ndarray, at: float) -> tuple[np.ndarray, np.ndarray]:
+    """Boehm's knot insertion, once, leaving the curve exactly where it was."""
+    k = int(np.searchsorted(knots, at, side="right") - 1)
+    out = [ctrl[i] for i in range(k - 2)]
+    for i in range(k - 2, k + 1):
+        span = knots[i + 3] - knots[i]
+        w = 0.0 if span <= 0 else (at - knots[i]) / span
+        out.append((1 - w) * ctrl[i - 1] + w * ctrl[i])
+    out.extend(ctrl[i] for i in range(k, len(ctrl)))
+    return np.array(out), np.insert(knots, k + 1, at)
+
+
+def _spline_cubics(ctrl: np.ndarray, knots: np.ndarray) -> list[Cubic]:
+    """The spline's spans as Bezier segments: insert each interior knot until it
+    is threefold, and every four control points are then one cubic."""
+    for at in sorted({float(k) for k in knots[4:-4]}):
+        while int(np.sum(np.isclose(knots, at))) < 3:
+            ctrl, knots = _insert_knot(ctrl, knots, at)
+    spans = len(ctrl) // 3
+    return [Cubic(*(ctrl[3 * i + j].copy() for j in range(4))) for i in range(spans)]
+
+
+def _reparametrize_spline(points: np.ndarray, ctrl: np.ndarray, knots: np.ndarray, u: np.ndarray) -> np.ndarray:
+    step = 1e-4
+    up, um = np.clip(u + step, 0.0, 1.0), np.clip(u - step, 0.0, 1.0)
+    here = _bspline_basis(u, knots, len(ctrl)) @ ctrl
+    ahead = _bspline_basis(up, knots, len(ctrl)) @ ctrl
+    behind = _bspline_basis(um, knots, len(ctrl)) @ ctrl
+    q = here - points
+    d1 = (ahead - behind) / (up - um)[:, None]
+    d2 = (ahead - 2 * here + behind) / (step * step)
+    num = np.sum(q * d1, axis=1)
+    den = np.sum(d1 * d1, axis=1) + np.sum(q * d2, axis=1)
+    move = np.where(np.abs(den) > 1e-12, num / np.where(np.abs(den) > 1e-12, den, 1.0), 0.0)
+    return np.clip(u - move, 0.0, 1.0)
+
+
+def fit_c2(points: np.ndarray, t1: np.ndarray, t2: np.ndarray, tol: float) -> list[Cubic] | None:
+    """Fit a run as one clamped cubic B-spline, returned as its Bezier spans.
+
+    A chain built by splitting and recursing is only G1 where it joins: the two
+    halves are handed the same tangent direction, but nothing ties their
+    curvature, so the curve can bend one way and then abruptly the other at a
+    point that is not a corner. That is the hitch. A cubic B-spline is C2
+    everywhere by construction, so between one corner and the next it cannot
+    kink at all, however many spans it takes. Returns None where no spline
+    inside `tol` was found, and the split-and-recurse fit answers instead.
+    """
+    walk = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))])
+    u = walk / walk[-1] if walk[-1] > 0 else np.linspace(0.0, 1.0, len(points))
+    interior: list[float] = []
+    for _ in range(SPLINE_SPANS):
+        n_ctrl = len(interior) + 4
+        if len(points) < n_ctrl + 1:
+            return None
+        knots = _knot_vector(interior)
+        moved = u.copy()
+        worst = 0
+        for _ in range(SPLINE_ROUNDS):
+            ctrl = _spline_controls(points, moved, knots, n_ctrl, t1, t2)
+            if ctrl is None:
+                return None
+            off = np.linalg.norm(_bspline_basis(moved, knots, n_ctrl) @ ctrl - points, axis=1)
+            worst = int(np.argmax(off))
+            if float(off[worst]) < tol:
+                return _spline_cubics(ctrl, knots)
+            moved = _reparametrize_spline(points, ctrl, knots, moved)
+        # One more span, cut where the fit is furthest out - the same place the
+        # split-and-recurse fit would have cut, except that the spline stays one
+        # curve across it. Crowding a knot against its neighbour buys no freedom
+        # and makes the solve ill-conditioned, so a cut landing near one halves
+        # the span instead.
+        cut = float(np.clip(u[worst], 0.0, 1.0))
+        lo = max([0.0, *(k for k in interior if k < cut)])
+        hi = min([1.0, *(k for k in interior if k > cut)])
+        if hi - lo < 1e-6:
+            return None
+        if cut - lo < SPLINE_CROWD * (hi - lo) or hi - cut < SPLINE_CROWD * (hi - lo):
+            cut = 0.5 * (lo + hi)
+        if any(abs(cut - k) < 1e-9 for k in interior):
+            return None
+        interior = sorted([*interior, cut])
+    return None
+
+
 SPLIT_REACH = 2
 TANGENT_SCATTER = 0.10
 
@@ -451,6 +620,10 @@ def fit_cubics(points: np.ndarray, t1: np.ndarray, t2: np.ndarray, tol: float, d
     if len(points) == 2:
         d = np.linalg.norm(points[1] - points[0]) / 3.0
         return [Cubic(points[0].copy(), points[0] + t1 * d, points[1] + t2 * d, points[1].copy())]
+    if depth == 0 and len(points) >= SPLINE_MIN:
+        spline = fit_c2(points, t1, t2, tol)
+        if spline is not None:
+            return spline
     u = _chord_params(points)
     c = _generate_bezier(points, u, t1, t2)
     err, split = _max_error(points, c, u)

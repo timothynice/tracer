@@ -698,6 +698,311 @@ fn reparametrize(points: &[P], c: &(P, P, P, P), u: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+pub const SPLINE_MIN: usize = 16;
+pub const SPLINE_SPANS: usize = 24;
+pub const SPLINE_ROUNDS: usize = 5;
+pub const SPLINE_CROWD: f64 = 0.2;
+
+/// Clamped cubic knot vector over [0, 1].
+fn knot_vector(interior: &[f64]) -> Vec<f64> {
+    let mut kv = vec![0.0; 4];
+    kv.extend_from_slice(interior);
+    kv.extend_from_slice(&[1.0; 4]);
+    kv
+}
+
+/// Cox-de Boor, one row per sample and one column per control point.
+fn bspline_basis(u: &[f64], knots: &[f64], n_ctrl: usize) -> Vec<Vec<f64>> {
+    let m = u.len();
+    let mut cur = vec![vec![0.0f64; knots.len() - 1]; m];
+    for (i, &uu) in u.iter().enumerate() {
+        for j in 0..knots.len() - 1 {
+            if knots[j + 1] > knots[j] && uu >= knots[j] && uu < knots[j + 1] {
+                cur[i][j] = 1.0;
+            }
+        }
+    }
+    let last = (0..knots.len() - 1).rfind(|&j| knots[j + 1] > knots[j]).unwrap();
+    let end = knots[knots.len() - 1] - 1e-12;
+    for (i, &uu) in u.iter().enumerate() {
+        if uu >= end {
+            cur[i][last] = 1.0;
+        }
+    }
+    for degree in 1..4 {
+        let cols = cur[0].len() - 1;
+        let mut nxt = vec![vec![0.0f64; cols]; m];
+        for j in 0..cols {
+            let lo = knots[j + degree] - knots[j];
+            let hi = knots[j + degree + 1] - knots[j + 1];
+            for i in 0..m {
+                if lo > 0.0 {
+                    nxt[i][j] += (u[i] - knots[j]) / lo * cur[i][j];
+                }
+                if hi > 0.0 {
+                    nxt[i][j] += (knots[j + degree + 1] - u[i]) / hi * cur[i][j + 1];
+                }
+            }
+        }
+        cur = nxt;
+    }
+    for row in cur.iter_mut() {
+        row.truncate(n_ctrl);
+    }
+    cur
+}
+
+/// Gauss-Jordan with partial pivoting on the augmented matrix, written the long
+/// way round so this and the Python side do the same arithmetic.
+fn gauss_solve(mut a: Vec<Vec<f64>>) -> Option<Vec<f64>> {
+    let n = a.len();
+    for col in 0..n {
+        let mut pivot = col;
+        for row in col + 1..n {
+            if a[row][col].abs() > a[pivot][col].abs() {
+                pivot = row;
+            }
+        }
+        if a[pivot][col].abs() < 1e-12 {
+            return None;
+        }
+        a.swap(col, pivot);
+        let lead = a[col][col];
+        for v in a[col].iter_mut() {
+            *v /= lead;
+        }
+        for row in 0..n {
+            if row != col && a[row][col] != 0.0 {
+                let f = a[row][col];
+                for k in 0..=n {
+                    a[row][k] -= f * a[col][k];
+                }
+            }
+        }
+    }
+    Some((0..n).map(|i| a[i][n]).collect())
+}
+
+/// Least-squares control points, with both ends and both end tangents pinned.
+///
+/// The first and last control points are the run's own ends; the second and the
+/// second to last are free only along the pinned tangents, which is what keeps
+/// the join to the neighbouring arc smooth. Everything between is free.
+fn spline_controls(
+    points: &[P],
+    u: &[f64],
+    knots: &[f64],
+    n_ctrl: usize,
+    t1: P,
+    t2: P,
+) -> Option<Vec<P>> {
+    let basis = bspline_basis(u, knots, n_ctrl);
+    let head = points[0];
+    let tail = points[points.len() - 1];
+    let free = n_ctrl - 4;
+    let nx = 2 + 2 * free;
+    let m = u.len();
+    let mut design = vec![vec![0.0f64; nx]; 2 * m];
+    let mut want = vec![0.0f64; 2 * m];
+    for i in 0..m {
+        let b = &basis[i];
+        design[2 * i][0] = b[1] * t1[0];
+        design[2 * i + 1][0] = b[1] * t1[1];
+        design[2 * i][1] = b[n_ctrl - 2] * t2[0];
+        design[2 * i + 1][1] = b[n_ctrl - 2] * t2[1];
+        for k in 0..free {
+            design[2 * i][2 + 2 * k] = b[2 + k];
+            design[2 * i + 1][3 + 2 * k] = b[2 + k];
+        }
+        let at_head = b[0] + b[1];
+        let at_tail = b[n_ctrl - 2] + b[n_ctrl - 1];
+        want[2 * i] = points[i][0] - (at_head * head[0] + at_tail * tail[0]);
+        want[2 * i + 1] = points[i][1] - (at_head * head[1] + at_tail * tail[1]);
+    }
+    // The normal equations. Each row of the design matrix has at most a handful
+    // of non-zero columns - a cubic basis function covers four spans and no more
+    // - so only those pairs are accumulated. Skipping a zero term adds nothing
+    // and changes nothing; for a row of a hundred columns it is the difference
+    // between a second and no time at all.
+    let mut aug = vec![vec![0.0f64; nx + 1]; nx];
+    for (i, row) in design.iter().enumerate() {
+        let live: Vec<usize> = (0..nx).filter(|&c| row[c] != 0.0).collect();
+        for &r in live.iter() {
+            for &c in live.iter() {
+                aug[r][c] += row[r] * row[c];
+            }
+            aug[r][nx] += row[r] * want[i];
+        }
+    }
+    let x = gauss_solve(aug)?;
+    if x.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let mut ctrl = vec![[0.0f64; 2]; n_ctrl];
+    ctrl[0] = head;
+    ctrl[n_ctrl - 1] = tail;
+    ctrl[1] = [head[0] + t1[0] * x[0], head[1] + t1[1] * x[0]];
+    ctrl[n_ctrl - 2] = [tail[0] + t2[0] * x[1], tail[1] + t2[1] * x[1]];
+    for k in 0..free {
+        ctrl[2 + k] = [x[2 + 2 * k], x[3 + 2 * k]];
+    }
+    Some(ctrl)
+}
+
+/// Boehm's knot insertion, once, leaving the curve exactly where it was.
+fn insert_knot(ctrl: &[P], knots: &[f64], at: f64) -> (Vec<P>, Vec<f64>) {
+    let k = knots.partition_point(|&v| v <= at) - 1;
+    let mut out: Vec<P> = ctrl[..k - 2].to_vec();
+    for i in k - 2..=k {
+        let span = knots[i + 3] - knots[i];
+        let w = if span <= 0.0 { 0.0 } else { (at - knots[i]) / span };
+        out.push([
+            (1.0 - w) * ctrl[i - 1][0] + w * ctrl[i][0],
+            (1.0 - w) * ctrl[i - 1][1] + w * ctrl[i][1],
+        ]);
+    }
+    out.extend_from_slice(&ctrl[k..]);
+    let mut kv = knots.to_vec();
+    kv.insert(k + 1, at);
+    (out, kv)
+}
+
+/// The spline's spans as Bezier segments: insert each interior knot until it is
+/// threefold, and every four control points are then one cubic.
+fn spline_cubics(ctrl: &[P], knots: &[f64]) -> Vec<Segment> {
+    let mut ctrl = ctrl.to_vec();
+    let mut knots = knots.to_vec();
+    let mut interior: Vec<f64> = knots[4..knots.len() - 4].to_vec();
+    interior.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    interior.dedup();
+    for at in interior {
+        loop {
+            let seen = knots.iter().filter(|&&k| (k - at).abs() <= 1e-8 + 1e-5 * at.abs()).count();
+            if seen >= 3 {
+                break;
+            }
+            let (c, k) = insert_knot(&ctrl, &knots, at);
+            ctrl = c;
+            knots = k;
+        }
+    }
+    (0..ctrl.len() / 3)
+        .map(|i| Segment::Cubic {
+            p0: ctrl[3 * i],
+            c1: ctrl[3 * i + 1],
+            c2: ctrl[3 * i + 2],
+            p1: ctrl[3 * i + 3],
+        })
+        .collect()
+}
+
+fn spline_at(ctrl: &[P], knots: &[f64], u: &[f64]) -> Vec<P> {
+    let basis = bspline_basis(u, knots, ctrl.len());
+    basis
+        .iter()
+        .map(|b| {
+            let mut q = [0.0f64; 2];
+            for (j, c) in ctrl.iter().enumerate() {
+                q[0] += b[j] * c[0];
+                q[1] += b[j] * c[1];
+            }
+            q
+        })
+        .collect()
+}
+
+fn reparametrize_spline(points: &[P], ctrl: &[P], knots: &[f64], u: &[f64]) -> Vec<f64> {
+    let step = 1e-4;
+    let up: Vec<f64> = u.iter().map(|&v| (v + step).clamp(0.0, 1.0)).collect();
+    let um: Vec<f64> = u.iter().map(|&v| (v - step).clamp(0.0, 1.0)).collect();
+    let here = spline_at(ctrl, knots, u);
+    let ahead = spline_at(ctrl, knots, &up);
+    let behind = spline_at(ctrl, knots, &um);
+    (0..u.len())
+        .map(|i| {
+            let q = [here[i][0] - points[i][0], here[i][1] - points[i][1]];
+            let gap = up[i] - um[i];
+            let d1 = [(ahead[i][0] - behind[i][0]) / gap, (ahead[i][1] - behind[i][1]) / gap];
+            let d2 = [
+                (ahead[i][0] - 2.0 * here[i][0] + behind[i][0]) / (step * step),
+                (ahead[i][1] - 2.0 * here[i][1] + behind[i][1]) / (step * step),
+            ];
+            let num = q[0] * d1[0] + q[1] * d1[1];
+            let den = d1[0] * d1[0] + d1[1] * d1[1] + q[0] * d2[0] + q[1] * d2[1];
+            let move_by = if den.abs() > 1e-12 { num / den } else { 0.0 };
+            (u[i] - move_by).clamp(0.0, 1.0)
+        })
+        .collect()
+}
+
+/// Fit a run as one clamped cubic B-spline, returned as its Bezier spans.
+///
+/// A chain built by splitting and recursing is only G1 where it joins: the two
+/// halves are handed the same tangent direction, but nothing ties their
+/// curvature, so the curve can bend one way and then abruptly the other at a
+/// point that is not a corner. That is the hitch. A cubic B-spline is C2
+/// everywhere by construction, so between one corner and the next it cannot
+/// kink at all, however many spans it takes. Returns None where no spline
+/// inside `tol` was found, and the split-and-recurse fit answers instead.
+pub fn fit_c2(points: &[P], t1: P, t2: P, tol: f64) -> Option<Vec<Segment>> {
+    let mut walk = vec![0.0f64; points.len()];
+    for i in 1..points.len() {
+        walk[i] = walk[i - 1] + norm(sub(points[i], points[i - 1]));
+    }
+    let total = walk[points.len() - 1];
+    let u: Vec<f64> = if total > 0.0 {
+        walk.iter().map(|v| v / total).collect()
+    } else {
+        (0..points.len()).map(|i| i as f64 / (points.len() - 1) as f64).collect()
+    };
+    let mut interior: Vec<f64> = Vec::new();
+    for _ in 0..SPLINE_SPANS {
+        let n_ctrl = interior.len() + 4;
+        if points.len() < n_ctrl + 1 {
+            return None;
+        }
+        let knots = knot_vector(&interior);
+        let mut moved = u.clone();
+        let mut worst = 0usize;
+        for _ in 0..SPLINE_ROUNDS {
+            let ctrl = spline_controls(points, &moved, &knots, n_ctrl, t1, t2)?;
+            let drawn = spline_at(&ctrl, &knots, &moved);
+            let mut far = -1.0;
+            for i in 0..points.len() {
+                let d = norm(sub(drawn[i], points[i]));
+                if d > far {
+                    far = d;
+                    worst = i;
+                }
+            }
+            if far < tol {
+                return Some(spline_cubics(&ctrl, &knots));
+            }
+            moved = reparametrize_spline(points, &ctrl, &knots, &moved);
+        }
+        // One more span, cut where the fit is furthest out - the same place the
+        // split-and-recurse fit would have cut, except that the spline stays one
+        // curve across it. Crowding a knot against its neighbour buys no freedom
+        // and makes the solve ill-conditioned, so a cut landing near one halves
+        // the span instead.
+        let mut cut = u[worst].clamp(0.0, 1.0);
+        let lo = interior.iter().filter(|&&k| k < cut).fold(0.0f64, |a, &b| a.max(b));
+        let hi = interior.iter().filter(|&&k| k > cut).fold(1.0f64, |a, &b| a.min(b));
+        if hi - lo < 1e-6 {
+            return None;
+        }
+        if cut - lo < SPLINE_CROWD * (hi - lo) || hi - cut < SPLINE_CROWD * (hi - lo) {
+            cut = 0.5 * (lo + hi);
+        }
+        if interior.iter().any(|&k| (cut - k).abs() < 1e-9) {
+            return None;
+        }
+        interior.push(cut);
+        interior.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    }
+    None
+}
+
 pub const SPLIT_REACH: usize = 2;
 pub const TANGENT_SCATTER: f64 = 0.10;
 
@@ -794,6 +1099,11 @@ pub fn fit_cubics(points: &[P], t1: P, t2: P, tol: f64, depth: usize) -> Vec<Seg
             c2: [points[1][0] + t2[0] * d, points[1][1] + t2[1] * d],
             p1: points[1],
         }];
+    }
+    if depth == 0 && points.len() >= SPLINE_MIN {
+        if let Some(spline) = fit_c2(points, t1, t2, tol) {
+            return spline;
+        }
     }
     let mut u = chord_params(points);
     let mut c = generate_bezier(points, &u, t1, t2);

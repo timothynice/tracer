@@ -72,8 +72,10 @@ def test_smooth_curve_fits_within_tolerance_with_few_cubics():
     pts = _bezier(src, np.linspace(0, 1, 300))
     segs = fit_open(pts, tol=0.4)
     assert 1 <= len(segs) <= 3
-    # sample the fitted chain and check distance to the source samples
-    fitted = np.vstack([_bezier(s, np.linspace(0, 1, 100)) if isinstance(s, Cubic) else np.linspace(s.p0, s.p1, 100) for s in segs])
+    # Sample the fitted chain and check distance to the source samples. Sample
+    # it densely: with one span covering a hundred pixels, a hundred samples are
+    # a pixel apart and the measurement is mostly its own step size.
+    fitted = np.vstack([_bezier(s, np.linspace(0, 1, 800)) if isinstance(s, Cubic) else np.linspace(s.p0, s.p1, 800) for s in segs])
     d = np.min(np.linalg.norm(pts[:, None, :] - fitted[None, :, :], axis=2), axis=1)
     assert d.max() < 0.6
 
@@ -187,3 +189,40 @@ def test_split_tangent_declines_when_the_vertices_scatter():
 
     assert not np.allclose(fitted, chord)
     assert off_by(fitted) < off_by(chord)
+
+
+def _curvature(cubic: Cubic, at_end: bool) -> float:
+    p = np.array([cubic.p0, cubic.c1, cubic.c2, cubic.p1], dtype=float)
+    d1 = 3 * (p[3] - p[2]) if at_end else 3 * (p[1] - p[0])
+    d2 = 6 * (p[3] - 2 * p[2] + p[1]) if at_end else 6 * (p[2] - 2 * p[1] + p[0])
+    speed = float(np.linalg.norm(d1))
+    return 0.0 if speed < 1e-9 else abs(d1[0] * d2[1] - d1[1] * d2[0]) / speed**3
+
+
+def test_a_long_smooth_run_is_fitted_without_a_curvature_jump():
+    """Between corners the fit is one C2 spline, so consecutive cubics agree on
+    curvature as well as on direction. Splitting and recursing only ever agreed
+    on direction, and the jump in curvature is the hitch you see when you zoom
+    in on a curve that ought to be smooth."""
+    s = np.linspace(0.0, 1.0, 400)
+    poly = np.column_stack([220 * s, 60 * np.sin(3.1 * s) + 40 * s * s])
+    cubics = [seg for seg in fit_open(poly, 0.4) if isinstance(seg, Cubic)]
+    assert len(cubics) >= 3, "this run needs several spans, or the test proves nothing"
+    jumps = [abs(_curvature(a, True) - _curvature(b, False)) for a, b in zip(cubics, cubics[1:])]
+    assert max(jumps) < 1e-6
+
+    # ...and it is a fit, not just a smooth curve near the run. The fit measures
+    # itself at the parameters it settled on, so the true closest distance can
+    # come out a little over the tolerance it accepted at.
+    drawn = np.concatenate([_bezier(c, np.linspace(0.0, 1.0, 400)) for c in cubics])
+    apart = np.linalg.norm(poly[:, None, :] - drawn[None, :, :], axis=2).min(axis=1)
+    assert apart.max() < 0.45
+
+
+def test_the_spline_declines_rather_than_miss_the_tolerance():
+    """A run the spline cannot hold inside `tol` is handed back, and the
+    split-and-recurse fit answers instead - never a loose spline."""
+    rng = np.random.default_rng(3)
+    poly = np.column_stack([np.arange(120.0), rng.normal(0.0, 6.0, 120)])
+    assert curves.fit_c2(poly, np.array([1.0, 0.0]), np.array([-1.0, 0.0]), 0.05) is None
+    assert len(fit_open(poly, 0.05)) > 1
