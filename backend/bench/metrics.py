@@ -128,9 +128,14 @@ def seam_index(svg: str, src_rgba: np.ndarray, scale: int = 4, slack: float = 0.
     places nothing at all paints would miss that entirely, so what is counted is
     every pixel the output covers `slack` less than the source is covered there.
     Comparing against the source's own alpha rather than against one keeps
-    genuinely translucent artwork out of it. Lower is better, zero is correct.
-    The outermost pixel is left out, because a shape is under no obligation to
-    reach the edge of the canvas.
+    genuinely translucent artwork out of it. The comparison is made per source
+    pixel, with the `scale`x coverage averaged back over each one: an exact,
+    crisp outline through a pixel the source covers three quarters leaves that
+    pixel three quarters covered, which is right, whereas sub-pixel by sub-pixel
+    its outer quarter reads as a hole — and an outline bowed outward would have
+    scored better than the exact one. Lower is better, zero is correct. The
+    outermost pixel is left out, because a shape is under no obligation to reach
+    the edge of the canvas.
     """
     height, width = src_rgba.shape[:2]
     body = _BODY.search(svg)
@@ -143,9 +148,9 @@ def seam_index(svg: str, src_rgba: np.ndarray, scale: int = 4, slack: float = 0.
     if len(elements) < 2:
         return 0.0
 
-    want = np.repeat(np.repeat(src_rgba[..., 3].astype(np.float32) / 255.0, scale, axis=0), scale, axis=1)
-    want[:scale, :] = want[-scale:, :] = 0.0
-    want[:, :scale] = want[:, -scale:] = 0.0
+    want = src_rgba[..., 3].astype(np.float32) / 255.0
+    want[:1, :] = want[-1:, :] = 0.0
+    want[:, :1] = want[:, -1:] = 0.0
     if not (want > 0.5).any():
         return 0.0
 
@@ -154,8 +159,9 @@ def seam_index(svg: str, src_rgba: np.ndarray, scale: int = 4, slack: float = 0.
         rendered = rasterize(head + prelude + element + tail, width * scale, height * scale)
         alpha = rendered[..., 3].astype(np.float32) / 255.0
         covered += alpha * (1.0 - covered)  # source-over, as the renderer stacks them
+    per_pixel = covered.reshape(height, scale, width, scale).mean(axis=(1, 3))
     ink = want > 0.5
-    return 1e6 * float((ink & (want - covered > slack)).sum()) / float(ink.sum())
+    return 1e6 * float((ink & (want - per_pixel > slack)).sum()) / float(ink.sum())
 
 
 def all_metrics(
