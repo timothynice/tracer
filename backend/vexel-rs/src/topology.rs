@@ -391,6 +391,9 @@ fn place(
             } else {
                 vec![0.5; ch.edges.len()]
             };
+            let crowded: Vec<bool> = (0..ch.edges.len())
+                .map(|k| handed_back.contains(&p_in[k]) || handed_back.contains(&p_out[k]))
+                .collect();
             let mut pts: Vec<P> = Vec::with_capacity(ch.edges.len());
             let mut normal = Vec::with_capacity(ch.edges.len());
             for k in 0..ch.edges.len() {
@@ -400,14 +403,16 @@ fn place(
                 // pixel's, so this step points from one side of the arc to the
                 // other. It is one pixel long and axis aligned already.
                 let step = [c_out[0] - c_in[0], c_out[1] - c_in[1]];
-                pts.push([c_in[0] + t[k] * step[0], c_in[1] + t[k] * step[1]]);
+                // Where a sliver was rebuilt the two boundaries either side of
+                // it share a pixel, and reaching outside that pixel is a claim
+                // the other boundary has an equal call on. See the Python.
+                let tk = if crowded[k] { t[k].clamp(0.0, 1.0) } else { t[k] };
+                pts.push([c_in[0] + tk * step[0], c_in[1] + tk * step[1]]);
                 normal.push(step);
             }
+            pts = unfold(&pts);
             if !handed_back.is_empty() {
-                let along: Vec<bool> = (0..ch.edges.len())
-                    .map(|k| handed_back.contains(&p_in[k]) || handed_back.contains(&p_out[k]))
-                    .collect();
-                pts = settle(&pts, &along);
+                pts = settle(&pts, &crowded);
             }
             (pts, normal)
         })
@@ -423,6 +428,13 @@ pub const WEDGE_ANGLE: f64 = 75.0;
 pub const WEDGE_FLOOR: f64 = 0.35;
 pub const WEDGE_PATIENCE: usize = 2;
 pub const WEDGE_RUN: usize = 3;
+/// How far past a right angle a turn has to go before it is read as the outline
+/// doubling back rather than turning a corner: cos of the turn, so 0.5 is 120°.
+pub const FOLD: f64 = 0.5;
+/// Seen over this many pixels either side, a real corner still turns; a vertex
+/// that merely reached past its neighbour does not.
+pub const WIDE: f64 = 3.0;
+pub const CORNER_WIDE: f64 = 0.5;
 
 /// The region that ends at a node, and the arc that carries on past it.
 ///
@@ -757,6 +769,74 @@ fn bridged(
         }
     }
     result
+}
+
+/// Stop the placed outline doubling back on itself.
+///
+/// A vertex sits where coverage passes a half along the segment joining two
+/// pixel centres, and that crossing may reach a little outside those two pixels
+/// — which is what lets the outline sit where a hard corner really is. Where two
+/// boundaries run through the same pixel both reach, and they can reach past
+/// each other: consecutive vertices come out in the wrong order along the arc,
+/// and the fit reads that as a curve that turns back.
+///
+/// A corner is sharp at every scale; a vertex that reached past its neighbour is
+/// sharp only against them. See the Python.
+fn unfold(pts: &[P]) -> Vec<P> {
+    let n = pts.len();
+    if n < 5 {
+        return pts.to_vec();
+    }
+    let mut cum = vec![0.0f64; n];
+    for k in 1..n {
+        cum[k] = cum[k - 1]
+            + ((pts[k][0] - pts[k - 1][0]).powi(2) + (pts[k][1] - pts[k - 1][1]).powi(2)).sqrt();
+    }
+    let total = cum[n - 1];
+    let at = |s: f64| -> P {
+        let s = s.clamp(0.0, total);
+        let mut lo = 0usize;
+        let mut hi = n - 1;
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2;
+            if cum[mid] <= s {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let span = cum[hi] - cum[lo];
+        let f = if span <= 0.0 { 0.0 } else { (s - cum[lo]) / span };
+        [pts[lo][0] + f * (pts[hi][0] - pts[lo][0]), pts[lo][1] + f * (pts[hi][1] - pts[lo][1])]
+    };
+
+    let mut folds: Vec<usize> = Vec::new();
+    for k in 1..n - 1 {
+        let ahead = [pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]];
+        let behind = [pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]];
+        let scale = (ahead[0] * ahead[0] + ahead[1] * ahead[1]).sqrt()
+            * (behind[0] * behind[0] + behind[1] * behind[1]).sqrt();
+        if scale <= 1e-12 {
+            continue;
+        }
+        if (ahead[0] * behind[0] + ahead[1] * behind[1]) / scale >= -FOLD {
+            continue;
+        }
+        let back = at(cum[k] - WIDE);
+        let fwd = at(cum[k] + WIDE);
+        let u = [pts[k][0] - back[0], pts[k][1] - back[1]];
+        let v = [fwd[0] - pts[k][0], fwd[1] - pts[k][1]];
+        let span = (u[0] * u[0] + u[1] * u[1]).sqrt() * (v[0] * v[0] + v[1] * v[1]).sqrt();
+        let wide = if span <= 1e-12 { 0.0 } else { (u[0] * v[0] + u[1] * v[1]) / span };
+        if wide > CORNER_WIDE {
+            folds.push(k);
+        }
+    }
+    let mut out = pts.to_vec();
+    for k in folds {
+        out[k] = [(out[k - 1][0] + out[k + 1][0]) / 2.0, (out[k - 1][1] + out[k + 1][1]) / 2.0];
+    }
+    out
 }
 
 /// Average a vertex with its neighbours where the arc runs along a sliver that

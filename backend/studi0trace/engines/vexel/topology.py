@@ -88,6 +88,14 @@ WEDGE_ANGLE = 75.0
 WEDGE_FLOOR = 0.35
 WEDGE_PATIENCE = 2
 WEDGE_RUN = 3
+# How far past a right angle a turn has to go before it is read as the outline
+# doubling back rather than turning a corner: cos of the turn, so 0.5 is 120°.
+FOLD = 0.5
+# Seen over this many pixels either side, a real corner still turns; a vertex
+# that merely reached past its neighbour does not. Above this cosine the wider
+# view is straight enough to call it a fold and not a corner.
+WIDE = 3.0
+CORNER_WIDE = 0.5
 # How far past the two pixels either side of a label edge the half-coverage
 # search may reach, in pixels.
 REACH = 0.75
@@ -413,11 +421,60 @@ def _place(
         # the pixel labelled `b`, so this step is the direction from one side of
         # the arc to the other. It is one pixel long and axis aligned already.
         step = c_out - c_in
-        pts = c_in + t[:, None] * step
         if handed_back:
-            pts = _settle(pts, [tuple(q) in handed_back or tuple(r) in handed_back
-                                for q, r in zip(p_in, p_out)])
+            # Where a sliver was rebuilt the two boundaries either side of it
+            # share a pixel, and reaching outside that pixel is a claim about a
+            # neighbour that the other boundary has an equal claim on. Allowed,
+            # the two reach past each other and the vertices come out of order
+            # along the arc — which a fit reads as a curve that doubles back.
+            crowded = np.array([tuple(q) in handed_back or tuple(r) in handed_back
+                                for q, r in zip(p_in, p_out)], dtype=bool)
+            t = np.where(crowded, np.clip(t, 0.0, 1.0), t)
+        pts = _unfold(c_in + t[:, None] * step)
+        if handed_back:
+            pts = _settle(pts, crowded.tolist())
         out.append((pts, step))
+    return out
+
+
+def _unfold(pts: np.ndarray) -> np.ndarray:
+    """Stop the placed outline doubling back on itself.
+
+    A vertex sits where coverage passes a half along the segment joining two
+    pixel centres, and that crossing may reach a little outside those two pixels
+    — which is what lets the outline sit where a hard corner really is, rather
+    than on the chamfer the labels give it. Where two boundaries run through the
+    same pixel, though, both reach, and they can reach past each other:
+    consecutive vertices come out in the wrong order along the arc, and the fit
+    reads that as a curve that turns back and returns.
+
+    A corner is sharp at every scale. A vertex that has reached past its
+    neighbour is sharp only against them — look a few pixels either side and the
+    outline is going straight on. So a reversal is only undone where the wider
+    view says there is no corner here, which leaves the recovered corners alone.
+    """
+    n = len(pts)
+    if n < 5:
+        return pts
+    ahead = pts[2:] - pts[1:-1]
+    behind = pts[1:-1] - pts[:-2]
+    scale = np.linalg.norm(ahead, axis=1) * np.linalg.norm(behind, axis=1)
+    tight = np.divide(np.sum(ahead * behind, axis=1), np.maximum(scale, 1e-12))
+
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
+    back = np.column_stack([np.interp(cum - WIDE, cum, pts[:, 0]), np.interp(cum - WIDE, cum, pts[:, 1])])
+    fwd = np.column_stack([np.interp(cum + WIDE, cum, pts[:, 0]), np.interp(cum + WIDE, cum, pts[:, 1])])
+    u = pts - back
+    v = fwd - pts
+    span = np.linalg.norm(u, axis=1) * np.linalg.norm(v, axis=1)
+    wide = np.divide(np.sum(u * v, axis=1), np.maximum(span, 1e-12))[1:-1]
+
+    folds = np.nonzero((scale > 1e-12) & (tight < -FOLD) & (wide > CORNER_WIDE))[0] + 1
+    if not len(folds):
+        return pts
+    out = pts.copy()
+    for k in folds:
+        out[k] = (out[k - 1] + out[k + 1]) / 2.0
     return out
 
 

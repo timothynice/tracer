@@ -26,7 +26,7 @@ from studi0trace.engines.vexel.merge import MergeParams, merge_regions
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.weights import interior_weights
-from studi0trace.engines.vexel.topology import Arc, _extend_wedges, _mix_share, _runs
+from studi0trace.engines.vexel.topology import Arc, _extend_wedges, _mix_share, _runs, _unfold
 from studi0trace.imaging.intake import load_upload
 from tests.conftest import encode
 
@@ -236,3 +236,24 @@ def test_nothing_is_handed_back_where_no_region_was_cut_off():
                          lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
                          CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
     assert int((out != padded).sum()) == 0
+
+
+def test_a_placed_outline_may_not_double_back():
+    """Two boundaries sharing a pixel can each reach past the other, which puts
+    the vertices out of order along the arc — and a fit reads that as a curve
+    that turns back and returns, which is the hitch it looks like."""
+    straight = np.array([[0.0, float(y)] for y in range(8)])
+    folded = straight.copy()
+    folded[4] = [0.0, 2.6]  # reached back past its neighbour
+    fixed = _unfold(folded)
+    assert fixed[4][1] > fixed[3][1], "the vertex is still behind the one before it"
+    assert np.allclose(_unfold(straight), straight), "a straight run was disturbed"
+
+
+def test_a_corner_is_not_mistaken_for_a_fold():
+    """A corner is sharp at every scale; a vertex that reached past its
+    neighbour is sharp only against them. Recovering a hard corner pushes the
+    vertices beside it outwards, and that must survive."""
+    corner = np.array([[0.0, 4.0], [0.0, 3.0], [0.0, 2.0], [0.0, 1.0], [0.0, 0.0],
+                       [1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0]])
+    assert np.allclose(_unfold(corner), corner)
