@@ -35,25 +35,41 @@ def _edges(rgb: np.ndarray) -> np.ndarray:
     return dx | dy
 
 
-def _junction_mask(rgb: np.ndarray, edges: np.ndarray, scale: int) -> np.ndarray:
-    """Edge pixels whose one-source-pixel neighbourhood holds three or more flat colours.
+MAX_JUNCTION_COLOURS = 24
 
-    Colours are quantised to 32 levels so the anti-aliasing mixtures along an
-    edge collapse into their neighbours, and a colour has to fill at least four
-    pixels of the window to count as a region rather than a mixture.
+
+def _flat(code: np.ndarray) -> np.ndarray:
+    """Pixels whose 3x3 neighbourhood is one colour: region interior, never the
+    one-pixel anti-aliasing band along an edge."""
+    flat = np.ones(code.shape, bool)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy or dx:
+                flat &= np.roll(np.roll(code, dy, axis=0), dx, axis=1) == code
+    flat[0, :] = flat[-1, :] = False
+    flat[:, 0] = flat[:, -1] = False
+    return flat
+
+
+def _junction_mask(rgb: np.ndarray, edges: np.ndarray, scale: int) -> np.ndarray | None:
+    """Edge pixels within one source pixel of three or more flat regions.
+
+    Only interior pixels vote, so the mixtures along an anti-aliased edge cannot
+    pass for a third region. Colours are quantised to 32 levels. A truth with
+    more than MAX_JUNCTION_COLOURS flat colours (a gradient) has no junctions
+    worth the name and returns None.
     """
     q = rgb.astype(np.int32) >> 3
     code = (q[..., 0] << 10) | (q[..., 1] << 5) | q[..., 2]
-    r = scale
-    out = np.zeros(edges.shape, bool)
-    ys, xs = np.nonzero(edges)
-    stride = max(1, len(ys) // 20000)
-    for y, x in zip(ys[::stride], xs[::stride]):
-        win = code[max(0, y - r): y + r + 1, max(0, x - r): x + r + 1].ravel()
-        _vals, counts = np.unique(win, return_counts=True)
-        if int((counts >= 4).sum()) >= 3:
-            out[y, x] = True
-    return out
+    flat = _flat(code)
+    colours = np.unique(code[flat])
+    if len(colours) < 3 or len(colours) > MAX_JUNCTION_COLOURS:
+        return None
+    size = 2 * scale + 1
+    count = np.zeros(code.shape, np.int8)
+    for c in colours:
+        count += ndimage.maximum_filter(flat & (code == c), size=size).astype(np.int8)
+    return edges & (count >= 3)
 
 
 def outline_error(truth_svg: str, out_svg: str, width: int, height: int, scale: int = 8) -> dict:
@@ -78,7 +94,7 @@ def outline_error(truth_svg: str, out_svg: str, width: int, height: int, scale: 
     both = np.concatenate([forward, backward])
     junction = _junction_mask(t, te, scale)
     junction_px = None
-    if junction.any():
+    if junction is not None and junction.any():
         near = ndimage.distance_transform_edt(~junction) <= JUNCTION_REACH * scale
         sel = np.concatenate([near[te], near[oe]])
         if sel.any():

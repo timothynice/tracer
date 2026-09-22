@@ -53,3 +53,8 @@ def test_line_debt_counts_cubics_that_should_have_been_lines():
 
 def test_line_debt_is_none_for_relative_commands():
     assert line_debt(svg('<path d="m10 10c30 0 60 0 90 0z" fill="#36c"/>'))["line_debt_px"] is None
+
+
+def test_two_colours_have_no_junctions_even_along_anti_aliased_edges():
+    truth = svg('<polygon points="20,20 100,30 90,110 30,100" fill="#36c"/>')
+    assert outline_error(truth, truth, 128, 128)["junction_px"] is None

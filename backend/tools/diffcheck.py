@@ -267,14 +267,27 @@ def arcs(path):
                          lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
                          CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True),
                          extend=False)
+    def key(row):
+        # Two arcs with the same pair and vertex count sort by their coordinates,
+        # and a coordinate that differs in the last bit between the two
+        # implementations (75.99999999999999 against 76.00000000000001) would
+        # swap them and compare one arc against another.
+        return tuple(round(v, 6) for v in row)
+
     rows = sorted(
-        [float(arc.pair[0]), float(arc.pair[1]), float(len(arc.pts)), *arc.pts.ravel().tolist()]
-        for arc in bnd.arcs
+        ([float(arc.pair[0]), float(arc.pair[1]), float(len(arc.pts)), *arc.pts.ravel().tolist()] for arc in bnd.arcs),
+        key=key,
     )
     py = np.array([v for row in rows for v in row], dtype=np.float64)
-    rs = np.asarray(vexel_rs._stage_arcs(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), True, False), dtype=np.float64)
+    flat = np.asarray(vexel_rs._stage_arcs(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), True, False), dtype=np.float64)
+    rs_rows, i = [], 0
+    while i + 2 < len(flat):
+        n = int(flat[i + 2])
+        rs_rows.append(flat[i:i + 3 + 2 * n].tolist())
+        i += 3 + 2 * n
+    rs = np.array([v for row in sorted(rs_rows, key=key) for v in row], dtype=np.float64)
     if py.shape != rs.shape:
-        print(f"  FAIL arcs      {path.name}: {len(rows)} arcs / {py.size} values in Python, {rs.size} in Rust")
+        print(f"  FAIL arcs      {path.name}: {len(rows)} arcs / {py.size} values in Python, {len(rs_rows)} arcs / {rs.size} in Rust")
         return np.zeros(1), np.full(1, 1e9)
     return py, rs
 
