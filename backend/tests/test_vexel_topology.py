@@ -86,7 +86,9 @@ def test_a_shared_edge_is_described_once():
     assert len(ds) >= 2
     numbers = [set(re.findall(r"-?\d+\.?\d*", d)) for d in ds]
     pairs = [len(a & b) for i, a in enumerate(numbers) for b in numbers[i + 1 :]]
-    assert max(pairs) >= 6, f"no two shapes share any geometry: {ds}"
+    # The side painted earlier draws the copy bled under its neighbour, so what
+    # the two literally share are the nodes at the ends of their common arc.
+    assert max(pairs) >= 4, f"no two shapes share any geometry: {ds}"
 
 
 def test_the_seam_metric_sees_a_shape_pulled_away_from_its_neighbour():
@@ -257,3 +259,262 @@ def test_a_corner_is_not_mistaken_for_a_fold():
     corner = np.array([[0.0, 4.0], [0.0, 3.0], [0.0, 2.0], [0.0, 1.0], [0.0, 0.0],
                        [1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0]])
     assert np.allclose(_unfold(corner), corner)
+
+
+# --- junctions placed from their arcs ----------------------------------------------
+
+
+def synthetic_wedge(size: int = 256, tip: tuple[float, float] = (75.0, 181.0), opening: float = 15.0):
+    """Blue below x + y = size, a pale wedge with its tip on that edge, rendered by
+    resvg. The shape in the 750 % screenshot: two straight sides closing at a
+    shallow angle onto a boundary that carries on. Returns (png, tip, opening)."""
+    import math
+
+    top = tip[1] / math.tan(math.radians(45 + opening))
+    # The pale shape is painted first and reaches under the blue, so no two
+    # shapes share an edge: a shared edge is anti-aliased twice by the renderer
+    # and its pixels become a three-colour mix that pulls the placed edge over.
+    steep = (math.cos(math.radians(-(45 + opening))), math.sin(math.radians(-(45 + opening))))
+    under = (tip[0] - 6.0 * steep[0], tip[1] - 6.0 * steep[1])
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">'
+           f'<rect width="{size}" height="{size}" fill="#fff"/>'
+           f'<polygon points="{under[0]:.3f},{under[1]:.3f} {tip[0] + top:.3f},0 {size},0 {size},8" fill="#bfe0ff"/>'
+           f'<polygon points="0,{size} {size},0 {size},{size}" fill="#3b8ee8"/></svg>')
+    return bytes(resvg_py.svg_to_bytes(svg_string=svg, width=size, height=size)), np.array(tip), opening
+
+
+def path_points(svg: str, fill: str) -> np.ndarray:
+    """Every coordinate pair written in the path with this fill: anchors and controls."""
+    for attrs in re.findall(r"<path ([^>]*)/>", svg):
+        if re.search(r'fill="%s"' % fill, attrs):
+            d = re.search(r'\bd="([^"]*)"', attrs).group(1)
+            break
+    else:
+        raise AssertionError(f"no path with fill {fill}")
+    return np.array([[float(a), float(b)] for a, b in re.findall(r"(-?\d+\.?\d*) (-?\d+\.?\d*)", d)])
+
+
+def sample_path(svg: str, fill: str, per_segment: int = 60) -> np.ndarray:
+    """Points along the curve of the path with this fill (absolute M/L/C/Z)."""
+    for attrs in re.findall(r"<path ([^>]*)/>", svg):
+        if re.search(r'fill="%s"' % fill, attrs):
+            d = re.search(r'\bd="([^"]*)"', attrs).group(1)
+            break
+    else:
+        raise AssertionError(f"no path with fill {fill}")
+    t = np.linspace(0.0, 1.0, per_segment)[:, None]
+    out, cur, start = [], None, None
+    for cmd, body in re.findall(r"([MLCZ])([^MLCZ]*)", d):
+        v = [float(x) for x in re.findall(r"-?\d*\.?\d+", body)]
+        if cmd == "M":
+            cur = start = np.array(v[:2])
+        elif cmd == "L":
+            p = np.array(v[:2]); out.append(cur * (1 - t) + p * t); cur = p
+        elif cmd == "C":
+            c1, c2, p = np.array(v[0:2]), np.array(v[2:4]), np.array(v[4:6])
+            out.append((1 - t) ** 3 * cur + 3 * (1 - t) ** 2 * t * c1 + 3 * (1 - t) * t ** 2 * c2 + t ** 3 * p); cur = p
+        elif cmd == "Z" and cur is not None and start is not None:
+            out.append(cur * (1 - t) + start * t); cur = start
+    return np.vstack(out)
+
+
+def path_anchors(svg: str, fill: str) -> np.ndarray:
+    """Segment end points only (no control points) of the path with this fill."""
+    for attrs in re.findall(r"<path ([^>]*)/>", svg):
+        if re.search(r'fill="%s"' % fill, attrs):
+            d = re.search(r'\bd="([^"]*)"', attrs).group(1)
+            break
+    else:
+        raise AssertionError(f"no path with fill {fill}")
+    out = []
+    for cmd, body in re.findall(r"([MLCZ])([^MLCZ]*)", d):
+        v = [float(x) for x in re.findall(r"-?\d*\.?\d+", body)]
+        if cmd in "ML":
+            out.append(v[:2])
+        elif cmd == "C":
+            out.append(v[4:6])
+    return np.array(out)
+
+
+def test_a_shallow_wedge_tip_is_placed_where_its_two_sides_cross():
+    """Two lines meeting at 15 degrees pin their crossing to a fraction of a
+    pixel along the bisector. The node used to stay on the raster chamfer
+    whenever the incident lines were within ~32 degrees of parallel, which is
+    exactly the shallow tip a designer zooms in on; it landed 1.4 px short."""
+    png, tip, _ = synthetic_wedge()
+    nearest = np.linalg.norm(path_anchors(trace(png), "#bfe0ff") - tip, axis=1).min()
+    # Two lines at 15 degrees: a tenth of a degree of lean in either is a
+    # quarter pixel of tip. This is the placement noise talking.
+    assert nearest < 0.4, f"tip landed {nearest:.2f} px from the true tip"
+
+
+def test_a_shape_cut_by_the_canvas_edge_is_not_a_wedge_tip():
+    """The wedge's upper corner sits on the canvas top. Two of its arcs meet
+    there at 60 degrees, which read as a region closing to a point, and the
+    steep side was then pinned to the border's tangent and flared a pixel."""
+    import math
+
+    png, tip, opening = synthetic_wedge()
+    pts = sample_path(trace(png), "#bfe0ff")
+    ang = math.radians(-(45 + opening))                 # the steep side, tip -> canvas top
+    u = np.array([math.cos(ang), math.sin(ang)])
+    rel = pts - tip
+    along, off = rel @ u, rel @ np.array([-u[1], u[0]])
+    top = tip[1] / math.sin(-ang)                       # arc length from the tip to the canvas top
+    near_border = (along > top - 8.0) & (along <= top + 0.5) & (np.abs(off) < 3.0)
+    assert near_border.any()
+    assert np.abs(off[near_border]).max() < 0.15, f"steep side leaves its line by {np.abs(off[near_border]).max():.2f} px at the border"
+
+
+def test_node_estimate_recovers_a_shallow_crossing_and_declines_a_parallel_one():
+    import math
+
+    from studi0trace.engines.vexel.topology import _node_estimate
+
+    d1 = np.array([1.0, 0.0])
+    a = math.radians(15.0)
+    d2 = np.array([math.cos(a), math.sin(a)])
+    lines = [(np.array([0.0, 20.0]), d1, 0.0), (np.array([10.0, 20.0]) - 5.0 * d2, d2, 0.0)]
+    assert np.allclose(_node_estimate(lines, np.array([9.0, 20.5]), 4.0), [10.0, 20.0], atol=1e-9)
+    a5 = math.radians(5.0)
+    d3 = np.array([math.cos(a5), math.sin(a5)])
+    lines5 = [(np.array([0.0, 20.0]), d1, 0.0), (np.array([10.0, 20.0]) - 5.0 * d3, d3, 0.0)]
+    assert np.array_equal(_node_estimate(lines5, np.array([9.0, 20.5]), 4.0), [9.0, 20.5])
+
+
+# --- the approach window at a node ---------------------------------------------------
+
+
+def tilted_square_png(angle: float, size: int = 256, side: float = 120.0, fill: str = "#1b9c9c") -> bytes:
+    import math
+
+    r = math.radians(angle)
+    h = side / 2.0
+    pts = [(size / 2 + x * math.cos(r) - y * math.sin(r), size / 2 + x * math.sin(r) + y * math.cos(r))
+           for x, y in ((-h, -h), (h, -h), (h, h), (-h, h))]
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}"><rect width="{size}" height="{size}" fill="#fff"/>'
+           f'<polygon points="{" ".join(f"{x:.4f},{y:.4f}" for x, y in pts)}" fill="{fill}"/></svg>')
+    return bytes(resvg_py.svg_to_bytes(svg_string=svg, width=size, height=size))
+
+
+def own_line_flare(pts: np.ndarray, node: np.ndarray, u: np.ndarray, other: np.ndarray,
+                   near: float = 6.0, far: float = 30.0) -> float:
+    """How far the curve within `near` px of `node` leaves the straight line
+    through its own run `near`..`far` px out along direction `u` — the black
+    line a designer draws to say where the edge should have gone. Samples are
+    assigned to this side when they lie closer in angle to `u` than to `other`,
+    the wedge's other side, so a 15 degree opening does not mix the two."""
+    rel = pts - node
+    r = np.linalg.norm(rel, axis=1)
+    ok = r > 0.3
+    cos_u = (rel @ u) / np.maximum(r, 1e-9)
+    cos_o = (rel @ other) / np.maximum(r, 1e-9)
+    mine = ok & (cos_u > cos_o) & (cos_u > 0.9)
+    s, off = rel @ u, rel @ np.array([-u[1], u[0]])
+    clean = pts[mine & (s > near) & (s < far)]
+    c = clean.mean(axis=0)
+    _, _, vt = np.linalg.svd(clean - c)
+    n = np.array([-vt[0][1], vt[0][0]])
+    close = pts[mine & (s <= near)]
+    assert len(close) and len(clean) >= 8
+    return float(np.abs((close - c) @ n).max())
+
+
+def test_a_wedge_side_runs_straight_into_its_tip():
+    """The bulge in the 750 % screenshot. The vertices next to a node are placed
+    from pixels that mix three fills, and the fit followed them faithfully."""
+    import math
+
+    png, tip, opening = synthetic_wedge()
+    svg = trace(png)
+    pts = sample_path(svg, "#bfe0ff", per_segment=200)
+    anchors = path_anchors(svg, "#bfe0ff")
+    node = anchors[np.argmin(np.linalg.norm(anchors - tip, axis=1))]
+    sides = {ang: np.array([math.cos(math.radians(ang)), math.sin(math.radians(ang))]) for ang in (-(45 + opening), -45)}
+    for ang, u in sides.items():
+        other = [v for a, v in sides.items() if a != ang][0]
+        flare = own_line_flare(pts, node, u, other)
+        assert flare < 0.15, f"side at {ang} deg flares {flare:.2f} px into the tip"
+
+
+def test_a_tilted_square_stays_four_lines():
+    for ang in (38,):  # 25, 45 and 50 wait for the line-first fit (Task 6): the closed-contour path still cuts and bows them
+        svg = trace(tilted_square_png(ang))
+        d = re.search(r'\bd="([^"]*)"', re.search(r'<path ([^>]*fill="#1b9c9c"[^>]*)/>', svg).group(1)).group(1)
+        assert d.count("C") == 0 and d.count("L") == 4, f"{ang} deg: {d[:90]}"
+
+
+# --- smooth continuation is a fit, not an angle ----------------------------------------
+
+
+def pie_png(size: int = 256, angles: tuple[float, float, float] = (0.0, 100.0, 220.0)) -> tuple[bytes, np.ndarray, tuple]:
+    """Three sectors meeting at the centre with straight radial edges at these
+    angles. The turns between neighbouring edges are 80, 60 and 40 degrees, so
+    no pair continues smoothly — yet the 40 degree pair used to be pinned to one
+    tangent because 40 <= corner_threshold, and both edges hooked at the centre."""
+    import math
+
+    c = size / 2.0
+    fills = ("#e24b4b", "#2f8f4e", "#3f6bd6")
+    body = ""
+    for k in range(3):
+        a0, a1 = math.radians(angles[k]), math.radians(angles[(k + 1) % 3] + (360.0 if k == 2 else 0.0))
+        steps = [a0 + (a1 - a0) * t for t in np.linspace(0.0, 1.0, 40)]
+        pts = [(c, c)] + [(c + 400 * math.cos(a), c + 400 * math.sin(a)) for a in steps]
+        body += f'<polygon points="{" ".join(f"{x:.3f},{y:.3f}" for x, y in pts)}" fill="{fills[k]}"/>'
+    svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">{body}</svg>'
+    return bytes(resvg_py.svg_to_bytes(svg_string=svg, width=size, height=size)), np.array([c, c]), fills
+
+
+def test_radial_edges_meeting_at_forty_degrees_are_a_corner_not_a_curve():
+    import math
+
+    png, centre, fills = pie_png()
+    svg = trace(png)
+    # The pair that turns 40 degrees is the 220 and 0 degree edges; those are
+    # the ones that were pinned. (The 100 degree edges wait for the line-first
+    # fit: their placement wobbles a fifth of a pixel and the chord test bows them.)
+    for ang, fill in ((220.0, fills[1]), (220.0, fills[2]), (0.0, fills[0]), (0.0, fills[2])):
+        u = np.array([math.cos(math.radians(ang)), math.sin(math.radians(ang))])
+        pts = sample_path(svg, fill, per_segment=200)
+        anchors = path_anchors(svg, fill)
+        node = anchors[np.argmin(np.linalg.norm(anchors - centre, axis=1))]
+        assert np.linalg.norm(node - centre) < 0.5, f"centre node landed {np.linalg.norm(node - centre):.2f} px off"
+        # the other radial edge of this sector, to keep its samples out
+        others = [a for a in (0.0, 100.0, 220.0) if a != ang]
+        other = min(others, key=lambda a: abs(((a - ang) + 180) % 360 - 180))
+        v = np.array([math.cos(math.radians(other)), math.sin(math.radians(other))])
+        flare = own_line_flare(pts, node, u, v)
+        assert flare < 0.15, f"edge at {ang} deg of {fill} hooks {flare:.2f} px at the centre"
+
+
+def circle_on_split_png(size: int = 128, r: float = 15.0) -> tuple[bytes, np.ndarray, float]:
+    """A small disc over a two-colour background: its outline is one smooth
+    circle although the boundary graph cuts it at two nodes."""
+    c = size / 2.0
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">'
+           f'<rect width="{size}" height="{size}" fill="#fff"/><rect width="{c}" height="{size}" fill="#3b8ee8"/>'
+           f'<circle cx="{c + 3}" cy="{c}" r="{r}" fill="#1f2a44"/></svg>')
+    return bytes(resvg_py.svg_to_bytes(svg_string=svg, width=size, height=size)), np.array([c + 3, c]), r
+
+
+def test_a_small_circle_crossed_by_a_boundary_stays_smooth():
+    png, centre, r = circle_on_split_png()
+    svg = trace(png)
+    prim = re.search(r'<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"[^>]*fill="#1f2a44"', svg)
+    if prim:  # whole-shape fitting found the circle: as smooth as it gets
+        assert abs(float(prim.group(3)) - r) < 0.35
+        return
+    pts = sample_path(svg, "#1f2a44", per_segment=100)
+    radial = np.abs(np.linalg.norm(pts - centre, axis=1) - r)
+    assert radial.max() < 0.35, f"the disc's outline leaves its circle by {radial.max():.2f} px"
+
+
+def test_a_node_on_the_canvas_edge_stays_on_the_edge():
+    """The wedge's upper corner is on the canvas top: its node must have y == 0
+    exactly, or the shape stops short of the frame and leaves a hairline."""
+    png, tip, opening = synthetic_wedge()
+    anchors = path_anchors(trace(png), "#bfe0ff")
+    top = anchors[anchors[:, 1] < 0.5]
+    assert len(top) >= 2 and np.all(top[:, 1] == 0.0), top
+    assert anchors[:, 1].min() == 0.0 and anchors[:, 0].max() == 256.0, "the shape must reach the frame exactly"
