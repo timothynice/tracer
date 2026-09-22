@@ -368,6 +368,7 @@ fn place(
     rgb: &Image,
     alpha: &Grid<f64>,
     fill_at: FillAt,
+    handed_back: &std::collections::HashSet<(usize, usize)>,
 ) -> Vec<(Vec<P>, Vec<P>)> {
     chains
         .iter()
@@ -390,7 +391,7 @@ fn place(
             } else {
                 vec![0.5; ch.edges.len()]
             };
-            let mut pts = Vec::with_capacity(ch.edges.len());
+            let mut pts: Vec<P> = Vec::with_capacity(ch.edges.len());
             let mut normal = Vec::with_capacity(ch.edges.len());
             for k in 0..ch.edges.len() {
                 let c_in = [p_in[k].1 as f64 - 0.5, p_in[k].0 as f64 - 0.5];
@@ -401,6 +402,12 @@ fn place(
                 let step = [c_out[0] - c_in[0], c_out[1] - c_in[1]];
                 pts.push([c_in[0] + t[k] * step[0], c_in[1] + t[k] * step[1]]);
                 normal.push(step);
+            }
+            if !handed_back.is_empty() {
+                let along: Vec<bool> = (0..ch.edges.len())
+                    .map(|k| handed_back.contains(&p_in[k]) || handed_back.contains(&p_out[k]))
+                    .collect();
+                pts = settle(&pts, &along);
             }
             (pts, normal)
         })
@@ -515,10 +522,15 @@ fn mix_share(colour: &[[f64; 4]], f_c: &[[f64; 4]], f_a: &[[f64; 4]], f_b: &[[f6
 /// is still there — along the stretch where the two neighbours now meet directly
 /// the pixels are a mixture of three fills, and the third share says how much of
 /// each is still the region that was cut off. See the Python.
-pub fn extend_wedges(padded: &Labels, rgb: &Image, alpha: &Grid<f64>, fill_at: FillAt) -> Labels {
+pub fn extend_wedges(
+    padded: &Labels,
+    rgb: &Image,
+    alpha: &Grid<f64>,
+    fill_at: FillAt,
+) -> (Labels, std::collections::HashSet<(usize, usize)>) {
     let chain_list = chains(padded, &boundary_edges(padded));
     if chain_list.is_empty() {
-        return padded.clone();
+        return (padded.clone(), std::collections::HashSet::new());
     }
     let edges = boundary_edges(padded);
     // A provisional graph, placed at the lattice edges' midpoints: enough to say
@@ -676,7 +688,7 @@ pub fn extend_wedges(padded: &Labels, rgb: &Image, alpha: &Grid<f64>, fill_at: F
             }
         }
     }
-    out
+    (out, taken)
 }
 
 /// The run, with a pixel put in wherever it steps diagonally.
@@ -745,6 +757,28 @@ fn bridged(
         }
     }
     result
+}
+
+/// Average a vertex with its neighbours where the arc runs along a sliver that
+/// was handed back: those are the noisiest vertices the stage produces, because
+/// the pixel under them is a mixture of three fills and the chain the sliver was
+/// rebuilt from is a staircase. See the Python.
+fn settle(pts: &[P], along_sliver: &[bool]) -> Vec<P> {
+    if pts.len() < 3 || !along_sliver.iter().any(|v| *v) {
+        return pts.to_vec();
+    }
+    (0..pts.len())
+        .map(|k| {
+            if k == 0 || k + 1 == pts.len() || !along_sliver[k] {
+                pts[k]
+            } else {
+                [
+                    (pts[k - 1][0] + 2.0 * pts[k][0] + pts[k + 1][0]) / 4.0,
+                    (pts[k - 1][1] + 2.0 * pts[k][1] + pts[k + 1][1]) / 4.0,
+                ]
+            }
+        })
+        .collect()
 }
 
 /// Total-least-squares line through an arc's run-up to one end, skipping the
@@ -1204,11 +1238,15 @@ pub fn build_opt(
             padded.set(r + 1, c + 1, *labels.get(r, c));
         }
     }
-    let padded = if extend { extend_wedges(&padded, rgb, alpha, fill_at) } else { padded };
+    let (padded, handed_back) = if extend {
+        extend_wedges(&padded, rgb, alpha, fill_at)
+    } else {
+        (padded, std::collections::HashSet::new())
+    };
 
     let edges = boundary_edges(&padded);
     let chain_list = chains(&padded, &edges);
-    let placed = place(&chain_list, &edges, &padded, rgb, alpha, fill_at);
+    let placed = place(&chain_list, &edges, &padded, rgb, alpha, fill_at, &handed_back);
 
     let mut arcs: Vec<Arc> = chain_list
         .iter()

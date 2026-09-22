@@ -170,7 +170,7 @@ def test_a_region_cut_off_at_a_point_is_handed_its_sliver_back():
     assert ink_reach > label_reach + 5, "the fixture is not truncating the wedge"
 
     padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
-    out = _extend_wedges(
+    out, _ = _extend_wedges(
         padded, rgb, np.ones(labels.shape),
         lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
         CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True),
@@ -187,7 +187,7 @@ def test_the_sliver_stays_four_connected():
     chain that only meets at the corners comes back as one-pixel islands."""
     rgb, labels, fills, _ = cut_off_wedge()
     padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
-    out = _extend_wedges(
+    out, _ = _extend_wedges(
         padded, rgb, np.ones(labels.shape),
         lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
         CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True),
@@ -232,7 +232,7 @@ def test_nothing_is_handed_back_where_no_region_was_cut_off():
         fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], FitParams(gradients=True, max_stops=4, tol=3.0),
                               weights=interior_weights(m))
     padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
-    out = _extend_wedges(padded, prep.rgb, prep.alpha,
+    out, _ = _extend_wedges(padded, prep.rgb, prep.alpha,
                          lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
                          CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
     assert int((out != padded).sum()) == 0

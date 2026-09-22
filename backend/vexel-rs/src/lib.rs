@@ -259,7 +259,7 @@ mod python {
                 padded.set(r + 1, c + 1, *labels.get(r, c));
             }
         }
-        topology::extend_wedges(&padded, &prep.rgb, &prep.alpha, &fill_at).data
+        topology::extend_wedges(&padded, &prep.rgb, &prep.alpha, &fill_at).0.data
     }
 
     #[pyfunction]

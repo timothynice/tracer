@@ -230,7 +230,7 @@ def wedges(path):
     a, prep, labels, fills = _prepared(path)
     h, w = a.shape[:2]
     padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
-    py = topology._extend_wedges(padded, prep.rgb, prep.alpha,
+    py, _ = topology._extend_wedges(padded, prep.rgb, prep.alpha,
                                  lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
                                  CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
     rs = np.asarray(vexel_rs._stage_wedges(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist()),
@@ -256,7 +256,7 @@ def arcs(path):
     # One extended map for both, so this stage compares the graph and not the
     # pixel-level call `wedges` already covers.
     padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
-    extended = topology._extend_wedges(padded, prep.rgb, prep.alpha,
+    extended, _ = topology._extend_wedges(padded, prep.rgb, prep.alpha,
                                        lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
                                        CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
     labels = extended[1:-1, 1:-1]

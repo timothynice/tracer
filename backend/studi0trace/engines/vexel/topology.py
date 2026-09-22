@@ -383,7 +383,12 @@ def _crossing(
 
 
 def _place(
-    chains: list[dict], padded: np.ndarray, rgb: np.ndarray, alpha: np.ndarray, fill_at: FillAt
+    chains: list[dict],
+    padded: np.ndarray,
+    rgb: np.ndarray,
+    alpha: np.ndarray,
+    fill_at: FillAt,
+    handed_back: set[tuple[int, int]] | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Sub-pixel position for every lattice edge of every arc."""
     pad_rgba = np.concatenate(
@@ -408,8 +413,33 @@ def _place(
         # the pixel labelled `b`, so this step is the direction from one side of
         # the arc to the other. It is one pixel long and axis aligned already.
         step = c_out - c_in
-        out.append((c_in + t[:, None] * step, step))
+        pts = c_in + t[:, None] * step
+        if handed_back:
+            pts = _settle(pts, [tuple(q) in handed_back or tuple(r) in handed_back
+                                for q, r in zip(p_in, p_out)])
+        out.append((pts, step))
     return out
+
+
+def _settle(pts: np.ndarray, along_sliver: list[bool]) -> np.ndarray:
+    """Average a vertex with its neighbours where the arc runs along a sliver
+    that was handed back.
+
+    Those vertices are the noisiest the stage produces. The pixel under them is a
+    mixture of three fills, not two, so the projection that places them is biased
+    by whatever the third one is doing, and the chain of whole pixels the sliver
+    was rebuilt from is a staircase. One pass of averaging costs nothing where
+    the placement was already smooth and takes the stair-step out of the rest.
+    """
+    mask = np.array(along_sliver, dtype=bool)
+    if len(pts) < 3 or not mask.any():
+        return pts
+    inner = np.zeros_like(pts)
+    inner[1:-1] = (pts[:-2] + 2.0 * pts[1:-1] + pts[2:]) / 4.0
+    inner[0], inner[-1] = pts[0], pts[-1]
+    smooth = mask.copy()
+    smooth[0] = smooth[-1] = False
+    return np.where(smooth[:, None], inner, pts)
 
 
 def _approach(pts: np.ndarray, from_start: bool, reach: float, trim: float) -> tuple[np.ndarray, np.ndarray] | None:
@@ -528,7 +558,7 @@ def _extend_wedges(
     """
     chains = _chains(padded)
     if not chains:
-        return padded
+        return padded, set()
     # A provisional graph, placed at the lattice edges' midpoints: enough to say
     # which region closes to a point where, and which stretch carries on.
     arcs = [
@@ -630,7 +660,7 @@ def _extend_wedges(
         else:
             for q in run:
                 taken.discard(q)
-    return out
+    return out, {q for q in taken}
 
 
 def _bridged(run: list[tuple[int, int]], out: np.ndarray, lab: int, a: int, b: int,
@@ -821,10 +851,11 @@ def build(
     bleed = BLEED if bleed is None else bleed
     taper = TAPER if taper is None else taper
     padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    handed_back: set[tuple[int, int]] = set()
     if extend:
-        padded = _extend_wedges(padded, rgb, alpha, fill_at, params)
+        padded, handed_back = _extend_wedges(padded, rgb, alpha, fill_at, params)
     chains = _chains(padded)
-    placed = _place(chains, padded, rgb, alpha, fill_at)
+    placed = _place(chains, padded, rgb, alpha, fill_at, handed_back)
 
     arcs = [
         Arc(pair=ch["pair"], pts=pts, normal=normal, n0=ch["n0"], n1=ch["n1"])
