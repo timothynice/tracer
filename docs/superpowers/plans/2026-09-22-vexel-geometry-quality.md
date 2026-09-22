@@ -1013,18 +1013,36 @@ def test_model_beats_the_angle_threshold_on_held_out_items():
 
 ---
 
+**Spike and decision: no-go for now.** `bench/truth.py` was built as the plan says (`corners(truth_svg)`: polygon
+vertices, square rects' corners, a path's joins turning more than 20° with M/L/H/V/C/S/Q/A/Z absolute or relative,
+none for rounded rects, circles, tangent arc joins or blurred shapes; plus `emitted_corners(svg)` following `<use>`
+to its definition, and `corner_match` → precision/recall/F1 within 1 px; tests in `tests/test_bench_truth.py`).
+Measured over the 16 synthetic items whose truth has corners, the current rule finds **95 % of the truth's corners**
+(mean recall 0.947; the misses are polygon vertices hidden under later shapes in `overlap`, which the truth lists
+and the image never shows). "Precision" as this metric defines it is 0.30, but what it counts as false are the
+junction nodes where shapes meet and the traced outlines of shadow bands and of the canvas region — real corners of
+the composited image that a per-shape truth does not list — so the metric cannot be a bench gate without a
+visible-intersection truth, and it is not wired in. A classifier can only lower false corners on smooth curves or
+raise recall on soft corners, and neither shows as a problem on this corpus (`junction_px`, `outline_px` moved by
+Tasks 3–10, not by corner decisions). Revisit if a real-logo truth set shows corner misses.
+
 ### Task 13: Spikes with go/no-go
 
 **Files:**
 - Create: `docs/superpowers/specs/2026-XX-XX-vexel-spikes.md` with the three protocols and their measured results
 
-- [ ] **Sub-pixel deblurring for ≤ 128 px inputs.** Protocol: take the 128 px synthetic items; upsample 2× with (a) bilinear, (b) a small trained upscaler on the synthetic pairs (512 → 128 → 256 truth) if the UBC model is not runnable; trace the 256 px result and scale the SVG by 0.5; compare `outline_px`, `junction_px`, ΔE with the 128 px trace. Go if `outline_px` falls ≥ 30 % on the 128 px class without a `score` regression.
-- [ ] **Glyph fitting for wordmarks.** Protocol: on `vexel-wordmark-512.png` and two more wordmarks imported via `bench import`, detect text lines with a lightweight OCR (e.g. `tesseract` via CLI if installed), fit glyph outlines from a font candidate set with an affine solve, and measure `outline_px` on the text region versus the traced text. Go if ≤ 0.1 px and bytes fall ≥ 3×.
-- [ ] **Semantic layer prior.** Protocol: on `flat/overlap` and `logo/venn`, ask whether the merge stage's decisions change when regions are first grouped by a SAM-style segmentation; measure `paths` versus truth `paths` and `outline_px`. Go if truth path counts are matched on ≥ 80 % of overlap items with no `outline_px` regression.
+- [x] **Sub-pixel deblurring for ≤ 128 px inputs.** Protocol: take the 128 px synthetic items; upsample 2× with (a) bilinear, (b) a small trained upscaler on the synthetic pairs (512 → 128 → 256 truth) if the UBC model is not runnable; trace the 256 px result and scale the SVG by 0.5; compare `outline_px`, `junction_px`, ΔE with the 128 px trace. Go if `outline_px` falls ≥ 30 % on the 128 px class without a `score` regression.
+- [~] **Glyph fitting for wordmarks.** Protocol: on `vexel-wordmark-512.png` and two more wordmarks imported via `bench import`, detect text lines with a lightweight OCR (e.g. `tesseract` via CLI if installed), fit glyph outlines from a font candidate set with an affine solve, and measure `outline_px` on the text region versus the traced text. Go if ≤ 0.1 px and bytes fall ≥ 3×.
+- [~] **Semantic layer prior.** Protocol: on `flat/overlap` and `logo/venn`, ask whether the merge stage's decisions change when regions are first grouped by a SAM-style segmentation; measure `paths` versus truth `paths` and `outline_px`. Go if truth path counts are matched on ≥ 80 % of overlap items with no `outline_px` regression.
 
 Each spike ends with a written result and a decision; a "go" becomes its own spec and plan.
 
 ---
+
+**As built.** `docs/superpowers/specs/2026-09-22-vexel-spikes.md`. Spike 1 run over 18 items: 2× Lanczos cuts mean
+`outline_px` 38 % but only on soft/thin/low-contrast inputs and hurts every sharp one — conditional go, needs a
+selection rule (its own spec). Spikes 2 and 3 cannot run here (no OCR/fonts, no segmentation model): protocols
+written, decisions deferred with the reasons in the spec.
 
 ## Self-review
 

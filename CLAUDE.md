@@ -15,7 +15,8 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   proves it landed.
 - `backend/tools/diffcheck.py` — runs a pipeline stage in both implementations
   over the corpus and reports where they disagree
-- `backend/bench/` — Vexel Bench (`python -m bench …`)
+- `backend/bench/` — Vexel Bench (`python -m bench …`); `bench/geometry.py` measures
+  against vector truth, `bench/truth.py` reads the truth's corners
 - `backend/tests/` — pytest; run `cd backend && .venv/bin/python -m pytest`.
   Rust tests: `cd backend/vexel-rs && cargo test`
 - `frontend/` — Studi0Trace React 18 + TS app; `npm run test:run`, `npm run build`
