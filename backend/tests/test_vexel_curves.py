@@ -5,7 +5,9 @@ import numpy as np
 from studi0trace.engines.vexel import curves
 from studi0trace.engines.vexel.curves import (
     Circle, Cubic, CurveParams, Ellipse, Line, PathShape, Rect, _bezier, find_corners, fit_open,
+    RoundedRect,
     fit_closed, fit_shape, fit_stretch, line_runs, path_d, shape_svg,
+    fit_contour_segments,
 )
 
 P = CurveParams(corner_threshold=60, tol=0.4, shape_fitting=True)
@@ -93,16 +95,18 @@ def test_straight_polyline_is_a_line_and_near_axis_lines_snap():
 
 
 def test_rounded_shape_with_corners_mixes_lines_and_cubics():
-    # a "D" shape: straight left side, semicircle right
-    t = np.linspace(-math.pi / 2, math.pi / 2, 120)
-    arc = np.column_stack([40 + 20 * np.cos(t), 30 + 20 * np.sin(t)])
-    left = np.column_stack([np.full(60, 40.0), np.linspace(50, 10, 60)])
+    # a "D" shape: straight left side, semicircle right (r = 60: one cubic
+    # cannot hold a semicircle that big inside 0.4 px, two arcs tie two cubics
+    # and the exact shape wins the tie)
+    t = np.linspace(-math.pi / 2, math.pi / 2, 360)
+    arc = np.column_stack([80 + 60 * np.cos(t), 70 + 60 * np.sin(t)])
+    left = np.column_stack([np.full(180, 80.0), np.linspace(130, 10, 180)])
     poly = np.vstack([arc, left[1:-1]])
     shape = fit_shape([poly], P)
     assert isinstance(shape, PathShape)
     kinds = {type(s).__name__ for s in shape.contours[0]}
-    assert kinds == {"Line", "Cubic"}
-    assert len(shape.contours[0]) <= 5
+    assert kinds == {"Line", "CircArc"}, kinds
+    assert len(shape.contours[0]) <= 3
 
 
 def test_a_rounded_square_keeps_its_sides_straight():
@@ -122,7 +126,8 @@ def test_a_rounded_square_keeps_its_sides_straight():
             pts.append(list(np.array(here) + f * (far - np.array(here))))
     poly = np.array(pts)
 
-    segs = fit_shape([poly], P).contours[0]
+    assert isinstance(fit_shape([poly], P), RoundedRect), "a rounded square is a <rect rx>"
+    segs = fit_contour_segments(poly, P)[0]
     lines = [s for s in segs if isinstance(s, Line)]
     assert len(lines) == 4, f"a rounded square came out with {len(lines)} straight sides: {''.join('L' if isinstance(s, Line) else 'C' for s in segs)}"
     for s in lines:

@@ -110,7 +110,7 @@ _NUM = re.compile(r"-?\d*\.?\d+(?:e-?\d+)?")
 
 
 def _segments(d: str):
-    """Absolute M/L/C/Z only; None on any other command (relative emitters)."""
+    """Absolute M/L/C/A/Z only; None on any other command (relative emitters)."""
     out, cur, start = [], None, None
     for cmd, body in re.findall(r"([A-Za-z])([^A-Za-z]*)", d):
         nums = [float(x) for x in _NUM.findall(body)]
@@ -126,6 +126,11 @@ def _segments(d: str):
                 p = np.array(nums[k + 4:k + 6])
                 out.append(("C", cur, np.array(nums[k:k + 2]), np.array(nums[k + 2:k + 4]), p))
                 cur = p
+        elif cmd == "A":
+            for k in range(0, len(nums) - 6, 7):
+                p = np.array(nums[k + 5:k + 7])
+                out.append(("A", cur, _arc_points(cur, p, nums[k], nums[k + 3] != 0, nums[k + 4] != 0), p))
+                cur = p
         elif cmd == "Z":
             cur = start
         else:
@@ -133,10 +138,32 @@ def _segments(d: str):
     return out
 
 
+def _arc_points(p0: np.ndarray, p1: np.ndarray, r: float, large: bool, sweep: bool, n: int = 17) -> np.ndarray:
+    """Points along an SVG circular arc (equal radii, no rotation), as a renderer draws it."""
+    mid = 0.5 * (p0 + p1)
+    d = p1 - p0
+    half = 0.5 * float(np.linalg.norm(d))
+    if half < 1e-12:
+        return np.vstack([p0, p1])
+    r = max(r, half)
+    h = np.sqrt(max(r * r - half * half, 0.0))
+    nrm = np.array([-d[1], d[0]]) / (2.0 * half)
+    c = mid + nrm * h if sweep != large else mid - nrm * h
+    a0 = np.arctan2(p0[1] - c[1], p0[0] - c[0])
+    a1 = np.arctan2(p1[1] - c[1], p1[0] - c[0])
+    span = (a1 - a0) % (2 * np.pi) if sweep else -((a0 - a1) % (2 * np.pi))
+    t = a0 + span * np.linspace(0.0, 1.0, n)
+    rr = float(np.linalg.norm(p0 - c))
+    return np.column_stack([c[0] + rr * np.cos(t), c[1] + rr * np.sin(t)])
+
+
 def _bow(seg) -> float:
-    p0, c1, c2, p1 = seg[1:]
-    t = np.linspace(0, 1, 17)[:, None]
-    q = (1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * c1 + 3 * (1 - t) * t ** 2 * c2 + t ** 3 * p1
+    if seg[0] == "A":
+        p0, q, p1 = seg[1], seg[2], seg[3]
+    else:
+        p0, c1, c2, p1 = seg[1:]
+        t = np.linspace(0, 1, 17)[:, None]
+        q = (1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * c1 + 3 * (1 - t) * t ** 2 * c2 + t ** 3 * p1
     d = p1 - p0
     n = np.linalg.norm(d)
     if n < 1e-9:
@@ -156,7 +183,7 @@ def line_debt(svg: str) -> dict:
             chord = float(np.linalg.norm(s[-1] - s[1]))
             segs_n += 1
             length += chord
-            if s[0] == "C" and chord >= LINE_MIN and _bow(s) <= LINE_BOW:
+            if s[0] in ("C", "A") and chord >= LINE_MIN and _bow(s) <= LINE_BOW:
                 debt_px += chord
                 debt_n += 1
     return {

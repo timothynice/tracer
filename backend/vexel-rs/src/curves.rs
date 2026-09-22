@@ -14,18 +14,20 @@ pub type P = [f64; 2];
 pub enum Segment {
     Line { p0: P, p1: P },
     Cubic { p0: P, c1: P, c2: P, p1: P },
+    /// A circular arc — SVG `A r r 0 large sweep x y`. See the Python `CircArc`.
+    Arc { p0: P, p1: P, r: f64, large: bool, sweep: bool },
 }
 
 impl Segment {
     pub fn start(&self) -> P {
         match self {
-            Segment::Line { p0, .. } | Segment::Cubic { p0, .. } => *p0,
+            Segment::Line { p0, .. } | Segment::Cubic { p0, .. } | Segment::Arc { p0, .. } => *p0,
         }
     }
 
     pub fn end(&self) -> P {
         match self {
-            Segment::Line { p1, .. } | Segment::Cubic { p1, .. } => *p1,
+            Segment::Line { p1, .. } | Segment::Cubic { p1, .. } | Segment::Arc { p1, .. } => *p1,
         }
     }
 
@@ -39,13 +41,13 @@ impl Segment {
 
     fn set_start(&mut self, v: P) {
         match self {
-            Segment::Line { p0, .. } | Segment::Cubic { p0, .. } => *p0 = v,
+            Segment::Line { p0, .. } | Segment::Cubic { p0, .. } | Segment::Arc { p0, .. } => *p0 = v,
         }
     }
 
     fn set_end(&mut self, v: P) {
         match self {
-            Segment::Line { p1, .. } | Segment::Cubic { p1, .. } => *p1 = v,
+            Segment::Line { p1, .. } | Segment::Cubic { p1, .. } | Segment::Arc { p1, .. } => *p1 = v,
         }
     }
 }
@@ -59,6 +61,7 @@ pub fn reverse_segments(segments: &[Segment]) -> Vec<Segment> {
         .map(|s| match s {
             Segment::Line { p0, p1 } => Segment::Line { p0: *p1, p1: *p0 },
             Segment::Cubic { p0, c1, c2, p1 } => Segment::Cubic { p0: *p1, c1: *c2, c2: *c1, p1: *p0 },
+            Segment::Arc { p0, p1, r, large, sweep } => Segment::Arc { p0: *p1, p1: *p0, r: *r, large: *large, sweep: !*sweep },
         })
         .collect()
 }
@@ -68,6 +71,7 @@ pub enum Shape {
     Circle { cx: f64, cy: f64, r: f64 },
     Ellipse { cx: f64, cy: f64, rx: f64, ry: f64, angle_deg: f64 },
     Rect { x: f64, y: f64, w: f64, h: f64 },
+    RoundedRect { x: f64, y: f64, w: f64, h: f64, rx: f64 },
     Path { contours: Vec<Vec<Segment>> },
 }
 
@@ -354,7 +358,7 @@ fn turn_deg(a: P, b: P) -> f64 {
     (a[0] * b[0] + a[1] * b[1]).clamp(-1.0, 1.0).acos().to_degrees()
 }
 
-fn dist(a: P, b: P) -> f64 {
+pub fn dist(a: P, b: P) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
@@ -362,6 +366,7 @@ fn seg_start(s: &Segment) -> P {
     match s {
         Segment::Line { p0, .. } => *p0,
         Segment::Cubic { p0, .. } => *p0,
+        Segment::Arc { p0, .. } => *p0,
     }
 }
 
@@ -369,6 +374,7 @@ fn seg_end(s: &Segment) -> P {
     match s {
         Segment::Line { p1, .. } => *p1,
         Segment::Cubic { p1, .. } => *p1,
+        Segment::Arc { p1, .. } => *p1,
     }
 }
 
@@ -376,6 +382,7 @@ fn set_start(s: &mut Segment, q: P) {
     match s {
         Segment::Line { p0, .. } => *p0 = q,
         Segment::Cubic { p0, .. } => *p0 = q,
+        Segment::Arc { p0, .. } => *p0 = q,
     }
 }
 
@@ -383,6 +390,7 @@ fn set_end(s: &mut Segment, q: P) {
     match s {
         Segment::Line { p1, .. } => *p1 = q,
         Segment::Cubic { p1, .. } => *p1 = q,
+        Segment::Arc { p1, .. } => *p1 = q,
     }
 }
 
@@ -464,6 +472,9 @@ pub fn lines_first(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) ->
         }
         let t1 = ta.unwrap_or_else(|| end_tangent(run, true));
         let t2 = tb.unwrap_or_else(|| end_tangent(run, false));
+        if let Some(arcs) = fit_arc_run(run, tol, ta, tb) {
+            return Some(arcs);
+        }
         Some(fit_cubics(run, t1, t2, tol, 0))
     };
 
@@ -631,20 +642,32 @@ pub fn corners_from_runs(pieces: &mut [Vec<P>], closed: bool) {
     for idx in range {
         let prev_idx = (idx + n - 1) % n;
         let (rp, rn) = (&runs[prev_idx], &runs[idx]);
-        if rp.is_empty() || rn.is_empty() {
-            continue;
-        }
-        let last = &rp[rp.len() - 1];
-        let first = &rn[0];
         let prev = &pieces[prev_idx];
         let nxt = &pieces[idx];
-        let tail: f64 = prev[last.j..].windows(2).map(|w| dist(w[0], w[1])).sum();
-        let head: f64 = nxt[..=first.i].windows(2).map(|w| dist(w[0], w[1])).sum();
-        if tail > CORNER_REACH || head > CORNER_REACH {
-            continue;
+        let corner = prev[prev.len() - 1];
+        let mut line_prev: Option<(P, P)> = None;
+        let mut line_next: Option<(P, P)> = None;
+        let (circ_prev, circ_next) = (whole_circle(prev), whole_circle(nxt));
+        if let (Some(last), None) = (rp.last(), circ_prev) {
+            let tail: f64 = prev[last.j..].windows(2).map(|w| dist(w[0], w[1])).sum();
+            if tail <= CORNER_REACH {
+                line_prev = Some((last.c, last.d));
+            }
         }
-        let Some(x) = intersect(last.c, last.d, first.c, first.d) else { continue };
-        if dist(x, prev[prev.len() - 1]) > 1.5 {
+        if let (Some(first), None) = (rn.first(), circ_next) {
+            let head: f64 = nxt[..=first.i].windows(2).map(|w| dist(w[0], w[1])).sum();
+            if head <= CORNER_REACH {
+                line_next = Some((first.c, first.d));
+            }
+        }
+        let x = match (line_prev, line_next) {
+            (Some((c0, d0)), Some((c1, d1))) => intersect(c0, d0, c1, d1),
+            (Some((c0, d0)), None) => circ_next.or_else(|| circle_near(nxt, true)).and_then(|(c, r)| line_circle(c0, d0, c, r, corner)),
+            (None, Some((c1, d1))) => circ_prev.or_else(|| circle_near(prev, false)).and_then(|(c, r)| line_circle(c1, d1, c, r, corner)),
+            (None, None) => continue,
+        };
+        let Some(x) = x else { continue };
+        if dist(x, corner) > 1.5 {
             continue;
         }
         let lp = pieces[prev_idx].len() - 1;
@@ -653,7 +676,216 @@ pub fn corners_from_runs(pieces: &mut [Vec<P>], closed: bool) {
     }
 }
 
+pub const CORNER_CIRCLE_DEV: f64 = 0.15;
+pub const CORNER_CIRCLE_MIN_DEG: f64 = 10.0;
+pub const CORNER_CIRCLE_REACH: f64 = 30.0;
+
+/// The circle a whole piece runs on, when it is one. See the Python `_whole_circle`.
+fn whole_circle(piece: &[P]) -> Option<(P, f64)> {
+    if piece.len() < 6 {
+        return None;
+    }
+    let length: f64 = piece.windows(2).map(|w| dist(w[0], w[1])).sum();
+    if length < ARC_MIN_CHORD {
+        return None;
+    }
+    let (circle, dev) = fit_circle(piece);
+    let Shape::Circle { cx, cy, r } = circle else { return None };
+    if !dev.is_finite() || dev > CORNER_CIRCLE_DEV || r <= 2.0 {
+        return None;
+    }
+    let c = [cx, cy];
+    let n = piece.len();
+    let a0 = (piece[0][1] - c[1]).atan2(piece[0][0] - c[0]);
+    let a1 = (piece[n - 1][1] - c[1]).atan2(piece[n - 1][0] - c[0]);
+    let tau = 2.0 * std::f64::consts::PI;
+    let span = ((a1 - a0 + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI).abs();
+    if span.to_degrees() < CORNER_CIRCLE_MIN_DEG {
+        return None;
+    }
+    Some((c, r))
+}
+
+/// The circle a piece runs on at one end. See the Python `_circle_near`.
+fn circle_near(piece: &[P], from_start: bool) -> Option<(P, f64)> {
+    let pts: Vec<P> = if from_start { piece.to_vec() } else { piece.iter().rev().cloned().collect() };
+    let mut cum = vec![0.0f64];
+    for w in pts.windows(2) {
+        cum.push(cum[cum.len() - 1] + dist(w[0], w[1]));
+    }
+    let reach_m = cum.iter().position(|&v| v > CORNER_CIRCLE_REACH).unwrap_or(cum.len());
+    for m in [pts.len(), reach_m] {
+        if m < 6 || cum[m.min(cum.len()) - 1] < ARC_MIN_CHORD {
+            continue;
+        }
+        let seg = &pts[..m];
+        let (circle, dev) = fit_circle(seg);
+        let Shape::Circle { cx, cy, r } = circle else { continue };
+        if !dev.is_finite() || dev > CORNER_CIRCLE_DEV || r <= 2.0 {
+            continue;
+        }
+        let c = [cx, cy];
+        let a0 = (seg[0][1] - c[1]).atan2(seg[0][0] - c[0]);
+        let a1 = (seg[m - 1][1] - c[1]).atan2(seg[m - 1][0] - c[0]);
+        let tau = 2.0 * std::f64::consts::PI;
+        let span = ((a1 - a0 + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI).abs();
+        if span.to_degrees() < CORNER_CIRCLE_MIN_DEG {
+            continue;
+        }
+        return Some((c, r));
+    }
+    None
+}
+
+/// Where the line through p along unit d cuts the circle (c, r): the crossing nearest `near`.
+fn line_circle(p: P, d: P, c: P, r: f64, near: P) -> Option<P> {
+    let q = sub(p, c);
+    let b = 2.0 * (q[0] * d[0] + q[1] * d[1]);
+    let cc = q[0] * q[0] + q[1] * q[1] - r * r;
+    let disc = b * b - 4.0 * cc;
+    if disc < 0.0 {
+        return None;
+    }
+    let root = disc.sqrt();
+    let mut best: Option<(f64, P)> = None;
+    for t in [(-b - root) / 2.0, (-b + root) / 2.0] {
+        let x = [p[0] + d[0] * t, p[1] + d[1] * t];
+        let dd = dist(x, near);
+        if best.map_or(true, |(bd, _)| dd < bd) {
+            best = Some((dd, x));
+        }
+    }
+    best.map(|(_, x)| x)
+}
+
 /// One run between two breaks, as lines first or as a curve. See the Python `fit_stretch`.
+pub const ARC_MIN_CHORD: f64 = 6.0;
+pub const ARC_MIN_DEG: f64 = 10.0;
+pub const ARC_TANGENT_DEG: f64 = 3.0;
+/// See the Python: arcs stay under this so the implied centre is well conditioned.
+pub const ARC_MAX_DEG: f64 = 150.0;
+
+/// The arc of circle (c, r) from p0 to p1 in the sweep direction, as arcs of at most ARC_MAX_DEG.
+pub fn split_arc(c: P, r: f64, p0: P, p1: P, sweep: bool) -> Vec<Segment> {
+    let tau = 2.0 * std::f64::consts::PI;
+    let a0 = (p0[1] - c[1]).atan2(p0[0] - c[0]);
+    let a1 = (p1[1] - c[1]).atan2(p1[0] - c[0]);
+    let mut span = if sweep { (a1 - a0).rem_euclid(tau) } else { -((a0 - a1).rem_euclid(tau)) };
+    if span.abs() < 1e-12 {
+        span = if sweep { tau } else { -tau };
+    }
+    let pieces = ((span.abs().to_degrees() / ARC_MAX_DEG - 1e-9).ceil() as usize).max(1);
+    let mut out = Vec::with_capacity(pieces);
+    let mut start = p0;
+    for k in 1..=pieces {
+        let end = if k == pieces {
+            p1
+        } else {
+            let a = a0 + span * k as f64 / pieces as f64;
+            [c[0] + r * a.cos(), c[1] + r * a.sin()]
+        };
+        out.push(Segment::Arc { p0: start, p1: end, r, large: span.abs() / pieces as f64 > std::f64::consts::PI, sweep });
+        start = end;
+    }
+    out
+}
+
+fn arc_tangent(c: P, p: P, sweep: bool) -> P {
+    let u = sub(p, c);
+    normalize(if sweep { [-u[1], u[0]] } else { [u[1], -u[0]] })
+}
+
+pub const CIRCLE_SEARCH_ITER: usize = 60;
+
+/// The circle through p0 and p1 closest to `pts`. See the Python `circle_through`.
+pub fn circle_through(p0: P, p1: P, pts: &[P], guess: P) -> (P, f64, f64, f64) {
+    let mid = [0.5 * (p0[0] + p1[0]), 0.5 * (p0[1] + p1[1])];
+    let d = sub(p1, p0);
+    let half = 0.5 * norm(d);
+    let nrm = [-d[1] / (2.0 * half), d[0] / (2.0 * half)];
+    let cost = |t: f64| -> f64 {
+        let c = [mid[0] + nrm[0] * t, mid[1] + nrm[1] * t];
+        let r = (c[0] - p0[0]).hypot(c[1] - p0[1]);
+        pts.iter()
+            .map(|p| {
+                let e = (p[0] - c[0]).hypot(p[1] - c[1]) - r;
+                e * e
+            })
+            .sum::<f64>()
+    };
+    let g = sub(guess, mid);
+    let t0 = g[0] * nrm[0] + g[1] * nrm[1];
+    let span = t0.abs().max(half) + half;
+    let (mut lo, mut hi) = (t0 - span, t0 + span);
+    let phi = (5.0f64.sqrt() - 1.0) / 2.0;
+    let (mut a, mut b) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
+    let (mut fa, mut fb) = (cost(a), cost(b));
+    for _ in 0..CIRCLE_SEARCH_ITER {
+        if fa < fb {
+            hi = b;
+            b = a;
+            fb = fa;
+            a = hi - phi * (hi - lo);
+            fa = cost(a);
+        } else {
+            lo = a;
+            a = b;
+            fa = fb;
+            b = lo + phi * (hi - lo);
+            fb = cost(b);
+        }
+    }
+    let t = 0.5 * (lo + hi);
+    let c = [mid[0] + nrm[0] * t, mid[1] + nrm[1] * t];
+    let r = (c[0] - p0[0]).hypot(c[1] - p0[1]);
+    let mut dev: Vec<f64> = pts.iter().map(|p| ((p[0] - c[0]).hypot(p[1] - c[1]) - r).abs()).collect();
+    let worst = dev.iter().cloned().fold(0.0f64, f64::max);
+    (c, r, percentile95(&mut dev), worst)
+}
+
+/// One circular arc through a run, when the run is one. See the Python `fit_arc_run`.
+pub fn fit_arc_run(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) -> Option<Vec<Segment>> {
+    let n = pts.len();
+    if n < 5 {
+        return None;
+    }
+    let (p0, p1) = (pts[0], pts[n - 1]);
+    let chord = norm(sub(p1, p0));
+    if chord < ARC_MIN_CHORD {
+        return None;
+    }
+    let (free, dev) = fit_circle(pts);
+    let Shape::Circle { cx, cy, r: free_r } = free else { return None };
+    if !dev.is_finite() || dev > tol || free_r <= 1.0 {
+        return None;
+    }
+    let (c, r, dev, worst) = circle_through(p0, p1, pts, [cx, cy]);
+    if dev > tol || worst > 2.0 * tol || r <= 1.0 {
+        return None;
+    }
+    let m = pts[n / 2];
+    let sweep = (p0[0] - c[0]) * (m[1] - c[1]) - (p0[1] - c[1]) * (m[0] - c[0]) > 0.0;
+    let a0 = (p0[1] - c[1]).atan2(p0[0] - c[0]);
+    let a1 = (p1[1] - c[1]).atan2(p1[0] - c[0]);
+    let tau = 2.0 * std::f64::consts::PI;
+    let span = if sweep { (a1 - a0).rem_euclid(tau) } else { (a0 - a1).rem_euclid(tau) };
+    if span.to_degrees() < ARC_MIN_DEG || span > tau - 1e-6 {
+        return None;
+    }
+    if let Some(t) = t_start {
+        if turn_deg(normalize(t), arc_tangent(c, p0, sweep)) > ARC_TANGENT_DEG {
+            return None;
+        }
+    }
+    if let Some(t) = t_end {
+        let e = arc_tangent(c, p1, sweep);
+        if turn_deg(normalize(t), [-e[0], -e[1]]) > ARC_TANGENT_DEG {
+            return None;
+        }
+    }
+    Some(split_arc(c, r, p0, p1, sweep))
+}
+
 pub fn fit_stretch(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) -> Vec<Segment> {
     if pts.len() < 2 {
         return Vec::new();
@@ -665,10 +897,16 @@ pub fn fit_stretch(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) ->
         let t2 = t_end.unwrap_or_else(|| end_tangent(pts, false));
         fit_cubics(pts, t1, t2, tol, 0)
     };
-    match lines_first(pts, tol, t_start, t_end) {
+    let best = match lines_first(pts, tol, t_start, t_end) {
         Some(lines) if cost(&lines) <= cost(&curve) => lines,
         _ => curve,
+    };
+    if let Some(arcs) = fit_arc_run(pts, tol, t_start, t_end) {
+        if cost(&arcs) <= cost(&best) {
+            return arcs;
+        }
     }
+    best
 }
 
 /// Indices of vertices where the contour turns by more than `threshold_deg` at
@@ -1008,6 +1246,124 @@ fn chord_deviation(points: &[P]) -> f64 {
 
 fn angle_deg(p0: P, p1: P) -> f64 {
     (p1[1] - p0[1]).atan2(p1[0] - p0[0]).to_degrees()
+}
+
+/// Corner radii of one rounded rect agree to this share of the radius (or 2·tol).
+pub const ROUND_RADIUS_TOL: f64 = 0.05;
+
+fn median(v: &mut Vec<f64>) -> f64 {
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        0.5 * (v[n / 2 - 1] + v[n / 2])
+    }
+}
+
+/// Four axis-aligned straight runs joined by four tangent quarter circles of
+/// one radius: an SVG `<rect rx>`. See the Python `try_rounded_rect`.
+pub fn try_rounded_rect(poly: &[P], params: &CurveParams) -> Option<Shape> {
+    let n = poly.len();
+    if n < 16 {
+        return None;
+    }
+    let mean = [poly.iter().map(|p| p[0]).sum::<f64>() / n as f64, poly.iter().map(|p| p[1]).sum::<f64>() / n as f64];
+    let mut start = 0;
+    let mut best = f64::NEG_INFINITY;
+    for (k, p) in poly.iter().enumerate() {
+        let d = norm(sub(*p, mean));
+        if d > best {
+            best = d;
+            start = k;
+        }
+    }
+    let mut rolled: Vec<P> = Vec::with_capacity(n + 1);
+    rolled.extend_from_slice(&poly[start..]);
+    rolled.extend_from_slice(&poly[..start]);
+    let mut closed = rolled.clone();
+    closed.push(rolled[0]);
+    let runs = line_runs(&closed);
+    if runs.len() != 4 {
+        return None;
+    }
+    let mut axes: Vec<usize> = Vec::with_capacity(4);
+    let mut levels: Vec<f64> = Vec::with_capacity(4);
+    for run in &runs {
+        let ang = run.d[1].atan2(run.d[0]).to_degrees().rem_euclid(180.0);
+        if ang.min(180.0 - ang) <= params.snap_axis_deg {
+            axes.push(0);
+            levels.push(run.c[1]);
+        } else if (ang - 90.0).abs() <= params.snap_axis_deg {
+            axes.push(1);
+            levels.push(run.c[0]);
+        } else {
+            return None;
+        }
+    }
+    if axes[0] == axes[1] || axes[1] == axes[2] || axes[2] == axes[3] || axes[3] == axes[0] {
+        return None;
+    }
+    let mut ys: Vec<f64> = (0..4).filter(|&k| axes[k] == 0).map(|k| levels[k]).collect();
+    let mut xs: Vec<f64> = (0..4).filter(|&k| axes[k] == 1).map(|k| levels[k]).collect();
+    if xs.len() != 2 || ys.len() != 2 {
+        return None;
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let (x0, x1) = (xs[0], xs[1]);
+    let (y0, y1) = (ys[0], ys[1]);
+    if x1 - x0 < 2.0 || y1 - y0 < 2.0 {
+        return None;
+    }
+    let mut radii: Vec<f64> = Vec::with_capacity(4);
+    for k in 0..4 {
+        let j = runs[k].j;
+        let i_next = runs[(k + 1) % 4].i;
+        let gap: Vec<P> = if k < 3 {
+            rolled[j..=i_next].to_vec()
+        } else {
+            let mut g = rolled[j..].to_vec();
+            g.extend_from_slice(&rolled[..=runs[0].i]);
+            g
+        };
+        let (lv_a, lv_b) = (levels[k], levels[(k + 1) % 4]);
+        let x_side = if axes[k] == 1 { lv_a } else { lv_b };
+        let y_side = if axes[k] == 0 { lv_a } else { lv_b };
+        let sx = if (x_side - x0).abs() <= (x_side - x1).abs() { 1.0 } else { -1.0 };
+        let sy = if (y_side - y0).abs() <= (y_side - y1).abs() { 1.0 } else { -1.0 };
+        let floor = params.tol.max(0.5);
+        let mut rs: Vec<f64> = Vec::new();
+        let mut on_arc: Vec<P> = Vec::new();
+        for p in &gap {
+            let u = (sx * (p[0] - x_side)).max(0.0);
+            let v = (sy * (p[1] - y_side)).max(0.0);
+            if u.min(v) > floor {
+                rs.push((u + v) + (2.0 * u * v).sqrt());
+                on_arc.push(*p);
+            }
+        }
+        if on_arc.len() < 3 {
+            return None;
+        }
+        let r = median(&mut rs);
+        if r <= 1.0 {
+            return None;
+        }
+        let centre = [x_side + sx * r, y_side + sy * r];
+        let mut dev: Vec<f64> = on_arc.iter().map(|p| (norm(sub(*p, centre)) - r).abs()).collect();
+        if percentile95(&mut dev) > params.tol {
+            return None;
+        }
+        radii.push(r);
+    }
+    let rx = radii.iter().sum::<f64>() / 4.0;
+    let (rmax, rmin) = (radii.iter().cloned().fold(f64::NEG_INFINITY, f64::max), radii.iter().cloned().fold(f64::INFINITY, f64::min));
+    if rmax - rmin > (2.0 * params.tol).max(ROUND_RADIUS_TOL * rx) {
+        return None;
+    }
+    let rx = rx.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0);
+    Some(Shape::RoundedRect { x: x0, y: y0, w: x1 - x0, h: y1 - y0, rx })
 }
 
 pub fn try_rect(poly: &[P], corners: &[usize], params: &CurveParams) -> Option<Shape> {
@@ -1902,8 +2258,30 @@ pub fn fit_contour_segments(poly: &[P], params: &CurveParams) -> Vec<Segment> {
 /// Closed contour without corners: lines first where it has straight runs,
 /// else the smooth closed fit. See the Python `fit_closed`.
 pub fn fit_closed(poly: &[P], tol: f64) -> Vec<Segment> {
-    let smooth = fit_closed_smooth(poly, tol);
     let n = poly.len();
+    if n >= 8 {
+        // a loop that is one circle: two half arcs (see the Python)
+        let (circle, dev) = fit_circle(poly);
+        if let Shape::Circle { cx, cy, r } = circle {
+            if dev.is_finite() && dev <= tol && r > 1.0 {
+                let c = [cx, cy];
+                let worst = poly.iter().map(|p| (norm(sub(*p, c)) - r).abs()).fold(0.0f64, f64::max);
+                if worst <= 2.0 * tol {
+                    let mut area2 = 0.0;
+                    for k in 0..n {
+                        let (a, b) = (poly[k], poly[(k + 1) % n]);
+                        area2 += a[0] * b[1] - a[1] * b[0];
+                    }
+                    let sweep = area2 > 0.0;
+                    let u = sub(poly[0], c);
+                    let k = r / norm(u).max(1e-12);
+                    let p0 = [c[0] + u[0] * k, c[1] + u[1] * k];
+                    return split_arc(c, r, p0, p0, sweep);
+                }
+            }
+        }
+    }
+    let smooth = fit_closed_smooth(poly, tol);
     if n < 4 {
         return smooth;
     }
@@ -1973,6 +2351,11 @@ pub fn fit_shape(contours: &[Vec<P>], params: &CurveParams) -> Shape {
         if let Some(rect) = try_rect(poly, &corners, params) {
             return rect;
         }
+        if corners.is_empty() {
+            if let Some(rounded) = try_rounded_rect(poly, params) {
+                return rounded;
+            }
+        }
     }
     Shape::Path {
         contours: contours.iter().map(|p| fit_contour_segments(p, params)).collect(),
@@ -2007,6 +2390,18 @@ pub fn path_d(contours: &[Vec<Segment>], precision: usize) -> String {
             match s {
                 Segment::Line { p1, .. } => {
                     parts.push_str(&format!("L{} {}", fmt(p1[0], precision), fmt(p1[1], precision)));
+                }
+                Segment::Arc { p1, r, large, sweep, .. } => {
+                    let rs = fmt(*r, precision);
+                    parts.push_str(&format!(
+                        "A{} {} 0 {} {} {} {}",
+                        rs,
+                        rs,
+                        *large as u8,
+                        *sweep as u8,
+                        fmt(p1[0], precision),
+                        fmt(p1[1], precision)
+                    ));
                 }
                 Segment::Cubic { c1, c2, p1, .. } => {
                     parts.push_str(&format!(
@@ -2063,6 +2458,15 @@ pub fn shape_svg(shape: &Shape, attrs: &str, precision: usize) -> String {
             fmt(*y, p),
             fmt(*w, p),
             fmt(*h, p),
+            attrs
+        ),
+        Shape::RoundedRect { x, y, w, h, rx } => format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" {}/>",
+            fmt(*x, p),
+            fmt(*y, p),
+            fmt(*w, p),
+            fmt(*h, p),
+            fmt(*rx, p),
             attrs
         ),
         Shape::Path { contours } => {

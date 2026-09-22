@@ -58,3 +58,17 @@ def test_line_debt_is_none_for_relative_commands():
 def test_two_colours_have_no_junctions_even_along_anti_aliased_edges():
     truth = svg('<polygon points="20,20 100,30 90,110 30,100" fill="#36c"/>')
     assert outline_error(truth, truth, 128, 128)["junction_px"] is None
+
+
+def test_line_debt_reads_arcs_and_charges_a_flat_one():
+    """Vexel writes `A` arcs. A quarter circle is a curve; an arc so large that
+    it bows less than LINE_BOW over its chord should have been a line."""
+    from bench.geometry import line_debt
+
+    quarter = '<svg><path d="M0 0L60 0A60 60 0 0 1 0 60Z"/></svg>'
+    got = line_debt(quarter)
+    assert got["line_debt_px"] == 0.0 and got["line_debt_segments"] == 0
+    assert got["nodes_per_100px"] is not None
+    flat = '<svg><path d="M0 0A5000 5000 0 0 1 40 0L40 10Z"/></svg>'
+    got = line_debt(flat)
+    assert got["line_debt_segments"] == 1 and abs(got["line_debt_px"] - 40.0) < 1e-6

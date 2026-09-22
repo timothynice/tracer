@@ -34,7 +34,21 @@ class Cubic:
     p1: np.ndarray
 
 
-Segment = Line | Cubic
+@dataclass
+class CircArc:
+    """A circular arc from p0 to p1 of radius r — SVG's `A r r 0 large sweep x y`.
+    `sweep` is the SVG sweep flag (the angle grows, clockwise on screen);
+    `large` picks the arc over 180°. The centre is implied by the two ends and
+    the radius, as in the file, so moving an end keeps it a circle."""
+
+    p0: np.ndarray
+    p1: np.ndarray
+    r: float
+    large: bool
+    sweep: bool
+
+
+Segment = Line | Cubic | CircArc
 
 
 def reverse_segments(segments: list[Segment]) -> list[Segment]:
@@ -44,9 +58,37 @@ def reverse_segments(segments: list[Segment]) -> list[Segment]:
     for seg in reversed(segments):
         if isinstance(seg, Line):
             out.append(Line(seg.p1.copy(), seg.p0.copy()))
+        elif isinstance(seg, CircArc):
+            out.append(CircArc(seg.p1.copy(), seg.p0.copy(), seg.r, seg.large, not seg.sweep))
         else:
             out.append(Cubic(seg.p1.copy(), seg.c2.copy(), seg.c1.copy(), seg.p0.copy()))
     return out
+
+
+def arc_centre(arc: CircArc) -> np.ndarray:
+    """The centre the SVG renderer will use for this arc (radius scaled up if
+    the ends are further apart than 2r, as the specification says to)."""
+    mid = 0.5 * (arc.p0 + arc.p1)
+    d = arc.p1 - arc.p0
+    half = 0.5 * float(np.linalg.norm(d))
+    if half < 1e-12:
+        return mid.copy()
+    r = max(arc.r, half)
+    h = math.sqrt(max(r * r - half * half, 0.0))
+    n = np.array([-d[1], d[0]]) / (2.0 * half)
+    # of the two centres, sweep XOR large picks the one on the left of p0→p1
+    return mid + n * h if arc.sweep != arc.large else mid - n * h
+
+
+def arc_points(arc: CircArc, n: int = 60) -> np.ndarray:
+    """`n` points along the arc, ends included."""
+    c = arc_centre(arc)
+    a0 = math.atan2(arc.p0[1] - c[1], arc.p0[0] - c[0])
+    a1 = math.atan2(arc.p1[1] - c[1], arc.p1[0] - c[0])
+    span = (a1 - a0) % (2.0 * math.pi) if arc.sweep else -((a0 - a1) % (2.0 * math.pi))
+    r = float(np.linalg.norm(arc.p0 - c))
+    t = a0 + span * np.linspace(0.0, 1.0, n)
+    return np.column_stack([c[0] + r * np.cos(t), c[1] + r * np.sin(t)])
 
 
 @dataclass
@@ -74,11 +116,20 @@ class Rect:
 
 
 @dataclass
+class RoundedRect:
+    x: float
+    y: float
+    w: float
+    h: float
+    rx: float
+
+
+@dataclass
 class PathShape:
     contours: list[list[Segment]] = field(default_factory=list)  # each closed
 
 
-Shape = Circle | Ellipse | Rect | PathShape
+Shape = Circle | Ellipse | Rect | RoundedRect | PathShape
 
 
 @dataclass(frozen=True)
@@ -337,6 +388,9 @@ def lines_first(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, 
             return [Line(run[0].copy(), run[-1].copy())]
         t1 = ta if ta is not None else _end_tangent(run, True)
         t2 = tb if tb is not None else _end_tangent(run, False)
+        arcs = fit_arc_run(run, tol, ta, tb)
+        if arcs is not None:
+            return arcs
         return list(fit_cubics(run, t1, t2, tol))
 
     for k, (i, j, c, d) in enumerate(runs):
@@ -463,19 +517,223 @@ def corners_from_runs(pieces: list[np.ndarray], closed: bool) -> None:
     for idx in (range(n) if closed else range(1, n)):
         prev, nxt = pieces[idx - 1], pieces[idx]
         rp, rn = runs[idx - 1], runs[idx]
-        if not rp or not rn:
+        line_prev = line_next = None
+        # a piece that is one circle is the circle at both its ends, whatever
+        # short chord of it passes the straight-run test (a 6 px chord of a
+        # 40 px circle sags 0.1 px and does)
+        circ_prev, circ_next = _whole_circle(prev), _whole_circle(nxt)
+        if rp and circ_prev is None:
+            _i0, j0, c0, d0 = rp[-1]
+            tail = float(np.sum(np.linalg.norm(np.diff(prev[j0:], axis=0), axis=1))) if j0 < len(prev) - 1 else 0.0
+            if tail <= CORNER_REACH:
+                line_prev = (c0, d0)
+        if rn and circ_next is None:
+            i1, _j1, c1, d1 = rn[0]
+            head = float(np.sum(np.linalg.norm(np.diff(nxt[:i1 + 1], axis=0), axis=1))) if i1 > 0 else 0.0
+            if head <= CORNER_REACH:
+                line_next = (c1, d1)
+        if line_prev is not None and line_next is not None:
+            x = _intersect(line_prev[0], line_prev[1], line_next[0], line_next[1])
+        elif line_prev is not None:
+            # a line meeting a circle: the corner is where the line cuts it
+            circ = circ_next if circ_next is not None else _circle_near(nxt, True)
+            x = None if circ is None else _line_circle(line_prev[0], line_prev[1], circ[0], circ[1], prev[-1])
+        elif line_next is not None:
+            circ = circ_prev if circ_prev is not None else _circle_near(prev, False)
+            x = None if circ is None else _line_circle(line_next[0], line_next[1], circ[0], circ[1], prev[-1])
+        else:
             continue
-        _i0, j0, c0, d0 = rp[-1]
-        i1, _j1, c1, d1 = rn[0]
-        tail = float(np.sum(np.linalg.norm(np.diff(prev[j0:], axis=0), axis=1))) if j0 < len(prev) - 1 else 0.0
-        head = float(np.sum(np.linalg.norm(np.diff(nxt[:i1 + 1], axis=0), axis=1))) if i1 > 0 else 0.0
-        if tail > CORNER_REACH or head > CORNER_REACH:
-            continue
-        x = _intersect(c0, d0, c1, d1)
         if x is None or float(np.linalg.norm(x - prev[-1])) > 1.5:
             continue
         prev[-1] = x
         nxt[0] = x
+
+
+CORNER_CIRCLE_DEV = 0.15     # px; a piece end counts as circular when a circle holds it this well
+CORNER_CIRCLE_MIN_DEG = 10.0
+CORNER_CIRCLE_REACH = 30.0   # px; the circle is read from the whole piece, else from this much of it
+
+
+def _whole_circle(piece: np.ndarray) -> tuple[np.ndarray, float] | None:
+    """The circle a whole piece runs on, when it is one (see `_circle_near`)."""
+    if len(piece) < 6:
+        return None
+    length = float(np.sum(np.linalg.norm(np.diff(piece, axis=0), axis=1)))
+    if length < ARC_MIN_CHORD:
+        return None
+    circle, dev = fit_circle(piece)
+    if not math.isfinite(dev) or dev > CORNER_CIRCLE_DEV or circle.r <= 2.0:
+        return None
+    c = np.array([circle.cx, circle.cy])
+    a0 = math.atan2(piece[0][1] - c[1], piece[0][0] - c[0])
+    a1 = math.atan2(piece[-1][1] - c[1], piece[-1][0] - c[0])
+    span = abs(((a1 - a0 + math.pi) % (2.0 * math.pi)) - math.pi)
+    if math.degrees(span) < CORNER_CIRCLE_MIN_DEG:
+        return None
+    return c, float(circle.r)
+
+
+def _circle_near(piece: np.ndarray, from_start: bool) -> tuple[np.ndarray, float] | None:
+    """The circle a piece runs on at one end: fitted to the whole piece when
+    that is one circle, else to its first CORNER_CIRCLE_REACH px."""
+    pts = piece if from_start else piece[::-1]
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
+    for m in (len(pts), int(np.searchsorted(cum, CORNER_CIRCLE_REACH, side="right"))):
+        if m < 6 or cum[min(m, len(cum)) - 1] < ARC_MIN_CHORD:
+            continue
+        seg = pts[:m]
+        circle, dev = fit_circle(seg)
+        if not math.isfinite(dev) or dev > CORNER_CIRCLE_DEV or circle.r <= 2.0:
+            continue
+        c = np.array([circle.cx, circle.cy])
+        a0 = math.atan2(seg[0][1] - c[1], seg[0][0] - c[0])
+        a1 = math.atan2(seg[-1][1] - c[1], seg[-1][0] - c[0])
+        span = abs(((a1 - a0 + math.pi) % (2.0 * math.pi)) - math.pi)
+        if math.degrees(span) < CORNER_CIRCLE_MIN_DEG:
+            continue
+        return c, float(circle.r)
+    return None
+
+
+def _line_circle(p: np.ndarray, d: np.ndarray, c: np.ndarray, r: float, near: np.ndarray) -> np.ndarray | None:
+    """Where the line through p along unit d cuts the circle (c, r): the crossing nearest `near`."""
+    q = p - c
+    b = 2.0 * float(q @ d)
+    cc = float(q @ q) - r * r
+    disc = b * b - 4.0 * cc
+    if disc < 0.0:
+        return None
+    root = math.sqrt(disc)
+    best = None
+    for t in ((-b - root) / 2.0, (-b + root) / 2.0):
+        x = p + d * t
+        dist = float(np.linalg.norm(x - near))
+        if best is None or dist < best[0]:
+            best = (dist, x)
+    return best[1]
+
+
+ARC_MIN_CHORD = 6.0    # px; shorter gaps are cubics (or a corner) — an arc there says nothing
+ARC_MIN_DEG = 10.0     # a run turning less than this is a line or a flat cubic, not an arc
+ARC_TANGENT_DEG = 3.0  # a pinned end tangent has to lie this close to the circle's
+# An SVG arc's centre is implied by its two ends and its radius, and the
+# implication is ill-conditioned near a half circle: with the chord within a
+# hundredth of the diameter, the two decimals the file keeps move the centre
+# by half a pixel (sqrt(2·r·0.005)). Arcs are kept to ARC_MAX_DEG, where the
+# centre moves no more than tan(75°) ≈ 3.7 times the rounding, and a longer
+# sweep is written as several arcs of one circle.
+ARC_MAX_DEG = 150.0
+
+
+def split_arc(c: np.ndarray, r: float, p0: np.ndarray, p1: np.ndarray, sweep: bool) -> list[CircArc]:
+    """The arc of circle (c, r) from p0 to p1 in the sweep direction, as as
+    many arcs of at most ARC_MAX_DEG as it takes; the ends stay as given, the
+    joins lie exactly on the circle."""
+    a0 = math.atan2(p0[1] - c[1], p0[0] - c[0])
+    a1 = math.atan2(p1[1] - c[1], p1[0] - c[0])
+    span = (a1 - a0) % (2.0 * math.pi) if sweep else -((a0 - a1) % (2.0 * math.pi))
+    if abs(span) < 1e-12:
+        span = 2.0 * math.pi if sweep else -2.0 * math.pi
+    pieces = max(1, int(math.ceil(abs(math.degrees(span)) / ARC_MAX_DEG - 1e-9)))
+    out: list[CircArc] = []
+    start = p0.copy()
+    for k in range(1, pieces + 1):
+        if k == pieces:
+            end = p1.copy()
+        else:
+            a = a0 + span * k / pieces
+            end = np.array([c[0] + r * math.cos(a), c[1] + r * math.sin(a)])
+        out.append(CircArc(start, end, float(r), abs(span) / pieces > math.pi, sweep))
+        start = end.copy()
+    return out
+
+
+def _arc_tangent(c: np.ndarray, p: np.ndarray, sweep: bool) -> np.ndarray:
+    """Unit direction of travel along the circle at p, in the sweep direction."""
+    u = p - c
+    t = np.array([-u[1], u[0]]) if sweep else np.array([u[1], -u[0]])
+    return _normalize(t)
+
+
+CIRCLE_SEARCH_ITER = 60  # golden-section steps for the centre along the bisector
+
+
+def circle_through(p0: np.ndarray, p1: np.ndarray, pts: np.ndarray, guess: np.ndarray) -> tuple[np.ndarray, float, float, float]:
+    """The circle through p0 and p1 closest to `pts`: its centre lies on the
+    chord's perpendicular bisector, and the one position along it that
+    minimises the squared radial residuals is found by golden section from the
+    free (Kåsa) centre's projection. Returns (centre, r, p95 deviation, max).
+
+    This is the circle the SVG renderer will draw for `A r r 0 … x y` with
+    these ends, so it — not the free fit — is what has to hold the points."""
+    mid = 0.5 * (p0 + p1)
+    d = p1 - p0
+    half = 0.5 * float(np.linalg.norm(d))
+    nrm = np.array([-d[1], d[0]]) / (2.0 * half)
+
+    def cost(t: float) -> float:
+        c = mid + nrm * t
+        r = math.hypot(c[0] - p0[0], c[1] - p0[1])
+        e = np.hypot(pts[:, 0] - c[0], pts[:, 1] - c[1]) - r
+        return float(e @ e)
+
+    t0 = float((guess - mid) @ nrm)
+    span = max(abs(t0), half) + half
+    lo, hi = t0 - span, t0 + span
+    phi = (math.sqrt(5.0) - 1.0) / 2.0
+    a, b = hi - phi * (hi - lo), lo + phi * (hi - lo)
+    fa, fb = cost(a), cost(b)
+    for _ in range(CIRCLE_SEARCH_ITER):
+        if fa < fb:
+            hi, b, fb = b, a, fa
+            a = hi - phi * (hi - lo)
+            fa = cost(a)
+        else:
+            lo, a, fa = a, b, fb
+            b = lo + phi * (hi - lo)
+            fb = cost(b)
+    t = 0.5 * (lo + hi)
+    c = mid + nrm * t
+    r = math.hypot(c[0] - p0[0], c[1] - p0[1])
+    dev = np.abs(np.hypot(pts[:, 0] - c[0], pts[:, 1] - c[1]) - r)
+    return c, r, float(np.percentile(dev, 95)), float(dev.max())
+
+
+def fit_arc_run(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, t_end: np.ndarray | None = None) -> list[CircArc] | None:
+    """One circular arc through a run, when the run is one: the circle through
+    the run's two ends (which stay where they are — a neighbour meets them)
+    that holds the run inside `tol` at the 95th percentile and 2·tol at the
+    worst vertex, subtending at least ARC_MIN_DEG over a chord of at least
+    ARC_MIN_CHORD, and agreeing with any pinned end tangent. A circle is a
+    claim about the whole run, so a run that is only nearly circular — an
+    ellipse, a spiral, a cubic's easing — is left to the cubics."""
+    n = len(pts)
+    if n < 5:
+        return None
+    p0, p1 = pts[0], pts[-1]
+    chord = float(np.linalg.norm(p1 - p0))
+    if chord < ARC_MIN_CHORD:
+        return None
+    free, dev = fit_circle(pts)
+    if not math.isfinite(dev) or dev > tol or free.r <= 1.0:
+        return None
+    c, r, dev, worst = circle_through(p0, p1, pts, np.array([free.cx, free.cy]))
+    if dev > tol or worst > 2.0 * tol or r <= 1.0:
+        return None
+    circle = Circle(float(c[0]), float(c[1]), float(r))
+    # direction of travel from the middle vertex; the swept angle from it
+    m = pts[n // 2]
+    sweep = bool((p0[0] - c[0]) * (m[1] - c[1]) - (p0[1] - c[1]) * (m[0] - c[0]) > 0.0)
+    a0 = math.atan2(p0[1] - c[1], p0[0] - c[0])
+    a1 = math.atan2(p1[1] - c[1], p1[0] - c[0])
+    span = (a1 - a0) % (2.0 * math.pi) if sweep else (a0 - a1) % (2.0 * math.pi)
+    if math.degrees(span) < ARC_MIN_DEG or span > 2.0 * math.pi - 1e-6:
+        return None
+    if t_start is not None and _turn_deg(_normalize(t_start), _arc_tangent(c, p0, sweep)) > ARC_TANGENT_DEG:
+        return None
+    if t_end is not None and _turn_deg(_normalize(t_end), -_arc_tangent(c, p1, sweep)) > ARC_TANGENT_DEG:
+        return None
+    return split_arc(c, float(circle.r), p0, p1, sweep)
 
 
 def fit_stretch(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, t_end: np.ndarray | None = None) -> list[Segment]:
@@ -498,9 +756,13 @@ def fit_stretch(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, 
         t2 = t_end if t_end is not None else _end_tangent(pts, False)
         curve = list(fit_cubics(pts, t1, t2, tol))
     lines = lines_first(pts, tol, t_start, t_end)
-    if lines is not None and _cost(lines) <= _cost(curve):
-        return lines
-    return curve
+    best = lines if lines is not None and _cost(lines) <= _cost(curve) else curve
+    # a run that is one circle is said so, when that is no dearer: one arc
+    # against one cubic is a tie the arc wins, being the exact shape
+    arcs = fit_arc_run(pts, tol, t_start, t_end)
+    if arcs is not None and _cost(arcs) <= _cost(best):
+        return arcs
+    return best
 
 
 def _cost(segs: list[Segment]) -> float:
@@ -690,6 +952,86 @@ def try_rect(poly: np.ndarray, corners: list[int], params: CurveParams) -> Rect 
     x0, y0 = pts.min(axis=0)
     x1, y1 = pts.max(axis=0)
     return Rect(float(x0), float(y0), float(x1 - x0), float(y1 - y0))
+
+
+ROUND_RADIUS_TOL = 0.05   # corner radii of one rounded rect agree to this share of the radius (or 2·tol)
+
+
+def try_rounded_rect(poly: np.ndarray, params: CurveParams) -> RoundedRect | None:
+    """A closed outline that is four axis-aligned straight runs joined by four
+    quarter circles of one radius, tangent to the sides: an SVG `<rect rx>`.
+
+    The runs come from `line_runs` (the residual test, not corner detection —
+    a rounded corner has no corner). Each gap between two runs has to fit a
+    circle inside `tol` whose centre sits `r` in from the sides it joins, which
+    is what makes it tangent; four radii within ROUND_RADIUS_TOL of each other
+    are one radius. Anything else is not this primitive and stays a path.
+    """
+    n = len(poly)
+    if n < 16:
+        return None
+    # start at the vertex farthest from the centroid: on a rounded rect that is
+    # the middle of a corner arc, so every run lies whole inside the sequence
+    start = int(np.argmax(np.linalg.norm(poly - poly.mean(axis=0), axis=1)))
+    rolled = np.vstack([poly[start:], poly[:start]])
+    runs = line_runs(np.vstack([rolled, rolled[:1]]))
+    if len(runs) != 4:
+        return None
+    axes: list[int] = []
+    levels: list[float] = []
+    for _i, _j, c, d in runs:
+        ang = math.degrees(math.atan2(d[1], d[0])) % 180.0
+        if min(ang, 180.0 - ang) <= params.snap_axis_deg:
+            axes.append(0)          # horizontal run: fixes a y level
+            levels.append(float(c[1]))
+        elif abs(ang - 90.0) <= params.snap_axis_deg:
+            axes.append(1)          # vertical run: fixes an x level
+            levels.append(float(c[0]))
+        else:
+            return None
+    if axes[0] == axes[1] or axes[1] == axes[2] or axes[2] == axes[3] or axes[3] == axes[0]:
+        return None
+    ys = sorted(lv for a, lv in zip(axes, levels) if a == 0)
+    xs = sorted(lv for a, lv in zip(axes, levels) if a == 1)
+    if len(xs) != 2 or len(ys) != 2:
+        return None
+    x0, x1 = xs
+    y0, y1 = ys
+    if x1 - x0 < 2.0 or y1 - y0 < 2.0:
+        return None
+    radii: list[float] = []
+    for k in range(4):
+        j = runs[k][1]
+        i_next = runs[(k + 1) % 4][0]
+        gap = rolled[j:i_next + 1] if k < 3 else np.vstack([rolled[j:], rolled[:runs[0][0] + 1]])
+        # the two sides this corner joins, as inside distances from them
+        lv_a, lv_b = levels[k], levels[(k + 1) % 4]
+        x_side = lv_a if axes[k] == 1 else lv_b
+        y_side = lv_a if axes[k] == 0 else lv_b
+        sx = 1.0 if abs(x_side - x0) <= abs(x_side - x1) else -1.0
+        sy = 1.0 if abs(y_side - y0) <= abs(y_side - y1) else -1.0
+        u = np.maximum(sx * (gap[:, 0] - x_side), 0.0)
+        v = np.maximum(sy * (gap[:, 1] - y_side), 0.0)
+        # a point on a circle tangent to both sides, at inside distances u and
+        # v from them, has radius (u + v) + sqrt(2uv) — the root with the point
+        # between the centre and the corner; the points still on the sides
+        # (one distance near zero) say nothing about the radius
+        on_arc = np.minimum(u, v) > max(params.tol, 0.5)
+        if on_arc.sum() < 3:
+            return None
+        r = float(np.median((u + v)[on_arc] + np.sqrt(2.0 * u[on_arc] * v[on_arc])))
+        if r <= 1.0:
+            return None
+        centre = np.array([x_side + sx * r, y_side + sy * r])
+        dev = np.abs(np.linalg.norm(gap[on_arc] - centre, axis=1) - r)
+        if float(np.percentile(dev, 95)) > params.tol:
+            return None
+        radii.append(r)
+    rx = float(np.mean(radii))
+    if max(radii) - min(radii) > max(2.0 * params.tol, ROUND_RADIUS_TOL * rx):
+        return None
+    rx = min(rx, (x1 - x0) / 2.0, (y1 - y0) / 2.0)
+    return RoundedRect(float(x0), float(y0), float(x1 - x0), float(y1 - y0), rx)
 
 
 # --- Schneider cubic fitting -------------------------------------------------------
@@ -1232,8 +1574,23 @@ def fit_closed(poly: np.ndarray, tol: float) -> list[Segment]:
     split it and used to go to the smooth fit whole, sides barrelled; its sides
     are straight runs, and the loop is opened inside the first of them so the
     seam falls on a line. Two collinear lines meeting at the seam become one."""
-    smooth = fit_closed_smooth(poly, tol)
     n = len(poly)
+    if n >= 8:
+        # a loop that is one circle: two half arcs, so a ring's contours are
+        # circles and not chains of cubics (a single-contour circle is a
+        # <circle> before it gets here)
+        circle, dev = fit_circle(poly)
+        if math.isfinite(dev) and dev <= tol and circle.r > 1.0:
+            c = np.array([circle.cx, circle.cy])
+            if float(np.abs(np.hypot(*(poly - c).T) - circle.r).max()) <= 2.0 * tol:
+                area2 = float(np.dot(poly[:, 0], np.roll(poly[:, 1], -1)) - np.dot(poly[:, 1], np.roll(poly[:, 0], -1)))
+                sweep = area2 > 0.0
+                # the arcs' ends are free here, so they go on the circle itself:
+                # the first vertex projected onto it, and its antipode
+                u = poly[0] - c
+                p0 = c + u * (circle.r / max(float(np.linalg.norm(u)), 1e-12))
+                return split_arc(c, float(circle.r), p0, p0, sweep)
+    smooth = fit_closed_smooth(poly, tol)
     if n < 4:
         return smooth
     runs = line_runs(np.vstack([poly, poly[:1]]))
@@ -1273,6 +1630,10 @@ def fit_shape(contours: list[np.ndarray], params: CurveParams) -> Shape:
         rect = try_rect(poly, corners, params)
         if rect is not None:
             return rect
+        if not corners:
+            rounded = try_rounded_rect(poly, params)
+            if rounded is not None:
+                return rounded
     return PathShape(contours=[fit_contour_segments(poly, params)[0] for poly in contours])
 
 
@@ -1296,6 +1657,9 @@ def path_d(contours: list[list[Segment]], precision: int) -> str:
         for s in segs:
             if isinstance(s, Line):
                 parts.append(f"L{_f(s.p1[0], precision)} {_f(s.p1[1], precision)}")
+            elif isinstance(s, CircArc):
+                r = _f(s.r, precision)
+                parts.append(f"A{r} {r} 0 {int(s.large)} {int(s.sweep)} {_f(s.p1[0], precision)} {_f(s.p1[1], precision)}")
             else:
                 parts.append(
                     f"C{_f(s.c1[0], precision)} {_f(s.c1[1], precision)} {_f(s.c2[0], precision)} {_f(s.c2[1], precision)} "
@@ -1314,5 +1678,8 @@ def shape_svg(shape: Shape, attrs: str, precision: int) -> str:
         return f'<ellipse cx="{_f(shape.cx, p)}" cy="{_f(shape.cy, p)}" rx="{_f(shape.rx, p)}" ry="{_f(shape.ry, p)}" {attrs}{rot}/>'
     if isinstance(shape, Rect):
         return f'<rect x="{_f(shape.x, p)}" y="{_f(shape.y, p)}" width="{_f(shape.w, p)}" height="{_f(shape.h, p)}" {attrs}/>'
+    if isinstance(shape, RoundedRect):
+        return (f'<rect x="{_f(shape.x, p)}" y="{_f(shape.y, p)}" width="{_f(shape.w, p)}" height="{_f(shape.h, p)}" '
+                f'rx="{_f(shape.rx, p)}" {attrs}/>')
     rule = ' fill-rule="evenodd"' if len(shape.contours) > 1 else ""
     return f'<path d="{path_d(shape.contours, p)}" {attrs}{rule}/>'

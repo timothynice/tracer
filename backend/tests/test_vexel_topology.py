@@ -18,6 +18,7 @@ import pytest
 import resvg_py
 from PIL import Image, ImageDraw
 
+from bench.geometry import _arc_points
 from bench.metrics import seam_index
 from studi0trace.engines.vexel.curves import CurveParams
 from studi0trace.engines.vexel.engine import VexelEngine, VexelParams
@@ -291,7 +292,14 @@ def path_points(svg: str, fill: str) -> np.ndarray:
             break
     else:
         raise AssertionError(f"no path with fill {fill}")
-    return np.array([[float(a), float(b)] for a, b in re.findall(r"(-?\d+\.?\d*) (-?\d+\.?\d*)", d)])
+    out = []
+    for cmd, body in re.findall(r"([MLCAZ])([^MLCAZ]*)", d):
+        v = [float(x) for x in re.findall(r"-?\d*\.?\d+", body)]
+        if cmd == "A":
+            out.append(v[5:7])  # the arc's own numbers are not coordinates
+        else:
+            out.extend([v[k:k + 2] for k in range(0, len(v) - 1, 2)])
+    return np.array(out)
 
 
 def sample_path(svg: str, fill: str, per_segment: int = 60) -> np.ndarray:
@@ -304,12 +312,14 @@ def sample_path(svg: str, fill: str, per_segment: int = 60) -> np.ndarray:
         raise AssertionError(f"no path with fill {fill}")
     t = np.linspace(0.0, 1.0, per_segment)[:, None]
     out, cur, start = [], None, None
-    for cmd, body in re.findall(r"([MLCZ])([^MLCZ]*)", d):
+    for cmd, body in re.findall(r"([MLCAZ])([^MLCAZ]*)", d):
         v = [float(x) for x in re.findall(r"-?\d*\.?\d+", body)]
         if cmd == "M":
             cur = start = np.array(v[:2])
         elif cmd == "L":
             p = np.array(v[:2]); out.append(cur * (1 - t) + p * t); cur = p
+        elif cmd == "A":
+            p = np.array(v[5:7]); out.append(_arc_points(cur, p, v[0], v[3] != 0, v[4] != 0, per_segment)); cur = p
         elif cmd == "C":
             c1, c2, p = np.array(v[0:2]), np.array(v[2:4]), np.array(v[4:6])
             out.append((1 - t) ** 3 * cur + 3 * (1 - t) ** 2 * t * c1 + 3 * (1 - t) * t ** 2 * c2 + t ** 3 * p); cur = p
@@ -327,12 +337,14 @@ def path_anchors(svg: str, fill: str) -> np.ndarray:
     else:
         raise AssertionError(f"no path with fill {fill}")
     out = []
-    for cmd, body in re.findall(r"([MLCZ])([^MLCZ]*)", d):
+    for cmd, body in re.findall(r"([MLCAZ])([^MLCAZ]*)", d):
         v = [float(x) for x in re.findall(r"-?\d*\.?\d+", body)]
         if cmd in "ML":
             out.append(v[:2])
         elif cmd == "C":
             out.append(v[4:6])
+        elif cmd == "A":
+            out.append(v[5:7])
     return np.array(out)
 
 
