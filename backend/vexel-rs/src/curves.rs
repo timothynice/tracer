@@ -1154,6 +1154,10 @@ pub const SPLINE_MIN: usize = 16;
 pub const SPLINE_SPANS: usize = 24;
 pub const SPLINE_ROUNDS: usize = 5;
 pub const SPLINE_CROWD: f64 = 0.2;
+/// See the Python: knots move toward the error a few times; a bumpy span gets
+/// one more knot or the spline is declined.
+pub const EQUALISE_ROUNDS: usize = 4;
+pub const BUMP_RATIO: f64 = 0.85;
 
 /// Clamped cubic knot vector over [0, 1].
 fn knot_vector(interior: &[f64]) -> Vec<f64> {
@@ -1428,7 +1432,7 @@ pub fn fit_c2(points: &[P], t1: P, t2: P, tol: f64) -> Option<Vec<Segment>> {
                 }
             }
             if far < tol {
-                return Some(spline_cubics(&ctrl, &knots));
+                return finish_spline(points, &u, interior.clone(), ctrl, knots, moved, t1, t2, tol);
             }
             moved = reparametrize_spline(points, &ctrl, &knots, &moved);
         }
@@ -1453,6 +1457,110 @@ pub fn fit_c2(points: &[P], t1: P, t2: P, tol: f64) -> Option<Vec<Segment>> {
         interior.sort_by(|a, b| a.partial_cmp(b).unwrap());
     }
     None
+}
+
+/// The largest point error in each span, spans bounded by the interior knots.
+fn span_errors(points: &[P], moved: &[f64], knots: &[f64], ctrl: &[P], interior: &[f64]) -> Vec<f64> {
+    let drawn = spline_at(ctrl, knots, moved);
+    let mut edges = vec![0.0];
+    edges.extend_from_slice(interior);
+    edges.push(1.0);
+    let mut out = vec![0.0f64; edges.len() - 1];
+    for k in 0..edges.len() - 1 {
+        for i in 0..points.len() {
+            if moved[i] >= edges[k] && moved[i] <= edges[k + 1] {
+                let d = norm(sub(drawn[i], points[i]));
+                if d > out[k] {
+                    out[k] = d;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Fit the spline with these knots; Some((ctrl, knots, moved)) when inside `tol`.
+fn solve_spans(points: &[P], u: &[f64], interior: &[f64], t1: P, t2: P, tol: f64) -> Option<(Vec<P>, Vec<f64>, Vec<f64>)> {
+    let n_ctrl = interior.len() + 4;
+    let knots = knot_vector(interior);
+    let mut moved = u.to_vec();
+    for _ in 0..SPLINE_ROUNDS {
+        let ctrl = spline_controls(points, &moved, &knots, n_ctrl, t1, t2)?;
+        let drawn = spline_at(&ctrl, &knots, &moved);
+        let far = (0..points.len()).map(|i| norm(sub(drawn[i], points[i]))).fold(0.0f64, f64::max);
+        if far < tol {
+            return Some((ctrl, knots, moved));
+        }
+        moved = reparametrize_spline(points, &ctrl, &knots, &moved);
+    }
+    None
+}
+
+fn bumpy(cubics: &[Segment]) -> Option<usize> {
+    for (k, c) in cubics.iter().enumerate() {
+        if let Segment::Cubic { p0, c1, c2, p1 } = c {
+            let chord = norm(sub(*p1, *p0));
+            if chord > 1e-9 && (norm(sub(*c1, *p0)) > BUMP_RATIO * chord || norm(sub(*c2, *p1)) > BUMP_RATIO * chord) {
+                return Some(k);
+            }
+        }
+    }
+    None
+}
+
+/// Even out the per-span error, then refuse a bumpy span. See the Python `_finish_spline`.
+fn finish_spline(points: &[P], u: &[f64], mut interior: Vec<f64>, mut ctrl: Vec<P>, mut knots: Vec<f64>, mut moved: Vec<f64>, t1: P, t2: P, tol: f64) -> Option<Vec<Segment>> {
+    if !interior.is_empty() {
+        let mut errs = span_errors(points, &moved, &knots, &ctrl, &interior);
+        for _ in 0..EQUALISE_ROUNDS {
+            let mut edges = vec![0.0];
+            edges.extend_from_slice(&interior);
+            edges.push(1.0);
+            let mut trial: Vec<f64> = Vec::with_capacity(interior.len());
+            for (k, knot) in interior.iter().enumerate() {
+                let (left, right) = (errs[k], errs[k + 1]);
+                if left + right <= 1e-12 {
+                    trial.push(*knot);
+                    continue;
+                }
+                let width = (knot - edges[k]).min(edges[k + 2] - knot);
+                trial.push(knot + 0.25 * (right - left) / (right + left) * width);
+            }
+            let Some((c2, k2, m2)) = solve_spans(points, u, &trial, t1, t2, tol) else { break };
+            let e2 = span_errors(points, &m2, &k2, &c2, &trial);
+            let (max2, min2) = (e2.iter().cloned().fold(f64::NEG_INFINITY, f64::max), e2.iter().cloned().fold(f64::INFINITY, f64::min));
+            let (max1, min1) = (errs.iter().cloned().fold(f64::NEG_INFINITY, f64::max), errs.iter().cloned().fold(f64::INFINITY, f64::min));
+            if max2 < tol && (max2 - min2) < (max1 - min1) {
+                ctrl = c2;
+                knots = k2;
+                moved = m2;
+                interior = trial;
+                errs = e2;
+            } else {
+                break;
+            }
+        }
+    }
+    let _ = &moved;
+    let mut cubics = spline_cubics(&ctrl, &knots);
+    if let Some(bump) = bumpy(&cubics) {
+        let mut edges = vec![0.0];
+        edges.extend_from_slice(&interior);
+        edges.push(1.0);
+        let mid = 0.5 * (edges[bump] + edges[bump + 1]);
+        if interior.iter().any(|k| (mid - k).abs() < 1e-9) {
+            return None;
+        }
+        let mut more = interior.clone();
+        more.push(mid);
+        more.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let (c3, k3, _m3) = solve_spans(points, u, &more, t1, t2, tol)?;
+        cubics = spline_cubics(&c3, &k3);
+        if bumpy(&cubics).is_some() {
+            return None;
+        }
+    }
+    Some(cubics)
 }
 
 pub const SPLIT_REACH: usize = 2;

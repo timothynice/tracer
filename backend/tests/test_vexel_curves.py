@@ -257,3 +257,43 @@ def test_the_spline_declines_rather_than_miss_the_tolerance():
     poly = np.column_stack([np.arange(120.0), rng.normal(0.0, 6.0, 120)])
     assert curves.fit_c2(poly, np.array([1.0, 0.0]), np.array([-1.0, 0.0]), 0.05) is None
     assert len(fit_open(poly, 0.05)) > 1
+
+
+def _noisy_s(n: int = 300, sigma: float = 0.05, seed: int = 3) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    x = np.linspace(0, 120, n)
+    return np.column_stack([x, 25 * np.sin(x / 120 * 2 * np.pi)]) + rng.normal(0, sigma, (n, 2))
+
+
+def _span_max_errors(pts: np.ndarray, cubics) -> list[float]:
+    """Each point's distance to the nearest span, credited to that span."""
+    t = np.linspace(0, 1, 400)[:, None]  # 0.1 px steps on a 40 px span, so the sampling overstates by a few hundredths
+    curves_ = [(1 - t) ** 3 * c.p0 + 3 * (1 - t) ** 2 * t * c.c1 + 3 * (1 - t) * t ** 2 * c.c2 + t ** 3 * c.p1 for c in cubics]
+    dists = np.stack([np.sqrt(((pts[:, None, :] - q[None, :, :]) ** 2).sum(-1)).min(axis=1) for q in curves_], axis=1)
+    owner = dists.argmin(axis=1)
+    return [float(dists[owner == k, k].max()) if (owner == k).any() else 0.0 for k in range(len(cubics))]
+
+
+def test_spline_error_is_spread_evenly_across_spans():
+    """One span at the tolerance and its neighbour at nothing is a knot in the
+    wrong place. After the fit the knots are moved toward the error."""
+    pts = _noisy_s()
+    t1 = curves._normalize(pts[3] - pts[0])
+    t2 = curves._normalize(pts[-4] - pts[-1])
+    cubics = curves.fit_c2(pts, t1, t2, 0.4)
+    assert cubics is not None and len(cubics) >= 3
+    errs = _span_max_errors(pts, cubics)
+    assert max(errs) < 0.45, errs
+    assert max(errs) - min(errs) < 0.16, errs
+
+
+def test_no_spline_span_has_a_bump():
+    pts = _noisy_s(seed=5)
+    t1 = curves._normalize(pts[3] - pts[0])
+    t2 = curves._normalize(pts[-4] - pts[-1])
+    cubics = curves.fit_c2(pts, t1, t2, 0.4)
+    assert cubics is not None
+    for c in cubics:
+        chord = np.linalg.norm(c.p1 - c.p0)
+        assert np.linalg.norm(c.c1 - c.p0) <= curves.BUMP_RATIO * chord
+        assert np.linalg.norm(c.c2 - c.p1) <= curves.BUMP_RATIO * chord

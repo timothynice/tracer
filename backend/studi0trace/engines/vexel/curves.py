@@ -767,6 +767,15 @@ SPLINE_MIN = 16
 SPLINE_SPANS = 24
 SPLINE_ROUNDS = 5
 SPLINE_CROWD = 0.2
+# Once a spline inside the tolerance is found, its interior knots are moved a
+# few times toward whichever neighbouring span carries the larger error, so the
+# error is spread evenly instead of one span sitting at the tolerance and its
+# neighbour at nothing. A span whose control arm is longer than BUMP_RATIO of
+# its chord is a bump — a highly curved segment where the curve is not — and
+# earns one more knot at its middle; if that does not settle it the spline is
+# declined and the split-and-recurse fit answers.
+EQUALISE_ROUNDS = 4
+BUMP_RATIO = 0.85
 
 
 def _knot_vector(interior: list[float]) -> np.ndarray:
@@ -912,7 +921,7 @@ def fit_c2(points: np.ndarray, t1: np.ndarray, t2: np.ndarray, tol: float) -> li
             off = np.linalg.norm(_bspline_basis(moved, knots, n_ctrl) @ ctrl - points, axis=1)
             worst = int(np.argmax(off))
             if float(off[worst]) < tol:
-                return _spline_cubics(ctrl, knots)
+                return _finish_spline(points, u, list(interior), ctrl, knots, moved, t1, t2, tol)
             moved = _reparametrize_spline(points, ctrl, knots, moved)
         # One more span, cut where the fit is furthest out - the same place the
         # split-and-recurse fit would have cut, except that the spline stays one
@@ -930,6 +939,81 @@ def fit_c2(points: np.ndarray, t1: np.ndarray, t2: np.ndarray, tol: float) -> li
             return None
         interior = sorted([*interior, cut])
     return None
+
+
+def _span_errors(points: np.ndarray, moved: np.ndarray, knots: np.ndarray, ctrl: np.ndarray, interior: list[float]) -> np.ndarray:
+    """The largest point error in each span, spans bounded by the interior knots."""
+    off = np.linalg.norm(_bspline_basis(moved, knots, len(ctrl)) @ ctrl - points, axis=1)
+    edges = [0.0, *interior, 1.0]
+    out = np.zeros(len(edges) - 1)
+    for k in range(len(edges) - 1):
+        sel = (moved >= edges[k]) & (moved <= edges[k + 1])
+        if sel.any():
+            out[k] = float(off[sel].max())
+    return out
+
+
+def _solve_spans(points: np.ndarray, u: np.ndarray, interior: list[float], t1: np.ndarray, t2: np.ndarray, tol: float):
+    """Fit the spline with these knots; (ctrl, knots, moved) when inside `tol`, else None."""
+    n_ctrl = len(interior) + 4
+    knots = _knot_vector(interior)
+    moved = u.copy()
+    for _ in range(SPLINE_ROUNDS):
+        ctrl = _spline_controls(points, moved, knots, n_ctrl, t1, t2)
+        if ctrl is None:
+            return None
+        off = np.linalg.norm(_bspline_basis(moved, knots, n_ctrl) @ ctrl - points, axis=1)
+        if float(off.max()) < tol:
+            return ctrl, knots, moved
+        moved = _reparametrize_spline(points, ctrl, knots, moved)
+    return None
+
+
+def _bumpy(cubics: list[Cubic]) -> int | None:
+    for k, c in enumerate(cubics):
+        chord = float(np.linalg.norm(c.p1 - c.p0))
+        if chord > 1e-9 and (float(np.linalg.norm(c.c1 - c.p0)) > BUMP_RATIO * chord or float(np.linalg.norm(c.c2 - c.p1)) > BUMP_RATIO * chord):
+            return k
+    return None
+
+
+def _finish_spline(points, u, interior, ctrl, knots, moved, t1, t2, tol) -> list[Cubic] | None:
+    """Even out the per-span error, then refuse a bumpy span. See EQUALISE_ROUNDS."""
+    if interior:
+        errs = _span_errors(points, moved, knots, ctrl, interior)
+        for _ in range(EQUALISE_ROUNDS):
+            edges = [0.0, *interior, 1.0]
+            trial: list[float] = []
+            for k, knot in enumerate(interior):
+                left, right = float(errs[k]), float(errs[k + 1])
+                if left + right <= 1e-12:
+                    trial.append(knot)
+                    continue
+                width = min(knot - edges[k], edges[k + 2] - knot)
+                trial.append(knot + 0.25 * (right - left) / (right + left) * width)
+            solved = _solve_spans(points, u, trial, t1, t2, tol)
+            if solved is None:
+                break
+            c2, k2, m2 = solved
+            e2 = _span_errors(points, m2, k2, c2, trial)
+            if float(e2.max()) < tol and float(e2.max() - e2.min()) < float(errs.max() - errs.min()):
+                ctrl, knots, moved, interior, errs = c2, k2, m2, trial, e2
+            else:
+                break
+    cubics = _spline_cubics(ctrl, knots)
+    bump = _bumpy(cubics)
+    if bump is not None:
+        edges = [0.0, *interior, 1.0]
+        mid = 0.5 * (edges[bump] + edges[bump + 1])
+        if any(abs(mid - k) < 1e-9 for k in interior):
+            return None
+        solved = _solve_spans(points, u, sorted([*interior, mid]), t1, t2, tol)
+        if solved is None:
+            return None
+        cubics = _spline_cubics(solved[0], solved[1])
+        if _bumpy(cubics) is not None:
+            return None
+    return cubics
 
 
 SPLIT_REACH = 2
