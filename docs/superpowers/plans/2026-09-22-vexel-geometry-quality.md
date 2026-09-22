@@ -46,6 +46,7 @@ Filled in as tasks land; every row quotes `bench compare` output.
 | Tasks 3-6 | 0.264 | 0.721 | 338 | 0.9555 | 20424 | 7326 |
 | Task 7 | 0.264 | 0.721 | 338 | 0.9555 | 20482 | 7326 |
 | Task 8 | 0.264 | 0.721 | 338 | 0.9554 | 20482 | 7326 |
+| Tasks 9-10 | 0.260 | 0.720 | 315 | 0.9555 | 20155 | 7341 |
 
 The Tasks 3-5 row was measured under the old seam metric (outline 0.384, seam 19665) and is superseded.
 `seam_ppm` on logo is up because two sub-pixel-scale items dominate it: `thin-mark-128` (Rust does not recover its
