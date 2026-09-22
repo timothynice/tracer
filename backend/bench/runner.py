@@ -22,6 +22,7 @@ from studi0trace.imaging.intake import load_upload
 NUMERIC_KEYS = (
     "ssim", "delta_e_mean", "delta_e_p95", "edge_f1", "alpha_mae", "banding_index", "smooth_fraction", "seam_ppm",
     "paths", "nodes", "bytes", "gradients", "unique_fills", "path_ratio", "elapsed_ms",
+    "outline_px", "outline_p99_px", "junction_px", "line_debt_px", "line_debt_segments", "nodes_per_100px",
     "fidelity", "smoothness", "economy", "score",
 )
 THUMB = 160
@@ -59,7 +60,8 @@ def score_item(item: Item, engine_id: str, params: dict, weights: Weights, media
             media[f"{item.id}|{engine_id}"] = {"src": _png_b64(src_rgba)}
         return record
 
-    m = metrics.all_metrics(src_rgba, out_rgba, result.svg, result.elapsed_ms, item.truth_paths, weights)
+    truth_svg = item.truth_svg.read_text(encoding="utf-8") if item.truth_svg and item.truth_svg.exists() else None
+    m = metrics.all_metrics(src_rgba, out_rgba, result.svg, result.elapsed_ms, item.truth_paths, weights, truth_svg=truth_svg)
     record["metrics"] = m
     if media is not None:
         de = metrics.delta_e_map(to_rgb_on_white(src_rgba), to_rgb_on_white(out_rgba))

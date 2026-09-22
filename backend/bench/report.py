@@ -11,7 +11,8 @@ SUMMARY_COLS = [
     ("score", "Score", "{:.3f}"), ("fidelity", "Fidelity", "{:.3f}"), ("smoothness", "Smooth", "{:.3f}"),
     ("economy", "Economy", "{:.3f}"), ("ssim", "SSIM", "{:.3f}"), ("delta_e_mean", "ΔE mean", "{:.2f}"),
     ("delta_e_p95", "ΔE p95", "{:.1f}"), ("edge_f1", "Edge F1", "{:.3f}"), ("alpha_mae", "α err", "{:.3f}"),
-    ("banding_index", "Banding", "{:.2f}"), ("paths", "Paths", "{:.0f}"), ("bytes", "Bytes", "{:.0f}"),
+    ("banding_index", "Banding", "{:.2f}"), ("outline_px", "Outline px", "{:.3f}"), ("junction_px", "Junction px", "{:.3f}"),
+    ("line_debt_px", "Line debt", "{:.0f}"), ("paths", "Paths", "{:.0f}"), ("bytes", "Bytes", "{:.0f}"),
     ("elapsed_ms", "ms", "{:.0f}"),
 ]
 ITEM_COLS = [c for c in SUMMARY_COLS if c[0] not in ("economy",)]

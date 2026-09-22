@@ -16,6 +16,7 @@ from skimage.metrics import structural_similarity
 from skimage.morphology import dilation, disk
 
 from bench.config import DEFAULT_WEIGHTS, Weights
+from bench.geometry import line_debt, outline_error
 from bench.raster import luminance, rasterize, to_rgb_on_white
 from studi0trace.imaging.svg import svg_stats
 
@@ -164,6 +165,7 @@ def all_metrics(
     elapsed_ms: float,
     truth_paths: int | None = None,
     weights: Weights = DEFAULT_WEIGHTS,
+    truth_svg: str | None = None,
 ) -> dict:
     src_rgb = to_rgb_on_white(src_rgba)
     out_rgb = to_rgb_on_white(out_rgba)
@@ -179,6 +181,11 @@ def all_metrics(
         "banding_index": banding,
         "smooth_fraction": smooth_fraction,
         "seam_ppm": seam_index(svg, src_rgba),
+        # Geometry against the vector truth, where the corpus has it. The colour
+        # metrics above cannot see a tip cut short or a straight edge drawn bowed.
+        **(outline_error(truth_svg, svg, src_rgba.shape[1], src_rgba.shape[0]) if truth_svg
+           else {"outline_px": None, "outline_p99_px": None, "junction_px": None}),
+        **line_debt(svg),
         **stats,
         "path_ratio": (stats["paths"] / truth_paths) if truth_paths else None,
         "elapsed_ms": elapsed_ms,
