@@ -936,7 +936,7 @@ definition unpainted), Rust unit tests, `svgdoc.test.ts`.
 **Interfaces:**
 - Produces: `refine_render.refine(arcs: list[Arc], fills, rank, rgb, alpha, iterations: int = 3, step: float = 0.1) -> None`: for each open arc, rasterise the two adjacent shapes' current geometry in a crop 3 px around the arc at 4× (Python: resvg on a crop SVG; Rust: tiny-skia), box-filter to 1×, compare with the source in the band, and coordinate-descend the normal offset of each interior control point (lines stay lines: only their two ends move, jointly for all arcs at a node), accepting a move only when the band error falls.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_refinement_removes_a_planted_half_pixel_offset():
@@ -946,11 +946,11 @@ def test_refinement_removes_a_planted_half_pixel_offset():
     assert outline_error(truth, svg_ref, 256, 256)["outline_px"] < 0.8 * outline_error(truth, svg_plain, 256, 256)["outline_px"]
 ```
 
-- [ ] **Step 2: Run to verify it fails** (`refine` is not a parameter).
+- [x] **Step 2: Run to verify it fails** (`refine` is not a parameter).
 
-- [ ] **Step 3: Implement**, Python first as the spec, then Rust with `tiny-skia`; the diffcheck stage compares refined arc vertices to 0.05 px RMS.
+- [x] **Step 3: Implement**, Python first as the spec, then Rust with `tiny-skia`; the diffcheck stage compares refined arc vertices to 0.05 px RMS.
 
-- [ ] **Step 4: Verify** on the corpus with `refine=true` as a sweep (`python -m bench sweep --engine vexel --param refine=false:true`): `outline_px` down on `logo` and real items, `elapsed_ms` within 3×. Default stays off until the sweep says otherwise. Commit `feat(vexel): opt-in render-and-compare refinement of the boundary graph`.
+- [x] **Step 4: Verify** on the corpus with `refine=true` as a sweep (`python -m bench sweep --engine vexel --param refine=false:true`): `outline_px` down on `logo` and real items, `elapsed_ms` within 3×. Default stays off until the sweep says otherwise. Commit `feat(vexel): opt-in render-and-compare refinement of the boundary graph`.
 
 ---
 
@@ -964,6 +964,23 @@ agreement there does not mean edge agreement). 4–22 s per image in Python thro
 constraints made hard: only interior control points and joints move, along the local normal, nodes and frame
 vertices never; a move needs a clear gain over a noise floor; the crop holds only the two shapes on either side of
 the arc; opt-in behind `refine`.
+
+**As built.** `VexelParams.refine` (toggle, group Curves, "Render refinement", default off). The engine's assembly
+was refactored into records (labels painted, whole-shape primitive or rings, paint) fitted once, so a candidate move
+only regenerates the markup of the two shapes beside the arc from `bnd.segments` — the first cut re-ran the whole
+assembly (primitive fits included) per candidate and took over ten minutes on a 256 px wedge; now the overhead is
+5–30 %. `refine_render.refine(arcs, neighbours, src)`: three passes; nodes first (moved ±0.1 px in x and y with every
+arc that meets them and the arm next to each end; nodes on the frame or against the outside never, nor wedge tips — pixels barely change along a 15° tip's bisector and the first run moved one 0.13 px off), then each cubic
+arm and each interior joint along its normal (a joint carries its arms so the curve stays G1; circular arcs are left
+exact). The crop is a 16 px window, integer-aligned, rendered by resvg at 4×, averaged back and compared over white
+with the source inside a 2 px band of the arc (`cKDTree` on `arc.pts`); a move is kept when the band error falls by
+more than `NOISE = 0.02` grey levels. Measured against vector truth: synthetic wedge 0.0320 → 0.0275, tilted-squares
+0.0086 → 0.0065, overlap 0.0260 → 0.0182, wedge-fan 0.0816 → 0.0622, blobs 0.0746 → 0.0581, triangle-bar 0.0055 →
+0.0055 (exact stays exact). The plan's `tiny-skia` Rust twin is **not built**: refinement needs a renderer, the gain
+is a few hundredths of a pixel on an opt-in switch, and a second rasteriser is a large dependency for it; instead
+`VexelEngine.trace` routes `refine=True` to the Python pipeline whatever backend is selected, the Rust
+`VexelParams` accepts the flag, and CLAUDE.md names this as the one deliberate divergence. The diffcheck `refined`
+stage therefore does not exist either. Default stays off.
 
 ### Task 12: Learned corner/smooth classifier from corpus truth
 

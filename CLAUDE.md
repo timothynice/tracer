@@ -75,6 +75,16 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   outlines agree to 0.1 px after translation) are written once into `<defs>`
   and painted as `<use href x y fill>` (`vexel/reuse.py`); anything that
   reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`.
+- `refine=True` (off by default) runs `vexel/refine_render.py` after the fit:
+  for each node and each interior control point, the two shapes on either
+  side are rendered with resvg into an integer-aligned 16 px crop at 4×,
+  averaged back to source pixels and compared with the source in a 2 px band
+  along the arc; a 0.1 px nudge (a node with every arc that meets it, a
+  control point along its normal) is kept when the band error falls by more
+  than 0.02 grey levels. Nodes on the frame and wedge tips never move. It needs a renderer,
+  so it runs in Python only: `VexelEngine.trace` routes `refine=True` to the
+  Python pipeline whatever `VEXEL_BACKEND` says. That is the one place the
+  engines differ on purpose.
 - After the fit, `vexel/regularity.py` clusters every straight segment's
   direction across the boundary graph and snaps clusters carrying 40 px or more
   to one direction (axis within `snap_axis_deg`, exactly perpendicular to a

@@ -284,6 +284,7 @@ mod python {
         get!("corner_threshold", corner_threshold, f64);
         get!("curve_tolerance", curve_tolerance, f64);
         get!("shape_fitting", shape_fitting, bool);
+        get!("refine", refine, bool);
         get!("strokes", strokes, bool);
         get!("shadows", shadows, bool);
         get!("stroke_tolerance", stroke_tolerance, f64);

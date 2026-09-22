@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from typing import ClassVar, Literal
 
 import numpy as np
@@ -19,7 +20,7 @@ from skimage.segmentation import relabel_sequential
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
 from studi0trace.engines.vexel.boundary import contours, coverage_field, thin_coverage
-from studi0trace.engines.vexel import reuse
+from studi0trace.engines.vexel import refine_render, reuse
 from studi0trace.engines.vexel.curves import CurveParams, PathShape, Shape, fit_shape, shape_svg
 from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import MergeParams, adjacency, merge_regions
@@ -90,6 +91,10 @@ class VexelParams(BaseModel):
     shape_fitting: bool = Field(
         True, description="Emit circles, ellipses and rectangles as primitives when they fit",
         json_schema_extra={"ui": {"control": "toggle", "group": "Curves", "label": "Whole-shape fitting"}},
+    )
+    refine: bool = Field(
+        False, description="Render each edge's two shapes and nudge the curve until the pixels match the source (slow)",
+        json_schema_extra={"ui": {"control": "toggle", "group": "Curves", "label": "Render refinement"}},
     )
     strokes: bool = Field(
         True, description="Recover thin lines as stroked centreline paths instead of filled slivers",
@@ -181,6 +186,17 @@ def _ring_area(poly: np.ndarray) -> float:
     return abs(0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
 
 
+@dataclass
+class _Record:
+    """One painted shape as the assembly sees it: the labels it paints, a
+    whole-shape primitive or the rings whose fitted arcs make its path, its paint."""
+
+    member: frozenset[int]
+    primitive: Shape | None
+    rings: list
+    attrs: str
+
+
 def _shape_from_rings(bnd, rings, member, params: CurveParams):
     """A shape's geometry, assembled from the arcs its rings walk.
 
@@ -226,7 +242,9 @@ class VexelEngine:
         p = params if isinstance(params, VexelParams) else VexelParams.model_validate(params)
         started = time.perf_counter()
         rgba = np.asarray(image.image.convert("RGBA"), dtype=np.uint8)
-        if backend() == "rust":
+        if backend() == "rust" and not p.refine:
+            # Render refinement asks a renderer (resvg) and lives in Python only;
+            # a deliberate divergence, documented in CLAUDE.md, not an accident.
             # The bytes are copied because the trace runs with the GIL released,
             # so it cannot hold a reference into a Python buffer. One copy of
             # 4·w·h against a couple of hundred milliseconds of tracing.
@@ -465,15 +483,16 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         rank={lab: i for i, lab in enumerate(order)} if stacked else None,
     )
 
+    # Every shape as it stands in the graph, fitted once: a record holds the
+    # labels it paints, a whole-shape primitive or the rings whose fitted arcs
+    # make its path, and its paint. A stroke's finished markup stands as a string.
     defs: list[str] = []
-    # (shape, attrs) in paint order; a stroke's finished markup stands as a
-    # string. Repeated shapes are written once into defs and used (`reuse`).
-    pending: list[tuple[Shape, str] | str] = []
+    records: list[_Record | str] = []
     for i, lab in enumerate(order):
         if lab in invisible:
             continue  # transparent canvas or hole: nothing to paint
         if lab in stroke_of:
-            pending.append(stroke_of[lab][1])
+            records.append(stroke_of[lab][1])
         if lab in skip:
             continue
         fill = fill_override.get(lab, fills[lab])
@@ -489,23 +508,45 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             if not polys:
                 continue
             polys.sort(key=lambda c: -abs(0.5 * (np.dot(c[:, 0], np.roll(c[:, 1], -1)) - np.dot(c[:, 1], np.roll(c[:, 0], -1)))))
-            shape = fit_shape(polys, curve_params)
             d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
             if d:
                 defs.append(d)
-            pending.append((shape, attrs + extra))
+            records.append(_Record(frozenset([lab]), fit_shape(polys, curve_params), [], attrs + extra))
             continue
         member = shape_labels(lab, enc, stacked, invisible)
         rings = [r for r in bnd.rings(member) if r]
         if not rings:
             continue
         rings.sort(key=lambda r: -_ring_area(bnd.polyline(r)))
-        shape = _shape_from_rings(bnd, rings, member, curve_params)
+        primitive = None
+        if len(rings) == 1 and curve_params.shape_fitting:
+            candidate = fit_shape([bnd.polyline(rings[0])], curve_params)
+            if not isinstance(candidate, PathShape):
+                primitive = candidate
         d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
         if d:
             defs.append(d)
-        pending.append((shape, attrs + extra))
+        records.append(_Record(frozenset(member), primitive, rings, attrs + extra))
 
+    def shape_of(rec: _Record) -> Shape:
+        if rec.primitive is not None:
+            return rec.primitive
+        return PathShape(contours=[bnd.segments(r, rec.member) for r in rec.rings])
+
+    if p.refine:
+        # Ask the renderer: the two shapes on either side of each arc, drawn as
+        # they stand, against the source pixels along the arc.
+        all_defs = "".join(defs)
+
+        def neighbours(labels: tuple[int, ...]) -> tuple[str, list[str]]:
+            return all_defs, [
+                refine_render.element_markup(shape_of(rec), rec.attrs, p.path_precision)
+                for rec in records if not isinstance(rec, str) and (rec.member & set(labels))
+            ]
+
+        refine_render.refine(bnd.arcs, neighbours, rgba)
+
+    pending: list[tuple[Shape, str] | str] = [rec if isinstance(rec, str) else (shape_of(rec), rec.attrs) for rec in records]
     elements = _emit(pending, p.path_precision, defs)
     body = f"<defs>{''.join(defs)}</defs>" if defs else ""
     return f'<svg {SVG_NS} viewBox="0 0 {width} {height}">{body}{"".join(elements)}</svg>'

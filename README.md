@@ -50,7 +50,8 @@ shadows. Instead of quantising colours and tracing bands, it:
    boundary graph (`vexel/regularity.py`), makes a **mirror- or rotationally
    symmetric** mark exactly so (`vexel/symmetry.py`), writes a **repeated shape
    once** and paints its copies with `<use>` (`vexel/reuse.py`), and
-   otherwise G1 cubic Béziers;
+   otherwise G1 cubic Béziers — and, with **Render refinement** on, renders each
+   edge's two shapes and nudges the curve until the pixels match the source;
 8. recovers thin lines as **stroked centreline paths** (`fill="none"`,
    measured `stroke-width`, cap style read from the source) instead of
    filled slivers;
