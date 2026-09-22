@@ -19,8 +19,14 @@ import resvg_py
 from PIL import Image, ImageDraw
 
 from bench.metrics import seam_index
+from studi0trace.engines.vexel.curves import CurveParams
 from studi0trace.engines.vexel.engine import VexelEngine, VexelParams
-from studi0trace.engines.vexel.topology import Arc, _runs
+from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
+from studi0trace.engines.vexel.merge import MergeParams, merge_regions
+from studi0trace.engines.vexel.partition import discontinuity, initial_labels
+from studi0trace.engines.vexel.prepare import prepare
+from studi0trace.engines.vexel.weights import interior_weights
+from studi0trace.engines.vexel.topology import Arc, _extend_wedges, _mix_share, _runs
 from studi0trace.imaging.intake import load_upload
 from tests.conftest import encode
 
@@ -124,3 +130,109 @@ def test_arc_knows_whether_it_is_a_loop():
     loop = Arc(pair=(1, 2), pts=np.zeros((4, 2)), n0=None, n1=None)
     span = Arc(pair=(1, 2), pts=np.zeros((4, 2)), n0=7, n1=9)
     assert loop.closed and not span.closed
+
+
+def cut_off_wedge(size: int = 64, over: int = 8, start: float = 2.4, taper: float = 0.04):
+    """A pale wedge narrowing to nothing between white and blue, supersampled.
+
+    Returns (rgb, labels, wedge label). The labels are each pixel's majority
+    owner, which is the best a hard partition can do and is exactly where the
+    defect comes from: below a pixel wide there is no pixel to give the wedge, so
+    the label stops while the ink carries on. Here the label runs out at row 48
+    and the artwork reaches row 58.
+    """
+    white, pale, blue = (
+        np.array([255.0, 255.0, 255.0, 255.0]),
+        np.array([150.0, 215.0, 245.0, 255.0]),
+        np.array([20.0, 60.0, 200.0, 255.0]),
+    )
+    cover = np.zeros((size, size, 3))
+    for r in range(size * over):
+        y = (r + 0.5) / over
+        half = max(0.0, start - taper * y)
+        for c in range(size * over):
+            x = (c + 0.5) / over
+            which = 0 if x < size / 2 - half else (1 if x < size / 2 + half else 2)
+            cover[r // over, c // over, which] += 1
+    cover /= over * over
+    rgb = cover[..., 0:1] * white + cover[..., 1:2] * pale + cover[..., 2:3] * blue
+    labels = (np.argmax(cover, axis=2) + 1).astype(np.int32)
+    fills = {1: Solid(rgba=white), 2: Solid(rgba=pale), 3: Solid(rgba=blue)}
+    return rgb[..., :3], labels, fills, cover[..., 1]
+
+
+def test_a_region_cut_off_at_a_point_is_handed_its_sliver_back():
+    """The defect: a hard partition truncates an acute wedge, and the trace then
+    shows a blunt cut where the artwork has a long fine taper."""
+    rgb, labels, fills, truth = cut_off_wedge()
+    label_reach = int(np.nonzero((labels == 2).any(axis=1))[0].max())
+    ink_reach = int(np.nonzero(truth.sum(axis=1) > 0.02)[0].max())
+    assert ink_reach > label_reach + 5, "the fixture is not truncating the wedge"
+
+    padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    out = _extend_wedges(
+        padded, rgb, np.ones(labels.shape),
+        lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+        CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True),
+    )
+    gained = np.argwhere(out != padded)
+    assert len(gained) >= 3, "the wedge was left cut off"
+    assert {int(out[r, c]) for r, c in gained} == {2}, "something other than the wedge was moved"
+    reached = max(int(r) - 1 for r, _ in gained)
+    assert label_reach < reached <= ink_reach, f"reached row {reached}, ink runs to {ink_reach}"
+
+
+def test_the_sliver_stays_four_connected():
+    """`_directed_rings` breaks a diagonal touch the four-connected way, so a
+    chain that only meets at the corners comes back as one-pixel islands."""
+    rgb, labels, fills, _ = cut_off_wedge()
+    padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    out = _extend_wedges(
+        padded, rgb, np.ones(labels.shape),
+        lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+        CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True),
+    )
+    from scipy import ndimage
+
+    before = ndimage.label(padded == 2, np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]))[1]
+    after = ndimage.label(out == 2, np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]))[1]
+    assert after == before == 1, f"the wedge went from {before} four-connected pieces to {after}"
+
+
+def test_mix_share_reads_the_third_ink_out_of_a_mixture():
+    black = np.array([[0.0, 0.0, 0.0, 255.0]])
+    white = np.array([[255.0, 255.0, 255.0, 255.0]])
+    red = np.array([[255.0, 0.0, 0.0, 255.0]])
+    assert _mix_share(red, red, black, white)[0] == 1.0
+    assert _mix_share(black, red, black, white)[0] == 0.0
+    assert 0.4 < _mix_share((red + white) / 2, red, black, white)[0] < 0.6
+
+
+def test_nothing_is_handed_back_where_no_region_was_cut_off():
+    """Two regions meeting cleanly must be left alone: the extension only fires
+    where a third region's ink actually runs between them."""
+    size = 48
+    img = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+    ImageDraw.Draw(img).rectangle([0, 0, size // 2, size], fill=(20, 60, 200, 255))
+    rgba_in = np.asarray(Image.open(io.BytesIO(encode(img))).convert("RGBA"), dtype=np.uint8)
+
+    prep = prepare(rgba_in)
+    grad = discontinuity(prep.features)
+    labels = merge_regions(
+        initial_labels(grad, prep.features, min_region=6), prep.features,
+        MergeParams(detail=6.0, gradients=True), grad,
+    )
+    ys, xs = np.mgrid[0:size, 0:size]
+    xs = xs.astype(float) + 0.5
+    ys = ys.astype(float) + 0.5
+    rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
+    fills = {}
+    for lab in (int(i) for i in np.unique(labels) if i):
+        m = labels == lab
+        fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], FitParams(gradients=True, max_stops=4, tol=3.0),
+                              weights=interior_weights(m))
+    padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    out = _extend_wedges(padded, prep.rgb, prep.alpha,
+                         lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+                         CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
+    assert int((out != padded).sum()) == 0

@@ -45,7 +45,9 @@ from studi0trace.engines.vexel.curves import (
     CurveParams,
     Line,
     Segment,
+    _end_tangent,
     fit_contour_segments,
+    fit_cubics,
     _line_through,
     _normalize,
     fit_open,
@@ -77,6 +79,15 @@ TAPER = 0.0
 # below it: an error larger than the offset would let the copy wander back over
 # the edge it exists to cover.
 UNDER_TOL = 0.6
+# Largest angle between a region's two arcs at a node that still counts as the
+# region closing to a point rather than turning a corner.
+WEDGE_ANGLE = 75.0
+# A cut-off region is handed back pixels while its share of the mixture holds
+# above this, allowing this many misses along the way, and only if the run it
+# collects is at least this long — one stray pixel is noise, not a taper.
+WEDGE_FLOOR = 0.35
+WEDGE_PATIENCE = 2
+WEDGE_RUN = 3
 # How far past the two pixels either side of a label edge the half-coverage
 # search may reach, in pixels.
 REACH = 0.75
@@ -414,8 +425,263 @@ def _approach(pts: np.ndarray, from_start: bool, reach: float, trim: float) -> t
     return _line_through(q[sel])
 
 
+
+def _wedge(padded: np.ndarray, target: np.ndarray, pairs: list[tuple[int, int]], away: list[np.ndarray],
+           limit: float = WEDGE_ANGLE) -> tuple[int, int] | None:
+    """The region that ends here, and the arc that carries on past it.
+
+    A region closes to a point when its two arcs leave the node at an acute
+    angle *and* the ground between them is its own — a big region with a sharp
+    corner has the same angle but the acute sector belongs to its neighbour, and
+    reading the label a couple of pixels along the bisector is what tells them
+    apart. Returns (region, index of the third arc), or None.
+    """
+    best: tuple[float, int, list[int]] | None = None
+    for lab in sorted({x for pair in pairs for x in pair if x != 0}):
+        sides = [k for k, pair in enumerate(pairs) if lab in pair]
+        if len(sides) != 2:
+            continue
+        turn = np.degrees(np.arccos(np.clip(float(np.dot(away[sides[0]], away[sides[1]])), -1.0, 1.0)))
+        if best is None or turn < best[0]:
+            best = (turn, lab, sides)
+    if best is None or best[0] > limit:
+        return None
+    _turn, lab, sides = best
+    bisector = away[sides[0]] + away[sides[1]]
+    length = float(np.hypot(*bisector))
+    if length < 1e-6:
+        return None
+    bisector = bisector / length
+    inside = False
+    for step in (1.5, 2.5, 3.5):
+        r = int(np.floor(target[1] + bisector[1] * step)) + 1
+        c = int(np.floor(target[0] + bisector[0] * step)) + 1
+        if 0 <= r < padded.shape[0] and 0 <= c < padded.shape[1] and padded[r, c] == lab:
+            inside = True
+            break
+    if not inside:
+        return None
+    through = [k for k in range(len(pairs)) if k not in sides]
+    if len(through) != 1:
+        return None
+    # the boundary has to carry on the other way, or this is a corner, not a tip
+    if float(np.dot(away[through[0]], -bisector)) < 0.5:
+        return None
+    return lab, through[0]
+
+def _mix_share(colour: np.ndarray, f_c: np.ndarray, f_a: np.ndarray, f_b: np.ndarray) -> np.ndarray:
+    """How much of each colour is the third fill, in a mixture of all three.
+
+    A pixel on a boundary is a mixture of what meets there. Where a region has
+    been cut off, the pixels beyond it are a mixture of *three* fills, not two,
+    and this is that third share: the part of the pixel the cut-off region still
+    owns. Solved as least squares over the two free weights, then folded back
+    onto the simplex so no share is negative and the three sum to one.
+    """
+    u = f_c - f_b
+    v = f_a - f_b
+    t = colour - f_b
+    uu = np.sum(u * u, axis=1)
+    vv = np.sum(v * v, axis=1)
+    uv = np.sum(u * v, axis=1)
+    det = uu * vv - uv * uv
+    ok = np.abs(det) > 1e-9
+    safe = np.where(ok, det, 1.0)
+    sc = np.where(ok, (np.sum(t * u, axis=1) * vv - np.sum(t * v, axis=1) * uv) / safe, 0.0)
+    sa = np.where(ok, (np.sum(t * v, axis=1) * uu - np.sum(t * u, axis=1) * uv) / safe, 0.0)
+    sc = np.clip(sc, 0.0, 1.0)
+    sa = np.clip(sa, 0.0, 1.0)
+    total = sc + sa
+    share = np.where(total > 1.0, sc / np.maximum(total, 1e-9), sc)
+    # Rounded before anyone compares it to a threshold. The share is computed
+    # from fitted fills, and the two implementations of those agree only to
+    # about a colour level; leaving the last bits in would let a pixel be handed
+    # back in one and not the other, and a pixel is a whole arc's worth of
+    # difference in the graph that follows.
+    return np.round(share, 2)
+
+
+def _extend_wedges(
+    padded: np.ndarray,
+    rgb: np.ndarray,
+    alpha: np.ndarray,
+    fill_at: FillAt,
+    params: CurveParams,
+) -> np.ndarray:
+    """Give a region cut off at a point the pixels its ink still runs through.
+
+    A region that tapers to an acute point cannot be carried all the way by a
+    label map: below a pixel wide there is no pixel to give it, so the watershed
+    hands those to whichever neighbour is winning and the region stops dead. The
+    trace then shows a blunt cut where the artwork has a long fine taper.
+
+    The ink is still there. Along the stretch where the two neighbours now meet
+    directly, the pixels are a mixture of three fills, and the third share says
+    how much of each is still the region that was cut off. This walks that
+    stretch and hands back a chain of pixels while that share holds up, which is
+    enough for the rest of the stage to place a real taper: the two sides are
+    then ordinary arcs, put where the coverage says, closing on the tip.
+
+    The chain must be four-connected. `_directed_rings` breaks a diagonal touch
+    the four-connected way, so a chain that only meets at the corners comes back
+    as a swarm of one-pixel islands, each its own ring on the region's path.
+    """
+    chains = _chains(padded)
+    if not chains:
+        return padded
+    # A provisional graph, placed at the lattice edges' midpoints: enough to say
+    # which region closes to a point where, and which stretch carries on.
+    arcs = [
+        Arc(pair=ch["pair"], pts=_midpoints(ch), normal=None, n0=ch["n0"], n1=ch["n1"])
+        for ch in chains
+    ]
+    ends: dict[int, list[tuple[int, int]]] = {}
+    for idx, arc in enumerate(arcs):
+        if arc.closed or len(arc.pts) < 2:
+            continue
+        ends.setdefault(arc.n0, []).append((idx, 0))
+        ends.setdefault(arc.n1, []).append((idx, -1))
+
+    rgba255 = np.concatenate(
+        [np.pad(rgb, ((1, 1), (1, 1), (0, 0))), (np.pad(alpha, 1) * 255.0)[..., None]], axis=-1
+    )
+    out = padded.copy()
+    taken: set[tuple[int, int]] = set()
+
+    for node in sorted(ends):
+        incident = ends[node]
+        if len(incident) != 3:
+            continue
+        away = []
+        for i, k in incident:
+            pts = arcs[i].pts
+            far = pts[min(3, len(pts) - 1)] if k == 0 else pts[max(-4, -len(pts))]
+            step = far - (pts[0] if k == 0 else pts[-1])
+            length = float(np.hypot(*step))
+            away.append(step / length if length > 1e-9 else np.zeros(2))
+        here = arcs[incident[0][0]].pts[0 if incident[0][1] == 0 else -1]
+        tip = _wedge(padded, here, [arcs[i].pair for i, _ in incident], away)
+        if tip is None:
+            continue
+        lab, through = tip
+        idx, at_start = incident[through]
+        a, b = arcs[idx].pair
+        if a == 0 or b == 0:
+            continue
+        keys = chains[idx]["edges"]
+        pixels = chains[idx]["pixels"]
+        order = keys if at_start == 0 else keys[::-1]
+
+        run: list[tuple[int, int]] = []
+        misses = 0
+        side: int | None = None
+        for key in order:
+            pa, pb = pixels[key]
+            options = []
+            for q in (pa, pb):
+                if out[q] not in (a, b) or q in taken:
+                    continue
+                # Steps may go diagonally — at a tip the region's last pixel is
+                # usually corner-on to the boundary it ran into — but a diagonal
+                # is bridged below, because a chain that only touches at the
+                # corners comes back from the ring walk as one-pixel islands.
+                if run:
+                    if max(abs(q[0] - run[-1][0]), abs(q[1] - run[-1][1])) != 1:
+                        continue
+                elif not any(
+                    0 <= q[0] + dr < out.shape[0] and 0 <= q[1] + dc < out.shape[1]
+                    and out[q[0] + dr, q[1] + dc] == lab
+                    for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+                ):
+                    continue
+                options.append(q)
+            if side is not None:
+                on_side = [q for q in options if out[q] == side]
+                if on_side:
+                    options = on_side
+            if not options:
+                misses += 1
+                if misses > WEDGE_PATIENCE:
+                    break
+                continue
+            rows = np.array([q[0] for q in options])
+            cols = np.array([q[1] for q in options])
+            qx = cols - 0.5
+            qy = rows - 0.5
+            share = _mix_share(
+                rgba255[rows, cols], fill_at(lab, qx, qy), fill_at(a, qx, qy), fill_at(b, qx, qy)
+            )
+            pick = int(np.argmax(share))
+            if float(share[pick]) < WEDGE_FLOOR:
+                misses += 1
+                if misses > WEDGE_PATIENCE:
+                    break
+                continue
+            misses = 0
+            chosen = options[pick]
+            if side is None:
+                side = int(out[chosen])
+            run.append(chosen)
+            taken.add(chosen)
+        # One stray pixel is noise; a region that really was cut off leaves a run.
+        if len(run) >= WEDGE_RUN:
+            for q in _bridged(run, out, lab, a, b, rgba255, fill_at):
+                out[q] = lab
+        else:
+            for q in run:
+                taken.discard(q)
+    return out
+
+
+def _bridged(run: list[tuple[int, int]], out: np.ndarray, lab: int, a: int, b: int,
+             rgba255: np.ndarray, fill_at: FillAt) -> list[tuple[int, int]]:
+    """The run, with a pixel put in wherever it steps diagonally.
+
+    Four-connectivity is not a nicety here: `_directed_rings` breaks a diagonal
+    touch the four-connected way, so a chain that only meets at the corners is
+    read back as a string of one-pixel islands, each emitted as its own closed
+    ring on the region's path. The corner is filled with whichever of the two
+    pixels beside it the region's own ink better explains.
+    """
+    attach = [q for q in _neighbourhood(run[0], out.shape) if out[q] == lab]
+    chain = ([attach[0]] if attach else []) + list(run)
+    out_run: list[tuple[int, int]] = []
+    for k, q in enumerate(chain):
+        if k and max(abs(q[0] - chain[k - 1][0]), abs(q[1] - chain[k - 1][1])) == 1 \
+                and abs(q[0] - chain[k - 1][0]) + abs(q[1] - chain[k - 1][1]) == 2:
+            p = chain[k - 1]
+            options = [o for o in ((p[0], q[1]), (q[0], p[1])) if out[o] in (a, b)]
+            if options:
+                rows = np.array([o[0] for o in options]); cols = np.array([o[1] for o in options])
+                qx = cols - 0.5; qy = rows - 0.5
+                share = _mix_share(rgba255[rows, cols], fill_at(lab, qx, qy),
+                                   fill_at(a, qx, qy), fill_at(b, qx, qy))
+                out_run.append(options[int(np.argmax(share))])
+        if out[q] != lab:
+            out_run.append(q)
+    return out_run
+
+
+def _neighbourhood(q: tuple[int, int], shape: tuple[int, int]) -> list[tuple[int, int]]:
+    return [
+        (q[0] + dr, q[1] + dc)
+        for dr in (-1, 0, 1)
+        for dc in (-1, 0, 1)
+        if (dr or dc) and 0 <= q[0] + dr < shape[0] and 0 <= q[1] + dc < shape[1]
+    ]
+
+
+def _midpoints(chain: dict) -> np.ndarray:
+    pixels = chain["pixels"]
+    pa = np.array([pixels[k][0] for k in chain["edges"]], dtype=float)
+    pb = np.array([pixels[k][1] for k in chain["edges"]], dtype=float)
+    mid = (pa + pb) / 2.0
+    return np.column_stack([mid[:, 1] - 0.5, mid[:, 0] - 0.5])
+
+
 def _junctions(
     arcs: list[Arc],
+    padded: np.ndarray,
     corner_threshold: float,
     reach: float = 4.0,
     trim: float = 0.8,
@@ -494,15 +760,29 @@ def _junctions(
             else:
                 away[(i, k)] = _normalize(outward)
 
-        best: tuple[float, tuple, tuple] | None = None
+        tangents: dict[tuple[int, int], np.ndarray] = {}
         keys = list(away)
+        tip = None
+        if len(keys) == 3:
+            tip = _wedge(padded, target, [arcs[i].pair for i, _ in incident], [away[k] for k in keys])
+        if tip is not None:
+            # A region closing to a point does not put a corner in anything. Its
+            # two sides run into the tip along the line its neighbours' boundary
+            # leaves on, so all three are one tangent: the wedge ends in a cusp
+            # and the boundary that carries on stays a single sweeping curve.
+            # Without this the neighbour's own outline gets a visible kink at the
+            # tip — the shape it paints has a corner the artwork does not.
+            _lab, through = tip
+            axis = away[keys[through]]
+            for k, key in enumerate(keys):
+                tangents[key] = axis if k == through else -axis
+        best: tuple[float, tuple, tuple] | None = None
         for x in range(len(keys)):
             for y in range(x + 1, len(keys)):
                 turn = np.degrees(np.arccos(np.clip(-float(np.dot(away[keys[x]], away[keys[y]])), -1.0, 1.0)))
                 if best is None or turn < best[0]:
                     best = (turn, keys[x], keys[y])
-        tangents: dict[tuple[int, int], np.ndarray] = {}
-        if best is not None and best[0] <= corner_threshold:
+        if not tangents and best is not None and best[0] <= corner_threshold:
             _turn, ka, kb = best
             shared = _normalize(away[ka] - away[kb])
             if np.any(shared):
@@ -531,6 +811,7 @@ def build(
     rank: dict[int, int] | None = None,
     bleed: float | None = None,
     taper: float | None = None,
+    extend: bool = True,
 ) -> Boundary:
     """The whole boundary of the label map, placed sub-pixel and fitted once.
 
@@ -540,6 +821,8 @@ def build(
     bleed = BLEED if bleed is None else bleed
     taper = TAPER if taper is None else taper
     padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    if extend:
+        padded = _extend_wedges(padded, rgb, alpha, fill_at, params)
     chains = _chains(padded)
     placed = _place(chains, padded, rgb, alpha, fill_at)
 
@@ -547,7 +830,7 @@ def build(
         Arc(pair=ch["pair"], pts=pts, normal=normal, n0=ch["n0"], n1=ch["n1"])
         for ch, (pts, normal) in zip(chains, placed)
     ]
-    _junctions(arcs, params.corner_threshold)
+    _junctions(arcs, padded, params.corner_threshold)
     for arc in arcs:
         arc.segments = _fit_arc(arc, params)
 
@@ -715,7 +998,7 @@ def _fit_arc(arc: Arc, params: CurveParams) -> list[Segment]:
             continue
         t_start = arc.t0 if lo == 0 else None
         t_end = arc.t1 if hi == len(pts) - 1 else None
-        segments.extend(fit_open(piece, params.tol, t_start=t_start, t_end=t_end))
+        segments.extend(_fit_piece(piece, params.tol, t_start, t_end))
     return _snap_axis(segments, params.snap_axis_deg)
 
 
@@ -743,6 +1026,35 @@ def _snap_axis(segments: list[Segment], snap_deg: float) -> list[Segment]:
             seg.p1[axis] = value
             segments[i + 1].p0 = seg.p1.copy()
     return segments
+
+
+def _fit_piece(points: np.ndarray, tol: float, t_start: np.ndarray | None, t_end: np.ndarray | None) -> list[Segment]:
+    """`curves.fit_open`, except that a pinned tangent is not thrown away when the
+    run happens to be nearly straight.
+
+    A straight line is the cheapest possible fit and `fit_open` reaches for it
+    first, which is right everywhere else — but a tangent is only ever pinned to
+    make a join smooth, and a line leaves that join at whatever angle its two
+    ends happen to sit at. That is how a wedge closing to a cusp came out as a
+    94 degree corner instead.
+    """
+    if len(points) < 2:
+        return []
+    if t_start is None and t_end is None:
+        return fit_open(points, tol)
+    chord = points[-1] - points[0]
+    span = float(np.linalg.norm(chord))
+    if span > 1e-9:
+        along = chord / span
+        drift = 0.0
+        for pinned, want in ((t_start, along), (t_end, -along)):
+            if pinned is not None:
+                drift = max(drift, float(np.degrees(np.arccos(np.clip(np.dot(pinned, want), -1.0, 1.0)))))
+        if drift <= 2.0:
+            return fit_open(points, tol, t_start=t_start, t_end=t_end)
+    t1 = t_start if t_start is not None else _end_tangent(points, True)
+    t2 = t_end if t_end is not None else _end_tangent(points, False)
+    return list(fit_cubics(points, t1, t2, tol))
 
 
 def _sharpen_piece(pts: np.ndarray, lo: int, hi: int, corners: list[int], trim: float = 0.8) -> np.ndarray:

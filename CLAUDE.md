@@ -39,6 +39,13 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   both. Never go back to tracing a region's outline on its own — that is what
   left a hairline of backdrop between every pair of shapes. `bench`'s `seam_ppm`
   measures it and `tests/test_vexel_topology.py` holds it at zero.
+- A hard label map cannot hold a sub-pixel sliver, so an acute wedge arrives at
+  `topology` already truncated. `_extend_wedges` hands the sliver back from the
+  three-way colour mix, and the tip is fitted as a cusp. Any chain it claims
+  must stay **four-connected**: `_directed_rings` breaks a diagonal touch the
+  four-connected way, so an eight-connected chain comes back as one-pixel
+  islands. `tools/diffcheck.py`'s `wedges` stage compares the extended labels
+  and `arcs` is then given one map, so each is tested on the other's output.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
   the fills to a colour level; where the two are allowed to differ, the

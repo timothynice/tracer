@@ -22,7 +22,8 @@ use crate::boundary::FillAt;
 use crate::core::grid::{Grid, Image};
 use crate::core::labels::Labels;
 use crate::curves::{
-    fit_contour_segments, fit_open, line_through, normalize, reverse_segments, CurveParams, Segment, P,
+    end_tangent, fit_contour_segments, fit_cubics, fit_open, line_through, normalize, reverse_segments,
+    CurveParams, Segment, P,
 };
 
 /// How far a shape reaches under the shapes painted over it. One pixel covers an
@@ -406,6 +407,346 @@ fn place(
         .collect()
 }
 
+/// Largest angle between a region's two arcs at a node that still counts as the
+/// region closing to a point rather than turning a corner.
+pub const WEDGE_ANGLE: f64 = 75.0;
+/// A cut-off region is handed back pixels while its share of the mixture holds
+/// above this, allowing this many misses along the way, and only if the run it
+/// collects is at least this long — one stray pixel is noise, not a taper.
+pub const WEDGE_FLOOR: f64 = 0.35;
+pub const WEDGE_PATIENCE: usize = 2;
+pub const WEDGE_RUN: usize = 3;
+
+/// The region that ends at a node, and the arc that carries on past it.
+///
+/// A region closes to a point when its two arcs leave the node at an acute
+/// angle *and* the ground between them is its own — a big region with a sharp
+/// corner has the same angle but the acute sector belongs to its neighbour, and
+/// reading the label a couple of pixels along the bisector is what tells them
+/// apart. See the Python.
+fn wedge(padded: &Labels, target: P, pairs: &[(i32, i32)], away: &[P]) -> Option<(i32, usize)> {
+    let mut labs: Vec<i32> = pairs.iter().flat_map(|p| [p.0, p.1]).filter(|v| *v != 0).collect();
+    labs.sort_unstable();
+    labs.dedup();
+    let mut best: Option<(f64, i32, Vec<usize>)> = None;
+    for lab in labs {
+        let sides: Vec<usize> = (0..pairs.len()).filter(|k| pairs[*k].0 == lab || pairs[*k].1 == lab).collect();
+        if sides.len() != 2 {
+            continue;
+        }
+        let dot = away[sides[0]][0] * away[sides[1]][0] + away[sides[0]][1] * away[sides[1]][1];
+        let turn = dot.clamp(-1.0, 1.0).acos().to_degrees();
+        if best.as_ref().is_none_or(|b| turn < b.0) {
+            best = Some((turn, lab, sides));
+        }
+    }
+    let (turn, lab, sides) = best?;
+    if turn > WEDGE_ANGLE {
+        return None;
+    }
+    let mut bis = [away[sides[0]][0] + away[sides[1]][0], away[sides[0]][1] + away[sides[1]][1]];
+    let len = (bis[0] * bis[0] + bis[1] * bis[1]).sqrt();
+    if len < 1e-6 {
+        return None;
+    }
+    bis = [bis[0] / len, bis[1] / len];
+    let mut inside = false;
+    for step in [1.5f64, 2.5, 3.5] {
+        let r = (target[1] + bis[1] * step).floor() as i64 + 1;
+        let c = (target[0] + bis[0] * step).floor() as i64 + 1;
+        if r >= 0 && c >= 0 && (r as usize) < padded.h && (c as usize) < padded.w
+            && *padded.get(r as usize, c as usize) == lab
+        {
+            inside = true;
+            break;
+        }
+    }
+    if !inside {
+        return None;
+    }
+    let through: Vec<usize> = (0..pairs.len()).filter(|k| !sides.contains(k)).collect();
+    if through.len() != 1 {
+        return None;
+    }
+    // the boundary has to carry on the other way, or this is a corner, not a tip
+    if -(away[through[0]][0] * bis[0] + away[through[0]][1] * bis[1]) < 0.5 {
+        return None;
+    }
+    Some((lab, through[0]))
+}
+
+/// How much of each colour is the third fill, in a mixture of all three.
+/// See the Python: least squares over the two free weights, folded back onto
+/// the simplex so no share is negative and the three sum to one.
+fn mix_share(colour: &[[f64; 4]], f_c: &[[f64; 4]], f_a: &[[f64; 4]], f_b: &[[f64; 4]]) -> Vec<f64> {
+    (0..colour.len())
+        .map(|k| {
+            let (mut uu, mut vv, mut uv, mut tu, mut tv) = (0.0, 0.0, 0.0, 0.0, 0.0);
+            for ch in 0..4 {
+                let u = f_c[k][ch] - f_b[k][ch];
+                let v = f_a[k][ch] - f_b[k][ch];
+                let t = colour[k][ch] - f_b[k][ch];
+                uu += u * u;
+                vv += v * v;
+                uv += u * v;
+                tu += t * u;
+                tv += t * v;
+            }
+            let det = uu * vv - uv * uv;
+            if det.abs() <= 1e-9 {
+                return 0.0;
+            }
+            let sc = ((tu * vv - tv * uv) / det).clamp(0.0, 1.0);
+            let sa = ((tv * uu - tu * uv) / det).clamp(0.0, 1.0);
+            let total = sc + sa;
+            let share = if total > 1.0 { sc / total.max(1e-9) } else { sc };
+            // Rounded before anyone compares it to a threshold: see the Python.
+            (share * 100.0).round() / 100.0
+        })
+        .collect()
+}
+
+/// Give a region cut off at a point the pixels its ink still runs through.
+///
+/// A region that tapers to an acute point cannot be carried all the way by a
+/// label map: below a pixel wide there is no pixel to give it, so the watershed
+/// hands those to whichever neighbour is winning and the region stops dead. The
+/// trace then shows a blunt cut where the artwork has a long fine taper. The ink
+/// is still there — along the stretch where the two neighbours now meet directly
+/// the pixels are a mixture of three fills, and the third share says how much of
+/// each is still the region that was cut off. See the Python.
+pub fn extend_wedges(padded: &Labels, rgb: &Image, alpha: &Grid<f64>, fill_at: FillAt) -> Labels {
+    let chain_list = chains(padded, &boundary_edges(padded));
+    if chain_list.is_empty() {
+        return padded.clone();
+    }
+    let edges = boundary_edges(padded);
+    // A provisional graph, placed at the lattice edges' midpoints: enough to say
+    // which region closes to a point where, and which stretch carries on.
+    let mid: Vec<Vec<P>> = chain_list
+        .iter()
+        .map(|ch| {
+            ch.edges
+                .iter()
+                .map(|k| {
+                    let (pa, pb) = edges.pixels[k];
+                    [
+                        (pa.1 as f64 + pb.1 as f64) / 2.0 - 0.5,
+                        (pa.0 as f64 + pb.0 as f64) / 2.0 - 0.5,
+                    ]
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut ends: HashMap<u64, Vec<ArcEnd>> = HashMap::new();
+    for (idx, ch) in chain_list.iter().enumerate() {
+        if ch.n0.is_none() || mid[idx].len() < 2 {
+            continue;
+        }
+        ends.entry(ch.n0.unwrap()).or_default().push((idx, true));
+        ends.entry(ch.n1.unwrap()).or_default().push((idx, false));
+    }
+    let mut nodes: Vec<u64> = ends.keys().copied().collect();
+    nodes.sort_unstable();
+
+    let colour_at = |q: (usize, usize)| -> [f64; 4] {
+        let (r, c) = (q.0 as i64 - 1, q.1 as i64 - 1);
+        if r < 0 || c < 0 || r >= rgb.h as i64 || c >= alpha.w as i64 {
+            return [0.0; 4];
+        }
+        let px = rgb.at(r as usize, c as usize);
+        [px[0], px[1], px[2], *alpha.get(r as usize, c as usize) * 255.0]
+    };
+
+    let mut out = padded.clone();
+    let mut taken: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+
+    for node in nodes {
+        let incident = ends[&node].clone();
+        if incident.len() != 3 {
+            continue;
+        }
+        let away: Vec<P> = incident
+            .iter()
+            .map(|(i, at_start)| {
+                let pts = &mid[*i];
+                let far = if *at_start { pts[3.min(pts.len() - 1)] } else { pts[pts.len() - 1 - 3.min(pts.len() - 1)] };
+                let anchor = if *at_start { pts[0] } else { pts[pts.len() - 1] };
+                let step = [far[0] - anchor[0], far[1] - anchor[1]];
+                let len = (step[0] * step[0] + step[1] * step[1]).sqrt();
+                if len > 1e-9 { [step[0] / len, step[1] / len] } else { [0.0, 0.0] }
+            })
+            .collect();
+        let (i0, s0) = incident[0];
+        let here = if s0 { mid[i0][0] } else { mid[i0][mid[i0].len() - 1] };
+        let pairs: Vec<(i32, i32)> = incident.iter().map(|(i, _)| chain_list[*i].pair).collect();
+        let Some((lab, through)) = wedge(padded, here, &pairs, &away) else { continue };
+        let (idx, at_start) = incident[through];
+        let (a, b) = chain_list[idx].pair;
+        if a == 0 || b == 0 {
+            continue;
+        }
+        let mut order: Vec<u64> = chain_list[idx].edges.clone();
+        if !at_start {
+            order.reverse();
+        }
+
+        let mut run: Vec<(usize, usize)> = Vec::new();
+        let mut misses = 0usize;
+        let mut side: Option<i32> = None;
+        for key in order.iter() {
+            let (pa, pb) = edges.pixels[key];
+            let mut options: Vec<(usize, usize)> = Vec::new();
+            for q in [pa, pb] {
+                let here_lab = *out.get(q.0, q.1);
+                if (here_lab != a && here_lab != b) || taken.contains(&q) {
+                    continue;
+                }
+                if let Some(prev) = run.last() {
+                    let dr = (q.0 as i64 - prev.0 as i64).abs();
+                    let dc = (q.1 as i64 - prev.1 as i64).abs();
+                    if dr.max(dc) != 1 {
+                        continue;
+                    }
+                } else {
+                    let mut touches = false;
+                    for dr in -1i64..=1 {
+                        for dc in -1i64..=1 {
+                            let (r, c) = (q.0 as i64 + dr, q.1 as i64 + dc);
+                            if r >= 0 && c >= 0 && (r as usize) < out.h && (c as usize) < out.w
+                                && *out.get(r as usize, c as usize) == lab
+                            {
+                                touches = true;
+                            }
+                        }
+                    }
+                    if !touches {
+                        continue;
+                    }
+                }
+                options.push(q);
+            }
+            if let Some(s) = side {
+                let on_side: Vec<(usize, usize)> = options.iter().copied().filter(|q| *out.get(q.0, q.1) == s).collect();
+                if !on_side.is_empty() {
+                    options = on_side;
+                }
+            }
+            if options.is_empty() {
+                misses += 1;
+                if misses > WEDGE_PATIENCE {
+                    break;
+                }
+                continue;
+            }
+            let qx: Vec<f64> = options.iter().map(|q| q.1 as f64 - 0.5).collect();
+            let qy: Vec<f64> = options.iter().map(|q| q.0 as f64 - 0.5).collect();
+            let cols: Vec<[f64; 4]> = options.iter().map(|q| colour_at(*q)).collect();
+            let share = mix_share(&cols, &fill_at(lab, &qx, &qy), &fill_at(a, &qx, &qy), &fill_at(b, &qx, &qy));
+            let mut pick = 0usize;
+            for k in 1..share.len() {
+                if share[k] > share[pick] {
+                    pick = k;
+                }
+            }
+            if share[pick] < WEDGE_FLOOR {
+                misses += 1;
+                if misses > WEDGE_PATIENCE {
+                    break;
+                }
+                continue;
+            }
+            misses = 0;
+            let chosen = options[pick];
+            if side.is_none() {
+                side = Some(*out.get(chosen.0, chosen.1));
+            }
+            run.push(chosen);
+            taken.insert(chosen);
+        }
+        // One stray pixel is noise; a region that really was cut off leaves a run.
+        if run.len() >= WEDGE_RUN {
+            for q in bridged(&run, &out, lab, a, b, &colour_at, fill_at) {
+                out.set(q.0, q.1, lab);
+            }
+        } else {
+            for q in &run {
+                taken.remove(q);
+            }
+        }
+    }
+    out
+}
+
+/// The run, with a pixel put in wherever it steps diagonally.
+///
+/// Four-connectivity is not a nicety: `directed_rings` breaks a diagonal touch
+/// the four-connected way, so a chain that only meets at the corners is read
+/// back as a string of one-pixel islands. See the Python.
+fn bridged(
+    run: &[(usize, usize)],
+    out: &Labels,
+    lab: i32,
+    a: i32,
+    b: i32,
+    colour_at: &dyn Fn((usize, usize)) -> [f64; 4],
+    fill_at: FillAt,
+) -> Vec<(usize, usize)> {
+    let mut chain: Vec<(usize, usize)> = Vec::new();
+    'seek: for dr in -1i64..=1 {
+        for dc in -1i64..=1 {
+            if dr == 0 && dc == 0 {
+                continue;
+            }
+            let (r, c) = (run[0].0 as i64 + dr, run[0].1 as i64 + dc);
+            if r >= 0 && c >= 0 && (r as usize) < out.h && (c as usize) < out.w
+                && *out.get(r as usize, c as usize) == lab
+            {
+                chain.push((r as usize, c as usize));
+                break 'seek;
+            }
+        }
+    }
+    chain.extend_from_slice(run);
+
+    let mut result: Vec<(usize, usize)> = Vec::new();
+    for k in 0..chain.len() {
+        let q = chain[k];
+        if k > 0 {
+            let p = chain[k - 1];
+            let dr = (q.0 as i64 - p.0 as i64).abs();
+            let dc = (q.1 as i64 - p.1 as i64).abs();
+            if dr.max(dc) == 1 && dr + dc == 2 {
+                let options: Vec<(usize, usize)> = [(p.0, q.1), (q.0, p.1)]
+                    .into_iter()
+                    .filter(|o| {
+                        let l = *out.get(o.0, o.1);
+                        l == a || l == b
+                    })
+                    .collect();
+                if !options.is_empty() {
+                    let qx: Vec<f64> = options.iter().map(|o| o.1 as f64 - 0.5).collect();
+                    let qy: Vec<f64> = options.iter().map(|o| o.0 as f64 - 0.5).collect();
+                    let cols: Vec<[f64; 4]> = options.iter().map(|o| colour_at(*o)).collect();
+                    let share = mix_share(&cols, &fill_at(lab, &qx, &qy), &fill_at(a, &qx, &qy), &fill_at(b, &qx, &qy));
+                    let mut pick = 0usize;
+                    for j in 1..share.len() {
+                        if share[j] > share[pick] {
+                            pick = j;
+                        }
+                    }
+                    result.push(options[pick]);
+                }
+            }
+        }
+        if *out.get(q.0, q.1) != lab {
+            result.push(q);
+        }
+    }
+    result
+}
+
 /// Total-least-squares line through an arc's run-up to one end, skipping the
 /// half-pixel marching-squares chamfer at the end itself.
 fn approach(pts: &[P], from_start: bool, reach: f64, trim: f64) -> Option<(P, P)> {
@@ -437,7 +778,7 @@ fn approach(pts: &[P], from_start: bool, reach: f64, trim: f64) -> Option<(P, P)
 /// boundary that carries on — a mark's silhouette, with the colour changing
 /// along it — two of the arcs are one smooth curve, and pinning both to a single
 /// tangent stops the outline hitching where the fill changes.
-fn junctions(arcs: &mut [Arc], corner_threshold: f64) {
+fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64) {
     const REACH_PX: f64 = 4.0;
     const TRIM: f64 = 0.8;
     const LIMIT: f64 = 2.0;
@@ -528,6 +869,19 @@ fn junctions(arcs: &mut [Arc], corner_threshold: f64) {
             })
             .collect();
 
+        let mut pinned: Vec<(usize, P)> = Vec::new();
+        if incident.len() == 3 {
+            let pairs: Vec<(i32, i32)> = incident.iter().map(|(i, _)| arcs[*i].pair).collect();
+            if let Some((_lab, through)) = wedge(padded, target, &pairs, &away) {
+                // A region closing to a point does not put a corner in anything.
+                // Its two sides run into the tip along the line its neighbours'
+                // boundary leaves on, so all three are one tangent. See the Python.
+                let axis = away[through];
+                for k in 0..3 {
+                    pinned.push((k, if k == through { axis } else { [-axis[0], -axis[1]] }));
+                }
+            }
+        }
         let mut best: Option<(f64, usize, usize)> = None;
         for x in 0..away.len() {
             for y in (x + 1)..away.len() {
@@ -538,8 +892,8 @@ fn junctions(arcs: &mut [Arc], corner_threshold: f64) {
                 }
             }
         }
-        let mut pinned: Vec<(usize, P)> = Vec::new();
-        if let Some((turn, x, y)) = best {
+        if pinned.is_empty() {
+          if let Some((turn, x, y)) = best {
             if turn <= corner_threshold {
                 let shared = normalize([away[x][0] - away[y][0], away[x][1] - away[y][1]]);
                 if shared[0] != 0.0 || shared[1] != 0.0 {
@@ -547,6 +901,7 @@ fn junctions(arcs: &mut [Arc], corner_threshold: f64) {
                     pinned.push((y, [-shared[0], -shared[1]]));
                 }
             }
+          }
         }
         moves.push((incident, target, pinned));
     }
@@ -736,9 +1091,39 @@ fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, params: &Curve
         }
         let ts = if lo == 0 { t0 } else { None };
         let te = if hi == pts.len() - 1 { t1 } else { None };
-        segments.extend(fit_open(&piece, params.tol, ts, te));
+        segments.extend(fit_piece(&piece, params.tol, ts, te));
     }
     snap_axis(segments, params.snap_axis_deg)
+}
+
+/// `curves::fit_open`, except that a pinned tangent is not thrown away when the
+/// run happens to be nearly straight. A line is the cheapest fit and `fit_open`
+/// reaches for it first, which is right everywhere else — but a tangent is only
+/// ever pinned to make a join smooth. See the Python.
+fn fit_piece(points: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) -> Vec<Segment> {
+    if points.len() < 2 {
+        return Vec::new();
+    }
+    if t_start.is_none() && t_end.is_none() {
+        return fit_open(points, tol, None, None);
+    }
+    let chord = [points[points.len() - 1][0] - points[0][0], points[points.len() - 1][1] - points[0][1]];
+    let span = (chord[0] * chord[0] + chord[1] * chord[1]).sqrt();
+    if span > 1e-9 {
+        let along = [chord[0] / span, chord[1] / span];
+        let mut drift: f64 = 0.0;
+        for (pinned, want) in [(t_start, along), (t_end, [-along[0], -along[1]])] {
+            if let Some(t) = pinned {
+                drift = drift.max((t[0] * want[0] + t[1] * want[1]).clamp(-1.0, 1.0).acos().to_degrees());
+            }
+        }
+        if drift <= 2.0 {
+            return fit_open(points, tol, t_start, t_end);
+        }
+    }
+    let t1 = t_start.unwrap_or_else(|| end_tangent(points, true));
+    let t2 = t_end.unwrap_or_else(|| end_tangent(points, false));
+    fit_cubics(points, t1, t2, tol, 0)
 }
 
 /// Make a nearly horizontal or vertical line exactly so, as
@@ -797,7 +1182,7 @@ pub fn build(
     params: &CurveParams,
     rank: Option<&HashMap<i32, usize>>,
 ) -> Boundary {
-    build_opt(labels, rgb, alpha, fill_at, params, rank, true)
+    build_opt(labels, rgb, alpha, fill_at, params, rank, true, true)
 }
 
 /// `snap = false` stops after placement, for `tools/diffcheck.py` to compare the
@@ -811,6 +1196,7 @@ pub fn build_opt(
     params: &CurveParams,
     rank: Option<&HashMap<i32, usize>>,
     snap: bool,
+    extend: bool,
 ) -> Boundary {
     let mut padded = Grid::<i32>::new(labels.h + 2, labels.w + 2);
     for r in 0..labels.h {
@@ -818,6 +1204,7 @@ pub fn build_opt(
             padded.set(r + 1, c + 1, *labels.get(r, c));
         }
     }
+    let padded = if extend { extend_wedges(&padded, rgb, alpha, fill_at) } else { padded };
 
     let edges = boundary_edges(&padded);
     let chain_list = chains(&padded, &edges);
@@ -849,7 +1236,7 @@ pub fn build_opt(
         let later = vec![false; arcs.len()];
         return Boundary { arcs, padded, edge_arc, later_is_b: later };
     }
-    junctions(&mut arcs, params.corner_threshold);
+    junctions(&mut arcs, &padded, params.corner_threshold);
     for arc in arcs.iter_mut() {
         arc.segments = fit_arc(&arc.pts, arc.closed(), arc.t0, arc.t1, params);
     }

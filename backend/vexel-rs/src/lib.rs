@@ -158,23 +158,16 @@ mod python {
         partition::initial_labels(&grad, &prep.features, min_region, 1.5).data
     }
 
-    /// The boundary graph's arcs, for `tools/diffcheck.py`: every arc's label
-    /// pair and vertex count followed by its sub-pixel vertices, flattened,
-    /// with the arcs in a canonical order so the two implementations line up.
-    #[pyfunction]
-    fn _stage_arcs(rgba: Vec<u8>, h: usize, w: usize, labels: Vec<i32>, snap: bool) -> Vec<f64> {
-        use crate::core::grid::Grid;
+    /// The fills every stage hook needs, fitted the way `engine` fits them.
+    fn _fills_for(
+        prep: &prepare::Prepared,
+        labels: &crate::core::grid::Grid<i32>,
+        h: usize,
+        w: usize,
+    ) -> std::collections::HashMap<i32, crate::fills::Fill> {
         use crate::core::labels::{mask_of, LabelIndex};
         use crate::fills::{fit_fill, FitParams};
         use crate::weights::interior_weights;
-        use std::collections::HashMap;
-
-        let prep = prepare::prepare(&rgba, h, w);
-        // The caller passes the label map, so this compares the boundary graph
-        // alone: `labels0` is allowed a slack of a few pixels, and one pixel
-        // moving redraws the graph.
-        let labels: Grid<i32> = Grid::from_vec(h, w, labels);
-
         let rgba255: Vec<[f64; 4]> = (0..h * w)
             .map(|i| {
                 let px = prep.rgb.px(i);
@@ -183,15 +176,14 @@ mod python {
             .collect();
         let xs: Vec<f64> = (0..h * w).map(|i| (i % w) as f64 + 0.5).collect();
         let ys: Vec<f64> = (0..h * w).map(|i| (i / w) as f64 + 0.5).collect();
-
         let params = FitParams { gradients: true, max_stops: 4, tol: 3.0 };
-        let index = LabelIndex::build(&labels);
+        let index = LabelIndex::build(labels);
         let mut ids: Vec<i32> = labels.data.iter().copied().filter(|v| *v != 0).collect();
         ids.sort_unstable();
         ids.dedup();
-        let mut fills: HashMap<i32, crate::fills::Fill> = HashMap::new();
+        let mut fills = std::collections::HashMap::new();
         for lab in &ids {
-            let m = mask_of(&labels, *lab);
+            let m = mask_of(labels, *lab);
             let wt = interior_weights(&m);
             let px = index.pixels(*lab);
             let x: Vec<f64> = px.iter().map(|i| xs[*i as usize]).collect();
@@ -199,6 +191,24 @@ mod python {
             let c: Vec<[f64; 4]> = px.iter().map(|i| rgba255[*i as usize]).collect();
             fills.insert(*lab, fit_fill(&x, &y, &c, &params, Some(&wt)));
         }
+        fills
+    }
+
+    /// The boundary graph's arcs, for `tools/diffcheck.py`: every arc's label
+    /// pair and vertex count followed by its sub-pixel vertices, flattened,
+    /// with the arcs in a canonical order so the two implementations line up.
+    #[pyfunction]
+    fn _stage_arcs(rgba: Vec<u8>, h: usize, w: usize, labels: Vec<i32>, snap: bool, extend: bool) -> Vec<f64> {
+        use crate::core::grid::Grid;
+        use std::collections::HashMap;
+
+        let prep = prepare::prepare(&rgba, h, w);
+        // The caller passes the label map, so this compares the boundary graph
+        // alone: `labels0` is allowed a slack of a few pixels, and one pixel
+        // moving redraws the graph.
+        let labels: Grid<i32> = Grid::from_vec(h, w, labels);
+
+        let fills = _fills_for(&prep, &labels, h, w);
         let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
             match fills.get(&lab) {
                 Some(f) => f.evaluate(qx, qy),
@@ -211,7 +221,7 @@ mod python {
             shape_fitting: true,
             snap_axis_deg: 1.5,
         };
-        let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, snap);
+        let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, snap, extend);
 
         let mut rows: Vec<Vec<f64>> = bnd
             .arcs
@@ -227,6 +237,29 @@ mod python {
             .collect();
         rows.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
         rows.concat()
+    }
+
+    /// The label map after cut-off regions have been handed back the pixels
+    /// their ink still runs through, for `tools/diffcheck.py`.
+    #[pyfunction]
+    fn _stage_wedges(rgba: Vec<u8>, h: usize, w: usize, labels: Vec<i32>) -> Vec<i32> {
+        use crate::core::grid::Grid;
+        let prep = prepare::prepare(&rgba, h, w);
+        let labels: Grid<i32> = Grid::from_vec(h, w, labels);
+        let fills = _fills_for(&prep, &labels, h, w);
+        let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+            match fills.get(&lab) {
+                Some(f) => f.evaluate(qx, qy),
+                None => vec![[0.0; 4]; qx.len()],
+            }
+        };
+        let mut padded = Grid::<i32>::new(h + 2, w + 2);
+        for r in 0..h {
+            for c in 0..w {
+                padded.set(r + 1, c + 1, *labels.get(r, c));
+            }
+        }
+        topology::extend_wedges(&padded, &prep.rgb, &prep.alpha, &fill_at).data
     }
 
     #[pyfunction]
@@ -273,6 +306,7 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_rgb, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_labels0, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_wedges, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;
         m.add_function(wrap_pyfunction!(_rng_choice, m)?)?;
         m.add_function(wrap_pyfunction!(_fit_fill, m)?)?;

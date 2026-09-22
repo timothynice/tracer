@@ -68,6 +68,14 @@ TOLERANCE = {
     # reported `max` is printed beside the RMS, so a single badly placed
     # junction is still visible to a reader.
     "arcs": ("rms", 0.05, 0.0),
+    # The wedge extension hands whole pixels back to a region that the partition
+    # cut off, on a threshold over a three-way colour mix — and that mix is read
+    # from the fitted fills, which the two implementations agree on only to about
+    # a colour level. A pixel whose share sits on the threshold can therefore go
+    # either way, so this is allowed the same kind of slack as `labels0`: a
+    # handful of pixels in a frame. `arcs` is then given one extended map so that
+    # what it compares is the graph, not this.
+    "wedges": ("max", 0.0, 0.002),
 }
 
 
@@ -190,6 +198,46 @@ def fills(path):
     return np.concatenate(py_out), np.concatenate(rs_out)
 
 
+def _fills_for(prep, labels):
+    """Every region's fitted fill, the way the engine fits them."""
+    h, w = labels.shape
+    ys, xs = np.mgrid[0:h, 0:w]
+    xs = xs.astype(np.float64) + 0.5
+    ys = ys.astype(np.float64) + 0.5
+    rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
+    params = FitParams(gradients=True, max_stops=4, tol=3.0)
+    out = {}
+    for lab in (int(i) for i in np.unique(labels) if i):
+        m = labels == lab
+        out[lab] = fit_fill(xs[m], ys[m], rgba255[m], params, weights=interior_weights(m))
+    return out
+
+
+def _prepared(path):
+    """Everything the boundary stages need: labels, fills and the prepared image."""
+    a = load(path)
+    prep = prepare(a)
+    g = discontinuity(prep.features)
+    labels = merge_regions(initial_labels(g, prep.features, min_region=6), prep.features,
+                           MergeParams(detail=6.0, gradients=True), g)
+    return a, prep, labels, _fills_for(prep, labels)
+
+
+@stage
+def wedges(path):
+    """The label map after a region cut off at a point is handed back the pixels
+    its ink still runs through."""
+    a, prep, labels, fills = _prepared(path)
+    h, w = a.shape[:2]
+    padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    py = topology._extend_wedges(padded, prep.rgb, prep.alpha,
+                                 lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+                                 CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
+    rs = np.asarray(vexel_rs._stage_wedges(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist()),
+                    dtype=np.int32).reshape(h + 2, w + 2)
+    return py.astype(np.int32), rs
+
+
 @stage
 def arcs(path):
     """Where the shared boundary graph puts every arc.
@@ -203,31 +251,28 @@ def arcs(path):
     is allowed a slack of a few pixels, and one pixel moving redraws the graph
     around it, which would drown this stage's own signal.
     """
-    a = load(path)
+    a, prep, labels, fills = _prepared(path)
     h, w = a.shape[:2]
-    prep = prepare(a)
-    g = discontinuity(prep.features)
-    labels = merge_regions(initial_labels(g, prep.features, min_region=6), prep.features,
-                           MergeParams(detail=6.0, gradients=True), g)
-    ys, xs = np.mgrid[0:h, 0:w]
-    xs = xs.astype(np.float64) + 0.5
-    ys = ys.astype(np.float64) + 0.5
-    rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
-    params = FitParams(gradients=True, max_stops=4, tol=3.0)
-    fills = {}
-    for lab in (int(i) for i in np.unique(labels) if i):
-        m = labels == lab
-        fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], params, weights=interior_weights(m))
-
+    # One extended map for both, so this stage compares the graph and not the
+    # pixel-level call `wedges` already covers.
+    padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    extended = topology._extend_wedges(padded, prep.rgb, prep.alpha,
+                                       lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+                                       CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
+    labels = extended[1:-1, 1:-1]
+    # Refitted on the extended map, because that is what the Rust hook is handed
+    # and this stage is about the graph, not about which labels the fills saw.
+    fills = _fills_for(prep, labels)
     bnd = topology.build(labels, prep.rgb, prep.alpha,
                          lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
-                         CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
+                         CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True),
+                         extend=False)
     rows = sorted(
         [float(arc.pair[0]), float(arc.pair[1]), float(len(arc.pts)), *arc.pts.ravel().tolist()]
         for arc in bnd.arcs
     )
     py = np.array([v for row in rows for v in row], dtype=np.float64)
-    rs = np.asarray(vexel_rs._stage_arcs(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), True), dtype=np.float64)
+    rs = np.asarray(vexel_rs._stage_arcs(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), True, False), dtype=np.float64)
     if py.shape != rs.shape:
         print(f"  FAIL arcs      {path.name}: {len(rows)} arcs / {py.size} values in Python, {rs.size} in Rust")
         return np.zeros(1), np.full(1, 1e9)

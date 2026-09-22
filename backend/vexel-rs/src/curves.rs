@@ -669,7 +669,7 @@ pub fn fit_cubics(points: &[P], t1: P, t2: P, tol: f64, depth: usize) -> Vec<Seg
     left
 }
 
-fn end_tangent(points: &[P], at_start: bool) -> P {
+pub fn end_tangent(points: &[P], at_start: bool) -> P {
     let k = 3.min(points.len() - 1);
     if at_start {
         normalize(sub(points[k], points[0]))

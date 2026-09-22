@@ -32,7 +32,12 @@ shadows. Instead of quantising colours and tracing bands, it:
    where three or more regions meet — so the edge two regions share is placed,
    fitted and emitted a single time and handed to both. Neighbours cannot
    describe it differently, so there is no hairline between them for the
-   backdrop to show through, at any tolerance;
+   backdrop to show through, at any tolerance. A region that tapers to a point
+   is carried past where the labels give out: below a pixel wide there is no
+   pixel to hold it, so the stretch beyond is read as a mixture of three fills
+   and the sliver handed back. Its tip is then a **cusp** — all three arcs share
+   one tangent — so the boundary that carries on stays a single sweeping curve
+   rather than taking a corner where the artwork has none;
 7. places those arcs at **sub-pixel** positions inferred from anti-aliasing
    coverage, sharpens corners and junctions, keeps the outline G1 where a
    boundary runs on through a junction, fits circles/ellipses/rects as
