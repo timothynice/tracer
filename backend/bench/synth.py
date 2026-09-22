@@ -104,6 +104,46 @@ def logo_thin_mark(rng):
     )
 
 
+def _pts(points: list[tuple[float, float]]) -> str:
+    """Exact coordinates: these templates are geometry truth, not decoration."""
+    return " ".join(f"{x:.3f},{y:.3f}" for x, y in points)
+
+
+def logo_tilted_squares(rng):
+    """Six 100 px squares at the angles where the line test used to fail (5, 25,
+    38, 45, 50) and one that always passed (12). Straight edges, sharp corners,
+    nothing else, and no two squares touch (141 px across the diagonal on 160 px
+    centres would), so the only junctions in the truth are the ones drawn."""
+    cols = _pick(rng, BRAND, 6)
+    body = ""
+    for (cx, cy), ang, c in zip(((96, 96), (256, 96), (416, 96), (96, 300), (256, 300), (416, 300)),
+                                (5, 25, 38, 45, 50, 12), cols):
+        body += f'<polygon points="{_pts(_regular(cx, cy, 50 * math.sqrt(2), 4, math.radians(45 + ang)))}" fill="{c}"/>'
+    return _svg(body, background="#FFFFFF")
+
+
+def logo_wedge_fan(rng):
+    """Three pale wedges closing onto a 45 degree edge at 12, 18 and 25 degrees,
+    and two stems meeting the same edge at 59 and 75 degrees: every junction
+    shape the boundary stage has got wrong, on one canvas."""
+    # Fixed, well separated colours: this template measures geometry, and a
+    # wedge that the merge stage cannot tell from its neighbour measures nothing.
+    blue, pale, ink = "#3B8EE8", "#BFE0FF", "#1F2A44"
+    body = f'<polygon points="0,{CANVAS} {CANVAS},0 {CANVAS},{CANVAS}" fill="{blue}"/>'
+    for x, opening in ((100, 12), (220, 18), (340, 25)):
+        # each wedge is its own triangle on the edge: a tip, 150 px along the
+        # edge, and 150 px up the steep side, so the three do not nest
+        y = CANVAS - x
+        along = (x + 150 * math.cos(math.radians(45)), y - 150 * math.sin(math.radians(45)))
+        up = (x + 150 * math.cos(math.radians(45 + opening)), y - 150 * math.sin(math.radians(45 + opening)))
+        body += f'<polygon points="{_pts([(x, y), along, up])}" fill="{pale}"/>'
+    for x, ang in ((60, 59), (140, 75)):
+        y = CANVAS - x
+        dx, dy = math.cos(math.radians(ang)), -math.sin(math.radians(ang))
+        body += f'<polygon points="{_pts([(x - 4, y), (x + 4, y), (x + 4 + 300 * dx, y + 300 * dy), (x - 4 + 300 * dx, y + 300 * dy)])}" fill="{ink}"/>'
+    return _svg(body, background="#FFFFFF")
+
+
 # --- flat ---------------------------------------------------------------------
 
 
@@ -357,6 +397,7 @@ TEMPLATES: dict[str, list[tuple[str, Callable[[random.Random], str]]]] = {
     "logo": [
         ("ring", logo_ring), ("cutout", logo_cutout), ("triangle-bar", logo_triangle_bar),
         ("hex-nest", logo_hex_nest), ("venn", logo_venn), ("thin-mark", logo_thin_mark),
+        ("tilted-squares", logo_tilted_squares), ("wedge-fan", logo_wedge_fan),
     ],
     "flat": [
         ("blobs", flat_blobs), ("stripes", flat_stripes), ("low-contrast", flat_low_contrast),
@@ -380,6 +421,17 @@ def render_png(svg: str, size: int) -> bytes:
     img = Image.open(io.BytesIO(png)).convert("RGBA")
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
+    return buf.getvalue()
+
+
+def render_downsampled(svg: str, size: int) -> bytes:
+    """Rendered at twice the size and bilinearly downsampled: a different
+    anti-aliasing kernel than resvg's, the way a screenshot or a resized asset
+    arrives. The line test has to hold under it."""
+    hi = Image.open(io.BytesIO(bytes(resvg_py.svg_to_bytes(svg_string=svg, width=2 * size, height=2 * size)))).convert("RGBA")
+    lo = hi.resize((size, size), Image.Resampling.BILINEAR)
+    buf = io.BytesIO()
+    lo.save(buf, "PNG", optimize=True)
     return buf.getvalue()
 
 
@@ -410,5 +462,12 @@ def generate(root: Path, seed: int = 1234, sizes: tuple[int, ...] = (512, 128)) 
                     id=f"{cls}/{name}-{size}", cls=cls, png=png_path, width=size, height=size,
                     truth_svg=svg_path, tags=["synthetic", f"size:{size}"],
                 ))
+                if size == max(sizes):
+                    ds_path = out_dir / f"{name}-{size}-ds.png"
+                    ds_path.write_bytes(render_downsampled(svg, size))
+                    items.append(Item(
+                        id=f"{cls}/{name}-{size}-ds", cls=cls, png=ds_path, width=size, height=size,
+                        truth_svg=svg_path, tags=["synthetic", f"size:{size}", "degraded:downsample"],
+                    ))
     write_manifest(root, kept + items)
     return items

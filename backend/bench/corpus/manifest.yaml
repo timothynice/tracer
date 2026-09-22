@@ -17,6 +17,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/flat/blobs.svg
+- id: flat/blobs-512-ds
+  class: flat
+  png: synthetic/flat/blobs-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/flat/blobs.svg
 - id: flat/low-contrast-128
   class: flat
   png: synthetic/flat/low-contrast-128.png
@@ -35,6 +45,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/flat/low-contrast.svg
+- id: flat/low-contrast-512-ds
+  class: flat
+  png: synthetic/flat/low-contrast-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/flat/low-contrast.svg
 - id: flat/mosaic-128
   class: flat
   png: synthetic/flat/mosaic-128.png
@@ -52,6 +72,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/flat/mosaic.svg
+- id: flat/mosaic-512-ds
+  class: flat
+  png: synthetic/flat/mosaic-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/flat/mosaic.svg
 - id: flat/mosaic-512-q75
   class: flat
@@ -78,6 +108,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/flat/overlap.svg
+- id: flat/overlap-512-ds
+  class: flat
+  png: synthetic/flat/overlap-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/flat/overlap.svg
 - id: flat/sticker-128
   class: flat
   png: synthetic/flat/sticker-128.png
@@ -95,6 +135,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/flat/sticker.svg
+- id: flat/sticker-512-ds
+  class: flat
+  png: synthetic/flat/sticker-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/flat/sticker.svg
 - id: flat/sticker-512-q75
   class: flat
@@ -121,6 +171,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/flat/stripes.svg
+- id: flat/stripes-512-ds
+  class: flat
+  png: synthetic/flat/stripes-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/flat/stripes.svg
 - id: gradient/alpha-fade-128
   class: gradient
   png: synthetic/gradient/alpha-fade-128.png
@@ -138,6 +198,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/gradient/alpha-fade.svg
+- id: gradient/alpha-fade-512-ds
+  class: gradient
+  png: synthetic/gradient/alpha-fade-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/gradient/alpha-fade.svg
 - id: gradient/linear-4stop-128
   class: gradient
@@ -157,6 +227,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/gradient/linear-4stop.svg
+- id: gradient/linear-4stop-512-ds
+  class: gradient
+  png: synthetic/gradient/linear-4stop-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/gradient/linear-4stop.svg
 - id: gradient/linear-frame-128
   class: gradient
   png: synthetic/gradient/linear-frame-128.png
@@ -175,6 +255,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/gradient/linear-frame.svg
+- id: gradient/linear-frame-512-ds
+  class: gradient
+  png: synthetic/gradient/linear-frame-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/gradient/linear-frame.svg
 - id: gradient/multi-shape-128
   class: gradient
   png: synthetic/gradient/multi-shape-128.png
@@ -192,6 +282,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/gradient/multi-shape.svg
+- id: gradient/multi-shape-512-ds
+  class: gradient
+  png: synthetic/gradient/multi-shape-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/gradient/multi-shape.svg
 - id: gradient/multi-shape-512-q75
   class: gradient
@@ -218,6 +318,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/gradient/radial-disc.svg
+- id: gradient/radial-disc-512-ds
+  class: gradient
+  png: synthetic/gradient/radial-disc-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/gradient/radial-disc.svg
 - id: gradient/radial-disc-512-q75
   class: gradient
   png: real/gradient/radial-disc-512-q75.jpg
@@ -243,6 +353,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/gradient/radial-focal.svg
+- id: gradient/radial-focal-512-ds
+  class: gradient
+  png: synthetic/gradient/radial-focal-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/gradient/radial-focal.svg
 - id: logo/cutout-128
   class: logo
   png: synthetic/logo/cutout-128.png
@@ -261,6 +381,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/logo/cutout.svg
+- id: logo/cutout-512-ds
+  class: logo
+  png: synthetic/logo/cutout-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/logo/cutout.svg
 - id: logo/hex-nest-128
   class: logo
   png: synthetic/logo/hex-nest-128.png
@@ -278,6 +408,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/logo/hex-nest.svg
+- id: logo/hex-nest-512-ds
+  class: logo
+  png: synthetic/logo/hex-nest-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/logo/hex-nest.svg
 - id: logo/hex-nest-512-q75
   class: logo
@@ -321,6 +461,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/logo/ring.svg
+- id: logo/ring-512-ds
+  class: logo
+  png: synthetic/logo/ring-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/logo/ring.svg
 - id: logo/silverpeak-badge-768
   class: logo
@@ -400,6 +550,44 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/logo/thin-mark.svg
+- id: logo/thin-mark-512-ds
+  class: logo
+  png: synthetic/logo/thin-mark-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/logo/thin-mark.svg
+- id: logo/tilted-squares-128
+  class: logo
+  png: synthetic/logo/tilted-squares-128.png
+  width: 128
+  height: 128
+  tags:
+  - synthetic
+  - size:128
+  truth_svg: synthetic/logo/tilted-squares.svg
+- id: logo/tilted-squares-512
+  class: logo
+  png: synthetic/logo/tilted-squares-512.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  truth_svg: synthetic/logo/tilted-squares.svg
+- id: logo/tilted-squares-512-ds
+  class: logo
+  png: synthetic/logo/tilted-squares-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/logo/tilted-squares.svg
 - id: logo/triangle-bar-128
   class: logo
   png: synthetic/logo/triangle-bar-128.png
@@ -418,6 +606,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/logo/triangle-bar.svg
+- id: logo/triangle-bar-512-ds
+  class: logo
+  png: synthetic/logo/triangle-bar-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/logo/triangle-bar.svg
 - id: logo/venn-128
   class: logo
   png: synthetic/logo/venn-128.png
@@ -435,6 +633,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/logo/venn.svg
+- id: logo/venn-512-ds
+  class: logo
+  png: synthetic/logo/venn-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/logo/venn.svg
 - id: logo/venn-512-q75
   class: logo
@@ -457,6 +665,34 @@ items:
   height: 512
   tags:
   - real
+- id: logo/wedge-fan-128
+  class: logo
+  png: synthetic/logo/wedge-fan-128.png
+  width: 128
+  height: 128
+  tags:
+  - synthetic
+  - size:128
+  truth_svg: synthetic/logo/wedge-fan.svg
+- id: logo/wedge-fan-512
+  class: logo
+  png: synthetic/logo/wedge-fan-512.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  truth_svg: synthetic/logo/wedge-fan.svg
+- id: logo/wedge-fan-512-ds
+  class: logo
+  png: synthetic/logo/wedge-fan-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/logo/wedge-fan.svg
 - id: shadow/card-128
   class: shadow
   png: synthetic/shadow/card-128.png
@@ -474,6 +710,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/shadow/card.svg
+- id: shadow/card-512-ds
+  class: shadow
+  png: synthetic/shadow/card-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/shadow/card.svg
 - id: shadow/card-512-q75
   class: shadow
@@ -500,6 +746,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/shadow/disc.svg
+- id: shadow/disc-512-ds
+  class: shadow
+  png: synthetic/shadow/disc-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/shadow/disc.svg
 - id: shadow/glow-128
   class: shadow
   png: synthetic/shadow/glow-128.png
@@ -517,6 +773,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/shadow/glow.svg
+- id: shadow/glow-512-ds
+  class: shadow
+  png: synthetic/shadow/glow-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/shadow/glow.svg
 - id: shadow/glow-512-q75
   class: shadow
@@ -543,6 +809,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/shadow/inset-card.svg
+- id: shadow/inset-card-512-ds
+  class: shadow
+  png: synthetic/shadow/inset-card-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/shadow/inset-card.svg
 - id: shadow/inset-well-128
   class: shadow
   png: synthetic/shadow/inset-well-128.png
@@ -560,6 +836,16 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/shadow/inset-well.svg
+- id: shadow/inset-well-512-ds
+  class: shadow
+  png: synthetic/shadow/inset-well-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/shadow/inset-well.svg
 - id: shadow/over-gradient-128
   class: shadow
@@ -579,6 +865,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/shadow/over-gradient.svg
+- id: shadow/over-gradient-512-ds
+  class: shadow
+  png: synthetic/shadow/over-gradient-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/shadow/over-gradient.svg
 - id: shadow/radii-128
   class: shadow
   png: synthetic/shadow/radii-128.png
@@ -597,6 +893,16 @@ items:
   - synthetic
   - size:512
   truth_svg: synthetic/shadow/radii.svg
+- id: shadow/radii-512-ds
+  class: shadow
+  png: synthetic/shadow/radii-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
+  truth_svg: synthetic/shadow/radii.svg
 - id: shadow/transparent-bg-128
   class: shadow
   png: synthetic/shadow/transparent-bg-128.png
@@ -614,4 +920,14 @@ items:
   tags:
   - synthetic
   - size:512
+  truth_svg: synthetic/shadow/transparent-bg.svg
+- id: shadow/transparent-bg-512-ds
+  class: shadow
+  png: synthetic/shadow/transparent-bg-512-ds.png
+  width: 512
+  height: 512
+  tags:
+  - synthetic
+  - size:512
+  - degraded:downsample
   truth_svg: synthetic/shadow/transparent-bg.svg

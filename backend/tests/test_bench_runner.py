@@ -99,7 +99,7 @@ def test_cli_smoke(corpus: Path, tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
     assert "potrace logo" in proc.stdout.replace("  ", " ")
     results = json.loads((out / "results.json").read_text())
-    assert len(results["items"]) == 6
+    assert len(results["items"]) == len(load_corpus(corpus, classes=["logo"]))
 
     a, b = out / "results.json", out / "results.json"
     proc = subprocess.run([sys.executable, "-m", "bench", "compare", str(a), str(b)], capture_output=True, text=True,
