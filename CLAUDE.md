@@ -39,12 +39,21 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   both. Never go back to tracing a region's outline on its own — that is what
   left a hairline of backdrop between every pair of shapes. `bench`'s `seam_ppm`
   measures it and `tests/test_vexel_topology.py` holds it at zero.
-- A straight edge must come out straight. `curves.straight_runs` cuts the
-  outline where flat gives way to bending, because a cubic drawn through points
-  that wander a few hundredths of a pixel bows — that is what made a square's
-  sides barrel and a letter's stem bend. The sag bound is what keeps a genuine
-  curve out of it; do not raise it without checking a circle still comes out a
-  circle.
+- A straight edge must come out straight. `curves.fit_stretch` fits every run
+  between two breaks lines first: `line_runs` finds straight runs from the
+  residuals about their own total-least-squares line (never from a chord
+  between two pre-placed corners, which fail when a corner is a third of a
+  pixel off), gaps between runs are cubics, and the answer is kept when it
+  costs no more segments than the plain curve fit. Chords of a big circle pass
+  the residual test one at a time; what keeps them out is that they turn a
+  little against each other (`CHORD_TURN`) and that the curve is cheaper. Do
+  not loosen `LINE_RMS`/`LINE_P98` or lower `LINE_MIN` without checking a
+  circle still comes out a circle and a small round corner stays round.
+- Junction nodes are placed where the incident arcs' approach lines cross, at
+  any angle, and held on the canvas edge; the vertices inside a node's approach
+  window are never fitted (`NODE_TRIM`, `TIP_TRIM`, capped at `TRIM_SHARE` of
+  the arc). Two arcs continue smoothly through a node only if one line or one
+  cubic fits ten pixels of each; the corner threshold does not decide that.
 - A hard label map cannot hold a sub-pixel sliver, so an acute wedge arrives at
   `topology` already truncated. `_extend_wedges` hands the sliver back from the
   three-way colour mix, and the tip is fitted as a cusp. Any chain it claims

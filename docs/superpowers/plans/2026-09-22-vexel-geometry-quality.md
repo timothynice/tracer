@@ -42,7 +42,8 @@ Filled in as tasks land; every row quotes `bench compare` output.
 
 | after task | outline_px logo | junction_px logo | line_debt_px logo | score logo | seam_ppm logo | wordmark bytes |
 |---|---|---|---|---|---|---|
-| baseline (Task 2) | | | | | | |
+| baseline (Task 2, pre-change engine) | 0.694 | 0.744 | 769 | 0.9547 | 14839 | 10762 |
+| Tasks 3-5 | 0.384 | 0.739 | 681 | 0.9544 | 19665 | 9286 |
 
 ---
 
@@ -58,7 +59,7 @@ Filled in as tasks land; every row quotes `bench compare` output.
 **Interfaces:**
 - Produces: `bench.geometry.outline_error(truth_svg: str, out_svg: str, width: int, height: int, scale: int = 8) -> dict` with keys `outline_px` (symmetric Chamfer mean, source px), `outline_p99_px`, `junction_px` (mean within 6 px of truth junctions, `None` when the truth has none); `bench.geometry.line_debt(svg: str) -> dict` with `line_debt_px` (total chord length of cubics that bow ≤ 0.2 px over ≥ 3 px), `line_debt_segments`, `nodes_per_100px` (segments per 100 px of outline). `all_metrics(..., truth_svg: str | None = None)` merges them; keys are `None` for real items without truth.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # backend/tests/test_bench_geometry.py
@@ -104,12 +105,12 @@ def test_line_debt_is_none_for_relative_commands():
     assert line_debt(svg('<path d="m10 10c30 0 60 0 90 0z" fill="#36c"/>'))["line_debt_px"] is None
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `cd backend && .venv/bin/python -m pytest tests/test_bench_geometry.py -q`
 Expected: FAIL with `ModuleNotFoundError: bench.geometry`
 
-- [ ] **Step 3: Implement `bench/geometry.py`**
+- [x] **Step 3: Implement `bench/geometry.py`**
 
 ```python
 """Geometry metrics against vector truth, at 1/8 px.
@@ -241,12 +242,12 @@ def all_metrics(src_rgba, out_rgba, svg, elapsed_ms, truth_paths=None, weights=D
 
 In `runner.score_item`, pass `truth_svg=item.truth_svg.read_text(encoding="utf-8") if item.truth_svg and item.truth_svg.exists() else None`. In `report.SUMMARY_COLS` append `("outline_px", "Outline px", "{:.3f}"), ("junction_px", "Junction px", "{:.3f}"), ("line_debt_px", "Line debt", "{:.0f}")`. `summarize` in `runner.py` averages numeric keys and must skip `None` (check it does; if it uses `np.mean` over a list, filter `None` first).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd backend && .venv/bin/python -m pytest tests/test_bench_geometry.py tests/test_bench*.py -q`
 Expected: PASS. Then `python -m bench run --engines vexel --limit 4` (if `--limit` exists; else the full run) and confirm `results.json` items carry `outline_px`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/bench/geometry.py backend/bench/metrics.py backend/bench/runner.py backend/bench/report.py backend/tests/test_bench_geometry.py
@@ -265,7 +266,14 @@ git commit -m "bench: geometry metrics against vector truth - outline, junction 
 **Interfaces:**
 - Produces: corpus items `logo/tilted-squares-{512,128}`, `logo/wedge-fan-{512,128}`, and for every 512 px template `<name>-512-ds` tagged `degraded:downsample`.
 
-- [ ] **Step 1: Add the templates**
+
+**As built (2026-09-22):** `junction_px` is the 90th percentile inside the
+junction zone, not the mean, and junctions are counted from flat interior
+colours only (anti-aliased bands were passing for a third region). The wedge
+fan uses fixed high-contrast colours and three separate triangles; the squares
+are 100 px so none touch. The bench smoke tests count corpus items instead of
+hardcoding them. Commits `486590f`, `628eb1b`, `bf0cf8a`.
+- [x] **Step 1: Add the templates**
 
 ```python
 def logo_tilted_squares(rng):
@@ -293,7 +301,7 @@ def logo_wedge_fan(rng):
 
 Check `_regular`'s rotation argument convention (radians vs degrees) in `synth.py:47` and match it. Register both in `TEMPLATES["logo"]`.
 
-- [ ] **Step 2: Add the downsampled variant in `generate`**
+- [x] **Step 2: Add the downsampled variant in `generate`**
 
 ```python
 def render_downsampled(svg: str, size: int) -> bytes:
@@ -304,7 +312,7 @@ def render_downsampled(svg: str, size: int) -> bytes:
 
 In the size loop, when `size == 512`, also write `f"{name}-{size}-ds.png"` and append an `Item(id=f"{cls}/{name}-{size}-ds", ..., tags=["synthetic", f"size:{size}", "degraded:downsample"])`.
 
-- [ ] **Step 3: Regenerate, run all engines, refresh baselines**
+- [x] **Step 3: Regenerate, run all engines, refresh baselines**
 
 ```bash
 cd backend && .venv/bin/python -m bench generate
@@ -314,7 +322,7 @@ cd backend && .venv/bin/python -m bench generate
 
 Record the logo-class `outline_px`, `junction_px`, `line_debt_px`, `score`, `seam_ppm` and the wordmark byte count in the results log above. Also run the Task-3 to Task-6 acceptance probes once as a "before" (see each task's Step 1) and note the numbers.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add backend/bench/synth.py backend/bench/corpus backend/bench/baselines docs/superpowers/plans/2026-09-22-vexel-geometry-quality.md
@@ -334,7 +342,15 @@ git commit -m "bench: geometry templates and a downsampled variant; baselines ca
 - Consumes: `_approach(pts, from_start, reach, trim) -> (point, direction) | None`, `_line_through(points) -> (centre, unit_dir)` from `curves.py`.
 - Produces: `_approach(pts, from_start, reach, trim, grow_to=APPROACH_MAX) -> tuple[np.ndarray, np.ndarray, float] | None` returning `(point, direction, rms)`; `_node_estimate(lines: list[tuple], mean: np.ndarray, limit: float) -> np.ndarray`; module constants `APPROACH_MAX = 12.0`, `APPROACH_RMS = 0.08`, `PLACEMENT_SIGMA = 0.06`, `NODE_UNCERTAINTY = 0.6`, `TIP_LIMIT = 4.0`. `Arc` gains `tip0: bool = False`, `tip1: bool = False` set where `_wedge` found a tip at that end.
 
-- [ ] **Step 1: Write the failing test (a 15° wedge tip lands on the true tip)**
+
+**As built:** besides the plan, one-pixel arcs neither vote nor keep two nodes
+of one corner apart (`SHORT_ARC` grouping, kept only when one point serves
+every node), a shape cut by the canvas edge is not a wedge tip, nodes on the
+canvas edge are held on it (`_on_border`), and vertices placed on handed-back
+sliver pixels are carried on the arc (`Arc.sliver`) and excluded from approach
+lines. Tip error 1.40 → 0.33 px; the remaining third of a pixel is line
+direction noise at a 15° crossing. Commit `835af18` (with Tasks 4 and 5).
+- [x] **Step 1: Write the failing test (a 15° wedge tip lands on the true tip)**
 
 ```python
 def synthetic_wedge(size=256, tip=(75.0, 181.0), opening=15.0):
@@ -359,11 +375,11 @@ def test_a_shallow_wedge_tip_is_placed_where_its_two_sides_cross():
 
 (`trace` is the module's existing helper. Before the change this reports ≈ 1.4 px.)
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_vexel_topology.py -k shallow_wedge -q` → FAIL, `tip landed 1.4x px`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `_approach` grows the window while the run stays straight:
 
@@ -425,11 +441,11 @@ def _node_estimate(lines, mean, limit):
 
 In `_junctions`: compute `lines` with the new `_approach`; `target = _node_estimate(lines.values(), mean, limit)`; compute `away`; call `_wedge`; **if a tip is found, recompute `target` from the two wedge sides' lines only with `limit=TIP_LIMIT` (4.0)** and mark `arcs[i].tip0/tip1 = True` for the two side arcs at that end. Arithmetic in plain sums, in a fixed order, so the Rust port lands on the same bits.
 
-- [ ] **Step 4: Port to Rust**
+- [x] **Step 4: Port to Rust**
 
 In `topology.rs`, `approach` returns `Option<(P, P, f64)>` with the same growth loop and the same `line_through`; add `node_estimate(lines: &[Option<(P, P, f64)>], mean: P, limit: f64) -> P` with the same eigenvalue arithmetic (`half`, `spread`, `lam_min`, the `PLACEMENT_SIGMA / lam_min.sqrt()` test, the clamp); `Arc` gains `tip0`/`tip1`. Add a `#[test]` that two lines at 15° through a known point recover it within 1e-9 and that two lines at 5° return `mean`.
 
-- [ ] **Step 5: Verify both implementations**
+- [x] **Step 5: Verify both implementations**
 
 ```bash
 .venv/bin/python -m maturin develop --release -m vexel-rs/Cargo.toml
@@ -446,7 +462,7 @@ print(VexelEngine().trace(load_upload(open('bench/corpus/real/logo/vexel-wordmar
 
 Expected: tests pass, diffcheck within tolerance, identical wordmark, `junction_px` improved on `logo`, no `score`/`seam_ppm` regression. `--update-baseline` and commit with the deltas in the message.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/studi0trace/engines/vexel/topology.py backend/vexel-rs/src/topology.rs backend/tests/test_vexel_topology.py backend/bench/baselines/vexel.json
@@ -466,7 +482,13 @@ git commit -m "fix(vexel): place a junction where its arcs cross, at any angle"
 - Consumes: `Arc.tip0/tip1` from Task 3.
 - Produces: `_sharpen_piece(pts, lo, hi, corners, node_trim: float, tip_trim: float, tips: tuple[bool, bool])`; constants `NODE_TRIM = 1.5`, `TIP_TRIM = 4.0`.
 
-- [ ] **Step 1: Write the failing tests**
+
+**As built:** trims are per end (`Arc.trim0/trim1`), widened by the node's
+move and capped at `TRIM_SHARE` (30 %) of the arc so thin strokes and small
+discs keep their vertices — without the cap thin-mark's seam doubled and a
+disc became a 37-gon. Wedge sides are pinned to their own direction, not the
+through axis. Bled copies are fitted as interior plus two explicit jogs.
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_a_wedge_side_runs_straight_into_its_tip():
@@ -490,9 +512,9 @@ def test_a_tilted_square_stays_four_lines():
         assert d.count("C") == 0 and d.count("L") == 3, f"{ang}°: {d[:80]}"
 ```
 
-- [ ] **Step 2: Run to verify they fail** (flare ≈ 0.25–0.5 px; 45° emits cubics).
+- [x] **Step 2: Run to verify they fail** (flare ≈ 0.25–0.5 px; 45° emits cubics).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```python
 NODE_TRIM = 1.5
@@ -515,9 +537,9 @@ def _sharpen_piece(pts, lo, hi, corners, node_trim=NODE_TRIM, tip_trim=TIP_TRIM,
 
 `_fit_arc` passes `tips=(arc.tip0, arc.tip1)`. The end vertices themselves always stay: they are the shared node. Port `sharpen_piece` identically. The bled copy inherits the flags through `_bled`.
 
-- [ ] **Step 4: Verify** as Task 3 Step 5, plus `--metric line_debt_px` and `--metric outline_px`. Expected: tests pass; `logo` `line_debt_px` and `junction_px` down; wordmark flare probe (spec's `flare.py` method) p50 < 0.15 px.
+- [x] **Step 4: Verify** as Task 3 Step 5, plus `--metric line_debt_px` and `--metric outline_px`. Expected: tests pass; `logo` `line_debt_px` and `junction_px` down; wordmark flare probe (spec's `flare.py` method) p50 < 0.15 px.
 
-- [ ] **Step 5: Commit** `fix(vexel): do not believe the outline inside a node's approach window`
+- [x] **Step 5: Commit** `fix(vexel): do not believe the outline inside a node's approach window`
 
 ---
 
@@ -531,7 +553,12 @@ def _sharpen_piece(pts, lo, hi, corners, node_trim=NODE_TRIM, tip_trim=TIP_TRIM,
 **Interfaces:**
 - Produces: `_smooth_through(pa: np.ndarray, pb: np.ndarray, tol: float, span: float = SMOOTH_SPAN) -> bool` with `SMOOTH_SPAN = 10.0`; `_junctions` no longer reads `corner_threshold` for this decision (the parameter still drives `_open_corners`/`find_corners`).
 
-- [ ] **Step 1: Write the failing tests**
+
+**As built:** `_smooth_through` fits one primitive through 10 px of each arc
+(node in the middle, vertices inside the trim and on slivers left out) at 0.75
+of the tolerance, behind a 90° pre-filter. The pie fixture's 40° pair no
+longer hooks; a 15 px disc over a split background stays a circle.
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_two_arcs_meeting_at_59_degrees_are_a_corner():
@@ -552,9 +579,9 @@ def test_a_small_circle_crossed_by_a_boundary_stays_smooth():
 
 (`stem_on_edge_png`, `circle_on_split_png`, `sample_path`, `side_deviation`, `max_tangent_kink_deg` are small resvg/regex helpers written in the test module; `max_tangent_kink_deg` compares the outgoing tangent of each segment with the incoming tangent of the next.)
 
-- [ ] **Step 2: Run to verify they fail** (first fails with a hook of ≈ 0.8 px; second passes today and guards the change).
+- [x] **Step 2: Run to verify they fail** (first fails with a hook of ≈ 0.8 px; second passes today and guards the change).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```python
 SMOOTH_SPAN = 10.0
@@ -576,7 +603,7 @@ def _smooth_through(pa, pb, tol, span=SMOOTH_SPAN):
 
 In `_junctions`, replace `if not tangents and best is not None and best[0] <= corner_threshold:` with: for the closest pair `(ka, kb)`, `if not tangents and _smooth_through(pts_from_node(ka), pts_from_node(kb), tol):` where `pts_from_node` returns the arc's points ordered from the node outward, and `tol` is `params.tol` threaded into `_junctions` (signature gains `tol: float`). Port to Rust with `fit_open` from `curves.rs`.
 
-- [ ] **Step 4: Verify** as Task 3 Step 5; compare `junction_px`, `outline_px`, `score`. Commit `fix(vexel): a boundary continues through a junction only where one curve fits both sides`.
+- [x] **Step 4: Verify** as Task 3 Step 5; compare `junction_px`, `outline_px`, `score`. Commit `fix(vexel): a boundary continues through a junction only where one curve fits both sides`.
 
 ---
 
