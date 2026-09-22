@@ -49,6 +49,32 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   little against each other (`CHORD_TURN`) and that the curve is cheaper. Do
   not loosen `LINE_RMS`/`LINE_P98` or lower `LINE_MIN` without checking a
   circle still comes out a circle and a small round corner stays round.
+- Segments are `Line | Cubic | CircArc`. `curves.fit_arc_run` makes a run one
+  circular arc (`A r r 0 large sweep x y`) when the circle *through the run's
+  two ends* (`circle_through` — the ends stay, a neighbour meets them, and that
+  circle is the one a renderer draws) holds it inside `tol`, it subtends 10° or
+  more over a 6 px chord, and any pinned end tangent agrees within 3°; an arc
+  costs what a cubic costs, so it replaces a cubic and never a line. A corner
+  between a line run and a circular piece is placed where the line cuts the
+  circle (`corners_from_runs`), never at the crossing with a short chord of the
+  circle that happened to pass the straight-run test. `try_rounded_rect` emits `<rect rx>` for four axis-aligned runs
+  joined by four tangent quarter circles of one radius (the radius is read per
+  vertex from its distances to the two sides, `(u+v)+sqrt(2uv)`, not from a
+  circle fit, which the straight vertices at a run's shed ends would bias).
+  Anything that parses a path (`bench/geometry._segments`, the test helpers,
+  the frontend's `pathAnchors`) has to accept `A`.
+- Before the nodes are placed, `vexel/symmetry.py` tests every single-ring
+  region (not touching the frame) for rotational order 2–8 and for mirror axes
+  (principal directions, their 45° turns, every 15°, snapped to the canvas
+  axes within 1.5°): images within 0.10 px mean / 0.30 px at the 99th
+  percentile are a real symmetry, and the vertices are replaced by the mean of
+  their images. A closed arc with a mirror axis is then fitted on one half and
+  reflected (`topology._fit_mirrored`), with a corner on the axis sharpened as
+  the approach line's crossing with the axis, so the output is exactly
+  symmetric. Repeated shapes (same primitive to 0.1 px, or paths whose
+  outlines agree to 0.1 px after translation) are written once into `<defs>`
+  and painted as `<use href x y fill>` (`vexel/reuse.py`); anything that
+  reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`.
 - After the fit, `vexel/regularity.py` clusters every straight segment's
   direction across the boundary graph and snaps clusters carrying 40 px or more
   to one direction (axis within `snap_axis_deg`, exactly perpendicular to a

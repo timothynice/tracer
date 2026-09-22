@@ -40,13 +40,16 @@ shadows. Instead of quantising colours and tracing bands, it:
    rather than taking a corner where the artwork has none;
 7. places those arcs at **sub-pixel** positions inferred from anti-aliasing
    coverage, sharpens corners and junctions, keeps the outline G1 where a
-   boundary runs on through a junction, fits circles/ellipses/rects as
-   primitives, fits every run between breaks **lines first** — straight runs
+   boundary runs on through a junction, fits circles/ellipses/rects and
+   **rounded rectangles** (`<rect rx>`) as primitives and a run that is one
+   circle as an **`A` arc**, fits every run between breaks **lines first** — straight runs
    from the residuals about their own line, cubics between them, kept when
    that costs no more segments than a curve — so a straight edge is emitted
    straight rather than as a cubic that bows, then makes lines that are meant
    to be **parallel, perpendicular or on an axis exactly so** across the whole
-   boundary graph (`vexel/regularity.py`), and
+   boundary graph (`vexel/regularity.py`), makes a **mirror- or rotationally
+   symmetric** mark exactly so (`vexel/symmetry.py`), writes a **repeated shape
+   once** and paints its copies with `<use>` (`vexel/reuse.py`), and
    otherwise G1 cubic Béziers;
 8. recovers thin lines as **stroked centreline paths** (`fill="none"`,
    measured `stroke-width`, cap style read from the source) instead of

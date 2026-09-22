@@ -22,8 +22,22 @@ use crate::boundary::FillAt;
 use crate::core::grid::{Grid, Image};
 use crate::core::labels::Labels;
 use crate::curves::{
-    corners_from_runs, fit_contour_segments, fit_open, intersect, line_through, normalize, reverse_segments,
-    fit_stretch, CurveParams, Segment, P,
+    CORNER_REACH,
+    CurveParams,
+    MERGE_DEG,
+    P,
+    Segment,
+    corners_from_runs,
+    dist,
+    fit_contour_segments,
+    fit_open,
+    fit_stretch,
+    intersect,
+    line_runs,
+    line_through,
+    merge_lines,
+    normalize,
+    reverse_segments,
 };
 
 /// How far a shape reaches under the shapes painted over it. One pixel covers an
@@ -105,6 +119,8 @@ pub struct Arc {
     pub trim1: f64,
     /// Per vertex: placed on a pixel handed back to a cut-off wedge (a three-fill mixture).
     pub sliver: Option<Vec<bool>>,
+    /// A closed arc's mirror axis (point, unit direction), when it has one.
+    pub mirror: Option<(P, P)>,
 }
 
 impl Arc {
@@ -1515,8 +1531,16 @@ fn sharpen_piece(pts: &[P], lo: usize, hi: usize, corners: &[usize], trims: (f64
     out
 }
 
-fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f64, f64), sliver: Option<&[bool]>, params: &CurveParams) -> Vec<Segment> {
+#[allow(clippy::too_many_arguments)]
+fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f64, f64), sliver: Option<&[bool]>, mirror: Option<(P, P)>, params: &CurveParams) -> Vec<Segment> {
     if closed {
+        if let Some(axis) = mirror {
+            if pts.len() >= 3 {
+                if let Some(m) = fit_mirrored(pts, axis, params) {
+                    return m;
+                }
+            }
+        }
         // A region wholly inside one neighbour: no node anywhere on it, so this
         // is an ordinary closed contour and the closed fit is the right one. It
         // keeps the curve G1 across the seam and looks for corners around the
@@ -1578,11 +1602,11 @@ fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f64, f
 fn fit_under(moved: &[P], arc: &Arc, params: &CurveParams) -> Vec<Segment> {
     let n = moved.len();
     if arc.closed() || n < 4 {
-        return fit_arc(moved, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), params);
+        return fit_arc(moved, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), None, params);
     }
     let inner_sliver: Option<Vec<bool>> = arc.sliver.as_ref().map(|sl| sl[1..n - 1].to_vec());
     let mut out = vec![Segment::Line { p0: moved[0], p1: moved[1] }];
-    out.extend(fit_arc(&moved[1..n - 1], false, None, None, (0.0, 0.0), inner_sliver.as_deref(), params));
+    out.extend(fit_arc(&moved[1..n - 1], false, None, None, (0.0, 0.0), inner_sliver.as_deref(), None, params));
     out.push(Segment::Line { p0: moved[n - 2], p1: moved[n - 1] });
     out
 }
@@ -1590,6 +1614,204 @@ fn fit_under(moved: &[P], arc: &Arc, params: &CurveParams) -> Vec<Segment> {
 /// Make a nearly horizontal or vertical line exactly so, as
 /// `curves::snap_axis_lines` does for a whole contour — but never moving the
 /// arc's own ends, which are nodes the arcs on the other side were fitted to.
+/// Symmetrise every single-ring region's placed vertices in place. See the Python `_symmetrize`.
+fn symmetrize_boundary(bnd: &mut Boundary) -> usize {
+    let mut labels: Vec<i32> = bnd.padded.data.iter().copied().filter(|v| *v != 0).collect();
+    labels.sort_unstable();
+    labels.dedup();
+    let h = bnd.padded.h as f64 - 2.0;
+    let w = bnd.padded.w as f64 - 2.0;
+    let mut changed = 0;
+    for lab in labels {
+        let member: std::collections::HashSet<i32> = [lab].into_iter().collect();
+        let rings = bnd.rings(&member);
+        if rings.len() != 1 {
+            continue;
+        }
+        let ring = &rings[0];
+        let poly = bnd.polyline(ring);
+        if poly.iter().any(|p| p[0] <= 0.0 || p[1] <= 0.0 || p[0] >= w || p[1] >= h) {
+            continue;
+        }
+        let (sym, axes) = crate::symmetry::ring_symmetries(&poly);
+        let Some(sym) = sym else { continue };
+        let mut pos = 0;
+        for (idx, rev) in ring {
+            let k = bnd.arcs[*idx].pts.len();
+            let piece = &sym[pos..pos + k];
+            bnd.arcs[*idx].pts = if *rev { piece.iter().rev().copied().collect() } else { piece.to_vec() };
+            pos += k;
+        }
+        if ring.len() == 1 && bnd.arcs[ring[0].0].closed() && !axes.is_empty() {
+            bnd.arcs[ring[0].0].mirror = Some(axes[0]);
+        }
+        changed += 1;
+    }
+    changed
+}
+
+pub const MIRROR_CORNER_REACH: f64 = 3.1;
+
+/// See the Python `_axis_corner_from_run`.
+fn axis_corner_from_run(piece: &mut Vec<P>, at_start: bool, c: P, d: P) {
+    let runs = line_runs(piece);
+    let Some(run) = (if at_start { runs.first() } else { runs.last() }) else { return };
+    let n = piece.len();
+    let (reach, end): (f64, P) = if at_start {
+        (piece[..=run.i].windows(2).map(|w| dist(w[0], w[1])).sum(), piece[0])
+    } else {
+        (piece[run.j..].windows(2).map(|w| dist(w[0], w[1])).sum(), piece[n - 1])
+    };
+    if reach > CORNER_REACH {
+        return;
+    }
+    let Some(hit) = intersect(run.c, run.d, c, d) else { return };
+    if dist(hit, end) > 2.0 {
+        return;
+    }
+    if at_start {
+        piece[0] = hit;
+    } else {
+        piece[n - 1] = hit;
+    }
+}
+
+fn reflect_segment(seg: &Segment, c: P, d: P) -> Segment {
+    use crate::symmetry::reflect;
+    match seg {
+        Segment::Line { p0, p1 } => Segment::Line { p0: reflect(*p0, c, d), p1: reflect(*p1, c, d) },
+        Segment::Arc { p0, p1, r, large, sweep } => Segment::Arc { p0: reflect(*p0, c, d), p1: reflect(*p1, c, d), r: *r, large: *large, sweep: !*sweep },
+        Segment::Cubic { p0, c1, c2, p1 } => Segment::Cubic { p0: reflect(*p0, c, d), c1: reflect(*c1, c, d), c2: reflect(*c2, c, d), p1: reflect(*p1, c, d) },
+    }
+}
+
+/// A closed, mirror-symmetric ring fitted on one half and reflected. See the Python `_fit_mirrored`.
+fn fit_mirrored(pts: &[P], axis: (P, P), params: &CurveParams) -> Option<Vec<Segment>> {
+    let (c, d) = axis;
+    let nrm = [-d[1], d[0]];
+    let n = pts.len();
+    let side: Vec<f64> = pts.iter().map(|p| (p[0] - c[0]) * nrm[0] + (p[1] - c[1]) * nrm[1]).collect();
+    let crossings: Vec<usize> = (0..n).filter(|&i| (side[i] >= 0.0) != (side[(i + 1) % n] >= 0.0)).collect();
+    if crossings.len() != 2 {
+        return None;
+    }
+    let (mut i0, mut i1) = (crossings[0], crossings[1]);
+    if side[(i0 + 1) % n] < 0.0 {
+        std::mem::swap(&mut i0, &mut i1);
+    }
+    let count = (i1 + n - i0) % n;
+    let idx: Vec<usize> = (0..count).map(|k| (i0 + 1 + k) % n).collect();
+    if idx.len() < 4 {
+        return None;
+    }
+    let half_inner: Vec<P> = idx.iter().map(|&i| pts[i]).collect();
+    let crossing = |a: usize, b: usize| -> P {
+        let (pa, pb) = (pts[a], pts[b]);
+        let (sa, sb) = (side[a], side[b]);
+        let f = if sa != sb { sa / (sa - sb) } else { 0.5 };
+        let x = [pa[0] + f * (pb[0] - pa[0]), pa[1] + f * (pb[1] - pa[1])];
+        let t = (x[0] - c[0]) * d[0] + (x[1] - c[1]) * d[1];
+        [c[0] + d[0] * t, c[1] + d[1] * t]
+    };
+    let x0 = crossing(i0, (i0 + 1) % n);
+    let x1 = crossing(i1, (i1 + 1) % n);
+    let approach = |points: &[P], at: P| -> Option<(P, P)> {
+        let dist: Vec<f64> = points.iter().map(|p| ((p[0] - at[0]).powi(2) + (p[1] - at[1]).powi(2)).sqrt()).collect();
+        let mut sel: Vec<P> = points.iter().zip(&dist).filter(|(_, dd)| **dd >= 0.8 && **dd <= MIRROR_CORNER_REACH).map(|(p, _)| *p).collect();
+        if sel.len() < 2 {
+            sel = points.iter().zip(&dist).filter(|(_, dd)| **dd > 0.0 && **dd <= 2.0 * MIRROR_CORNER_REACH).map(|(p, _)| *p).collect();
+        }
+        if sel.len() < 2 {
+            return None;
+        }
+        Some(line_through(&sel))
+    };
+    let joint = |x: P, points: &[P], into: bool| -> (P, Option<P>) {
+        let Some((p, direction)) = approach(points, x) else { return (x, None) };
+        let lean = (direction[0] * d[0] + direction[1] * d[1]).abs().min(1.0).asin().to_degrees();
+        if 2.0 * lean > params.corner_threshold {
+            if let Some(hit) = intersect(p, direction, c, d) {
+                if ((hit[0] - x[0]).powi(2) + (hit[1] - x[1]).powi(2)).sqrt() <= 1.5 {
+                    return (hit, None);
+                }
+            }
+            return (x, None);
+        }
+        (x, Some(if into { nrm } else { [-nrm[0], -nrm[1]] }))
+    };
+    let m = half_inner.len().min(12);
+    let (start, t_start) = joint(x0, &half_inner[..m], true);
+    let tail: Vec<P> = half_inner[half_inner.len() - m..].iter().rev().copied().collect();
+    let (end, t_end) = joint(x1, &tail, false);
+    let mut half: Vec<P> = Vec::with_capacity(half_inner.len() + 2);
+    half.push(start);
+    half.extend_from_slice(&half_inner);
+    half.push(end);
+    let corners = open_corners(&half, params.corner_threshold);
+    let sharp: HashMap<usize, P> = corners.iter().map(|&k| (k, sharp_corner(&half, k))).collect();
+    let mut bounds: Vec<usize> = vec![0, half.len() - 1];
+    bounds.extend(corners.iter().copied());
+    bounds.sort_unstable();
+    bounds.dedup();
+    let mut pieces: Vec<Vec<P>> = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for k in 0..bounds.len() - 1 {
+        let (lo, hi) = (bounds[k], bounds[k + 1]);
+        let mut piece = sharpen_piece(&half, lo, hi, &corners, (0.0, 0.0), None);
+        if piece.len() < 2 {
+            continue;
+        }
+        if let Some(p) = sharp.get(&lo) {
+            piece[0] = *p;
+        }
+        if let Some(p) = sharp.get(&hi) {
+            let last = piece.len() - 1;
+            piece[last] = *p;
+        }
+        pieces.push(piece);
+        spans.push((lo, hi));
+    }
+    corners_from_runs(&mut pieces, false);
+    // a corner on the axis is placed from the straight run that leads into it (see the Python)
+    if !pieces.is_empty() && t_start.is_none() {
+        axis_corner_from_run(&mut pieces[0], true, c, d);
+    }
+    if !pieces.is_empty() && t_end.is_none() {
+        let last = pieces.len() - 1;
+        axis_corner_from_run(&mut pieces[last], false, c, d);
+    }
+    let mut segments: Vec<Segment> = Vec::new();
+    for (piece, (lo, hi)) in pieces.iter().zip(&spans) {
+        let ts = if *lo == 0 { t_start } else { None };
+        let te = if *hi == half.len() - 1 { t_end } else { None };
+        segments.extend(fit_stretch(piece, params.tol, ts, te));
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    let segments = snap_axis(segments, params.snap_axis_deg);
+    let reflected: Vec<Segment> = segments.iter().map(|s| reflect_segment(s, c, d)).collect();
+    let mut all = segments.clone();
+    all.extend(reverse_segments(&reflected));
+    let mut full = merge_lines(all);
+    if full.len() > 1 {
+        if let (Segment::Line { p0: a0, p1: a1 }, Segment::Line { p0: b0, p1: b1 }) = (full[0].clone(), full[full.len() - 1].clone()) {
+            let a = [a1[0] - a0[0], a1[1] - a0[1]];
+            let b = [b1[0] - b0[0], b1[1] - b0[1]];
+            let (la, lb) = ((a[0] * a[0] + a[1] * a[1]).sqrt(), (b[0] * b[0] + b[1] * b[1]).sqrt());
+            if la > 0.0 && lb > 0.0 {
+                let cosv = ((a[0] * b[0] + a[1] * b[1]) / (la * lb)).clamp(-1.0, 1.0);
+                if cosv.acos().to_degrees() <= MERGE_DEG {
+                    let last = full.len() - 1;
+                    full[last] = Segment::Line { p0: b0, p1: a1 };
+                    full.remove(0);
+                }
+            }
+        }
+    }
+    Some(full)
+}
+
 fn snap_axis(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment> {
     let n = segments.len();
     for i in 0..n {
@@ -1693,22 +1915,30 @@ pub fn build_opt(
             trim0: NODE_TRIM,
             trim1: NODE_TRIM,
             sliver: if crowded.iter().any(|c| *c) { Some(crowded) } else { None },
+            mirror: None,
         })
         .collect();
 
-    if !snap {
-        let mut edge_arc = HashMap::new();
-        for (idx, ch) in chain_list.iter().enumerate() {
-            for (pos, key) in ch.edges.iter().enumerate() {
-                edge_arc.insert(*key, (idx, pos));
-            }
+    let mut edge_arc = HashMap::new();
+    for (idx, ch) in chain_list.iter().enumerate() {
+        for (pos, key) in ch.edges.iter().enumerate() {
+            edge_arc.insert(*key, (idx, pos));
         }
+    }
+    if !snap {
         let later = vec![false; arcs.len()];
         return Boundary { arcs, padded, edge_arc, later_is_b: later };
     }
+    // A region that is mirror- or rotationally symmetric is made exactly so
+    // before its nodes are placed and its curves fitted (see the Python).
+    {
+        let mut early = Boundary { arcs, padded: padded.clone(), edge_arc: edge_arc.clone(), later_is_b: Vec::new() };
+        symmetrize_boundary(&mut early);
+        arcs = early.arcs;
+    }
     junctions(&mut arcs, &padded, params.corner_threshold, params.tol);
     for arc in arcs.iter_mut() {
-        arc.segments = fit_arc(&arc.pts, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), params);
+        arc.segments = fit_arc(&arc.pts, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), arc.mirror, params);
     }
     // Across the graph: lines meant to be parallel, perpendicular or on an axis
     // are made exactly so. Nodes never move, so the ring still closes.
@@ -1741,12 +1971,6 @@ pub fn build_opt(
         }
     }
 
-    let mut edge_arc = HashMap::new();
-    for (idx, ch) in chain_list.iter().enumerate() {
-        for (pos, key) in ch.edges.iter().enumerate() {
-            edge_arc.insert(*key, (idx, pos));
-        }
-    }
     Boundary { arcs, padded, edge_arc, later_is_b }
 }
 

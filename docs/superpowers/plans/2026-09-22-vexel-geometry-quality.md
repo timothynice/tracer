@@ -813,7 +813,7 @@ spawned as its own task.
 **Interfaces:**
 - Produces: `@dataclass class CircArc: p0, p1, r: float, large: bool, sweep: bool` in `Segment`; `try_rounded_rect(poly, params) -> RoundedRect | None` (`RoundedRect(x, y, w, h, rx)` emitted as `<rect ... rx>`); in `fit_pieces` a curve gap whose Kåsa circle fit has 95th-percentile deviation ≤ `tol` becomes one `CircArc`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_rounded_square_becomes_a_rect_with_rx():
@@ -826,13 +826,45 @@ def test_a_ring_segment_is_emitted_as_an_arc():
     assert svg.count("A") >= 2 and svg.count("C") <= 2
 ```
 
-- [ ] **Step 2: Run to verify they fail.**
+- [x] **Step 2: Run to verify they fail.**
 
-- [ ] **Step 3: Implement.** `try_rounded_rect`: a closed ring with exactly four line runs, axis-aligned within `snap_axis_deg`, whose four gaps each fit a circle within `tol` with radii equal within `tol` and centres inset by `r` from the line intersections. `fit_arc_run`: in `fit_pieces`, before `fit_cubics` on a gap ≥ 6 px, try `fit_circle(gap)`; accept if dev ≤ `tol` and the gap subtends ≥ 10°; set `large = subtended > 180°`, `sweep` from the sign of the cross product. `path_d` writes `A r r 0 {large:d} {sweep:d} x y`. `reverse_segments` flips `sweep` and swaps `p0/p1`. Update `bench/geometry._segments` to sample `A` (convert to points by the centre-angle formula) and the frontend inspector likewise. Port identically.
+- [x] **Step 3: Implement.** `try_rounded_rect`: a closed ring with exactly four line runs, axis-aligned within `snap_axis_deg`, whose four gaps each fit a circle within `tol` with radii equal within `tol` and centres inset by `r` from the line intersections. `fit_arc_run`: in `fit_pieces`, before `fit_cubics` on a gap ≥ 6 px, try `fit_circle(gap)`; accept if dev ≤ `tol` and the gap subtends ≥ 10°; set `large = subtended > 180°`, `sweep` from the sign of the cross product. `path_d` writes `A r r 0 {large:d} {sweep:d} x y`. `reverse_segments` flips `sweep` and swaps `p0/p1`. Update `bench/geometry._segments` to sample `A` (convert to points by the centre-angle formula) and the frontend inspector likewise. Port identically.
 
-- [ ] **Step 4: Verify** (`bytes` down on `logo/ring`, `outline_px` unchanged; `npm run test:run` and `npm run build` pass). Commit `feat(vexel): rounded rectangles and circular arcs as primitives`.
+- [x] **Step 4: Verify** (`bytes` down on `logo/ring`, `outline_px` unchanged; `npm run test:run` and `npm run build` pass). Commit `feat(vexel): rounded rectangles and circular arcs as primitives`.
 
 ---
+
+**As built.** `RoundedRect(x, y, w, h, rx)` → `<rect … rx>`; `try_rounded_rect(poly, params)` is tried in `fit_shape`
+after circle/ellipse/rect when the contour has no corners: the polygon is rolled to start at its farthest vertex from
+the centroid (mid-corner), `line_runs` must give exactly four axis-aligned runs alternating H/V, and each gap must lie
+inside `tol` (95th percentile) of a circle tangent to its two sides. The radius is read per vertex from its inside
+distances `u, v` to those sides as `(u+v)+sqrt(2uv)` (the median over vertices with `min(u,v) > max(tol, 0.5)`), not
+from a Kåsa fit, which the straight vertices the runs shed at their ends biased by +0.5 px; radii agree within
+`max(2·tol, 5 %)`. `CircArc(p0, p1, r, large, sweep)` joins `Segment`; `fit_arc_run` (Kåsa circle, p95 ≤ tol, max ≤
+2·tol, ≥ 10° over ≥ 6 px, pinned tangents within 3°) is tried on every stretch in `fit_stretch` (an arc costs 1.0 like
+a cubic and wins the tie), on every gap between line runs in `lines_first`, and a corner-free closed loop that is one
+circle becomes two half arcs in `fit_closed` (a ring's contours). `path_d` writes `A r r 0 large sweep x y`,
+`reverse_segments` flips `sweep`, `arc_centre`/`arc_points` draw it as a renderer would. Two things the first bench
+run taught: (1) an arc's ends are fixed by its neighbours, so the circle that gets drawn is the one *through the ends*,
+not the free Kåsa fit — forcing the fit's radius through ends 0.4 px off displaced whole circles (cutout-512 outline
+0.026 → 1.00); `circle_through` now finds the best centre on the chord's bisector by golden section and the arc is
+accepted only if that circle holds the points (cutout-512 now 0.013), and a corner-free closed loop projects its start
+vertex onto the circle; (2) the corner between a straight side and a circular arc used to be the crossing of two local
+lines, 0.2 px off radially, and a 6 px chord of a 40 px circle passes the straight-run test, so `corners_from_runs`
+now treats a piece that is one circle (`_whole_circle`, dev ≤ 0.15) as the circle at both ends and places a line–circle
+corner where the line cuts the circle (`_line_circle`; `_circle_near` reads the circle from the first 30 px otherwise).
+Rust twins throughout
+(`Segment::Arc`, `Shape::RoundedRect`, `try_rounded_rect`, `fit_arc_run`). Consumers taught `A`: `bench/geometry`
+(`_segments`, `_arc_points`, `line_debt` counts a flat arc as debt like a flat cubic), the test helpers
+(`path_points`, `sample_path`, `path_anchors`, `line_directions`), and the frontend's `pathAnchors` already skipped the
+five arc parameters — a test now pins that. Tests: `tests/test_vexel_primitives.py` (rounded square → `rx` 18 ± 0.3
+clean and JPEG; geometry read-back and impostors; ring sector → exactly two `A`, radii 40/60 ± 0.3; arc fit reads
+radius/sweep/large, refuses a 6° tangent mismatch, an 8° sliver and an ellipse). `npm run test:run`/`build` pass.
+Parity: ring-512, wedge-fan-128, tilted-squares, overlap, stripes, cutout, hex-nest identical; wordmark 3/865 and
+logomark 5/2190 numbers by 0.01. Pre-existing backend gaps found while checking (all present at Task 8 too):
+sticker-512 eyes are `<ellipse>` in Python and a path in Rust (`fit_ellipse` acceptance), venn-512 differs in
+spline knot placement (Task 7's equalisation flips a branch on last-bit solver differences), silverpeak-badge-768
+differs in structure, thin-mark strokes (known).
 
 ### Task 10: Symmetry and repeated shapes
 
@@ -844,7 +876,7 @@ def test_a_ring_segment_is_emitted_as_an_arc():
 **Interfaces:**
 - Produces: `symmetry.mirror_axes(poly: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]` (candidate axes: centroid with principal directions and their 45° rotations); `symmetry.symmetrize(poly, axis) -> np.ndarray` (each vertex averaged with its nearest reflected neighbour via `scipy.spatial.cKDTree`, applied only when the mean reflected distance ≤ `SYM_MEAN = 0.10` px and max ≤ `SYM_MAX = 0.30`); `symmetry.rotational_order(poly) -> int` (2..8 by the same test); `symmetry.duplicates(shapes) -> list[list[int]]` (same fill, outline Chamfer ≤ 0.10 px after translation) for `<use>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_a_mirror_symmetric_mark_is_emitted_symmetric():
@@ -857,13 +889,40 @@ def test_repeated_dots_become_use_elements():
     assert svg.count("<use ") == 8 and svg.count("<defs>") == 1
 ```
 
-- [ ] **Step 2: Run to verify they fail.**
+- [x] **Step 2: Run to verify they fail.**
 
-- [ ] **Step 3: Implement** as specified in the interface; symmetrisation moves shared arc vertices, so both regions on an arc move together (the ring of the symmetric shape is the union of its arcs; vertices are replaced in place in `Arc.pts`). `<use>`: emit the first shape as `<path id="s1">` inside `<defs>` and every duplicate as `<use href="#s1" x=dx y=dy>` with the duplicate's own fill attribute when fills differ only by name; keep painter's order. Port identically.
+- [x] **Step 3: Implement** as specified in the interface; symmetrisation moves shared arc vertices, so both regions on an arc move together (the ring of the symmetric shape is the union of its arcs; vertices are replaced in place in `Arc.pts`). `<use>`: emit the first shape as `<path id="s1">` inside `<defs>` and every duplicate as `<use href="#s1" x=dx y=dy>` with the duplicate's own fill attribute when fills differ only by name; keep painter's order. Port identically.
 
-- [ ] **Step 4: Verify** (`bytes` down on `logo/hex-nest`, `flat/mosaic`; `outline_px` unchanged or better). Commit `feat(vexel): mirror and rotational symmetry, repeated shapes as <use>`.
+- [x] **Step 4: Verify** (`bytes` down on `logo/hex-nest`, `flat/mosaic`; `outline_px` unchanged or better). Commit `feat(vexel): mirror and rotational symmetry, repeated shapes as <use>`.
 
 ---
+
+**As built.** `symmetry.py`: `mirror_axes` (PCA directions, their 45° turns, every 15°, snapped to the canvas axes
+within `AXIS_SNAP_DEG = 1.5`), `reflect`/`rotate`, `symmetrize(poly, axis)`, `rotational_order` (8…2),
+`symmetrize_rotational`, `ring_symmetries(poly) → (poly | None, axes)`; the fit test is mean ≤ `SYM_MEAN = 0.10`
+and 99th percentile ≤ `SYM_MAX = 0.30` (absolute cap `SYM_CAP = 1.0`) — the plain max was decided by one cusp vertex
+handed back with a sliver. `topology._symmetrize` runs after placement and before `_junctions` on every single-ring
+label that does not touch the frame (frame vertices are exact and must not be averaged), writes the symmetrised
+vertices back into the shared arcs, and records `Arc.mirror` for a ring that is one closed arc. Symmetrising the
+vertices alone left the heart's emitted outline 0.12 px asymmetric (the fit is not a symmetric operation and the notch
+cusp sat 0.48 px off the axis), so `_fit_mirrored` fits one half between the two axis crossings — a smooth crossing
+pins the tangent perpendicular to the axis, a corner crossing (turn > `corner_threshold`) is sharpened as the approach
+line's crossing with the axis — reflects the segments (`_reflect_segment`, arcs flip `sweep`) and merges the collinear
+line pairs at smooth crossings; the mirror axis is chosen by a canonical rank (exact canvas axis first, then angle) so
+both implementations pick the same one. Heart: mirror chamfer 0.34 → 0.0528 → < 0.05 once the near-vertical PCA
+axis snaps to exactly vertical. The first bench showed triangle-bar's apex 0.93 px low (outline 0.005 → 0.105): a
+corner crossing placed from a 3 px approach sits on anti-aliasing mixtures pulled inward, so `_axis_corner_from_run`
+now crosses the adjacent straight run with the axis (as `corners_from_runs` does), and the apex lands at (256, 60)
+exactly. Parity: triangle-bar, tilted-squares, hex-nest, cutout byte-identical; mosaic-512 differs in `<use>` count
+because two stub corners differ between backends, a gap already present at Task 8 (3676 vs 3684 bytes then). `reuse.py`: `emit(pending, precision)` groups shapes that are the same primitive to
+`USE_TOL = 0.10` or paths with the same segment signature whose sampled outlines agree to 0.10 px both ways after
+translation; the first copy's geometry goes into `<defs>` with only an `id`, every copy (the first included, so the
+test counts 9 uses for a 3×3 grid, not the plan's 8) is `<use href="#uN" x y fill…>` in paint order. Rust twins:
+`symmetry.rs` (exact nearest-vertex lookup through a widening grid, numpy's linear percentile), `topology.rs`
+`symmetrize_boundary`/`fit_mirrored`, `reuse.rs`. The frontend's `svgdoc.ts` resolves `<use>` (tag, anchors, outline
+translated, own fill; hiding a copy removes its `<use>`, not the definition). Tests: `tests/test_vexel_symmetry.py`
+(heart emitted symmetric, square/hexagon/pentagon/ellipse orders and axes, a blob has none, dot grid → 9 `<use>`,
+definition unpainted), Rust unit tests, `svgdoc.test.ts`.
 
 ### Task 11: Render-and-compare refinement (opt-in)
 
@@ -893,6 +952,17 @@ def test_refinement_removes_a_planted_half_pixel_offset():
 - [ ] **Step 4: Verify** on the corpus with `refine=true` as a sweep (`python -m bench sweep --engine vexel --param refine=false:true`): `outline_px` down on `logo` and real items, `elapsed_ms` within 3×. Default stays off until the sweep says otherwise. Commit `feat(vexel): opt-in render-and-compare refinement of the boundary graph`.
 
 ---
+
+**Spike before building (2026-09-22).** A scratch prototype nudged every coordinate pair of the traced SVG text by
+±0.1 px in x and y, re-rendered a 24 px crop at 4× (resvg, crop origin integer-aligned — a fractional viewBox origin
+shifts the sampling grid against the source and the optimiser then chases the misalignment, making tilted-squares
+*worse*, 0.0086 → 0.0599), and kept a nudge when the crop's mean colour error fell. Three passes. Against vector
+truth: tilted-squares-512 0.0086 → 0.0045, wedge-fan-512 0.0816 → 0.0620, overlap-512 0.0260 → 0.0133, blobs-512
+0.0746 → 0.0566, triangle-bar-512 0.0055 → 0.0101 (worse: its bar's corners are stubs from sliver labels, and pixel
+agreement there does not mean edge agreement). 4–22 s per image in Python through the text. Go, with the plan's
+constraints made hard: only interior control points and joints move, along the local normal, nodes and frame
+vertices never; a move needs a clear gain over a noise floor; the crop holds only the two shapes on either side of
+the arc; opt-in behind `refine`.
 
 ### Task 12: Learned corner/smooth classifier from corpus truth
 

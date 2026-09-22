@@ -19,7 +19,8 @@ from skimage.segmentation import relabel_sequential
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
 from studi0trace.engines.vexel.boundary import contours, coverage_field, thin_coverage
-from studi0trace.engines.vexel.curves import CurveParams, PathShape, fit_shape, shape_svg
+from studi0trace.engines.vexel import reuse
+from studi0trace.engines.vexel.curves import CurveParams, PathShape, Shape, fit_shape, shape_svg
 from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import MergeParams, adjacency, merge_regions
 from studi0trace.engines.vexel.order import enclosure, paint_order, shape_labels, shape_mask
@@ -194,6 +195,18 @@ def _shape_from_rings(bnd, rings, member, params: CurveParams):
         if not isinstance(primitive, PathShape):
             return primitive
     return PathShape(contours=[bnd.segments(r, member) for r in rings])
+
+
+def _emit(pending: list, precision: int, defs: list[str]) -> list[str]:
+    """Shapes to markup in paint order, repeated shapes as `<use>` of one
+    definition each; stroke markup passes through where it stands."""
+    shapes = [(item, k) for k, item in enumerate(pending) if not isinstance(item, str)]
+    use_defs, use_elements = reuse.emit([(shape, attrs) for (shape, attrs), _k in shapes], precision)
+    defs.extend(use_defs)
+    out = [item if isinstance(item, str) else "" for item in pending]
+    for ((_shape, _attrs), k), markup in zip(shapes, use_elements):
+        out[k] = markup
+    return out
 
 
 def _is_invisible(fill) -> bool:
@@ -453,12 +466,14 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     )
 
     defs: list[str] = []
-    elements: list[str] = []
+    # (shape, attrs) in paint order; a stroke's finished markup stands as a
+    # string. Repeated shapes are written once into defs and used (`reuse`).
+    pending: list[tuple[Shape, str] | str] = []
     for i, lab in enumerate(order):
         if lab in invisible:
             continue  # transparent canvas or hole: nothing to paint
         if lab in stroke_of:
-            elements.append(stroke_of[lab][1])
+            pending.append(stroke_of[lab][1])
         if lab in skip:
             continue
         fill = fill_override.get(lab, fills[lab])
@@ -478,7 +493,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
             if d:
                 defs.append(d)
-            elements.append(shape_svg(shape, attrs + extra, p.path_precision))
+            pending.append((shape, attrs + extra))
             continue
         member = shape_labels(lab, enc, stacked, invisible)
         rings = [r for r in bnd.rings(member) if r]
@@ -489,8 +504,9 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
         if d:
             defs.append(d)
-        elements.append(shape_svg(shape, attrs + extra, p.path_precision))
+        pending.append((shape, attrs + extra))
 
+    elements = _emit(pending, p.path_precision, defs)
     body = f"<defs>{''.join(defs)}</defs>" if defs else ""
     return f'<svg {SVG_NS} viewBox="0 0 {width} {height}">{body}{"".join(elements)}</svg>'
 

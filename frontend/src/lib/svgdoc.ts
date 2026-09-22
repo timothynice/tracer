@@ -30,7 +30,7 @@ export interface SvgDoc {
   render(hidden: ReadonlySet<number>): string;
 }
 
-const SHAPE_TAGS = new Set(["path", "rect", "circle", "ellipse", "polygon", "polyline", "line"]);
+const SHAPE_TAGS = new Set(["path", "rect", "circle", "ellipse", "polygon", "polyline", "line", "use"]);
 const NUM = /-?\d*\.?\d+(?:e[-+]?\d+)?/gi;
 
 /** On-curve points of an absolute path: the ones a user would drag. */
@@ -136,8 +136,27 @@ function attrNum(el: Element, name: string, fallback = 0): number {
   return Number.isFinite(v) ? v : fallback;
 }
 
+/** Vexel writes a repeated shape once into defs and paints every copy as a
+ * `<use href="#id" x y>`: the copy's geometry is the definition's, moved. */
+function useTarget(el: Element): Element | null {
+  const ref = el.getAttribute("href") ?? el.getAttribute("xlink:href") ?? "";
+  if (!ref.startsWith("#")) return null;
+  const target = el.ownerDocument.getElementById(ref.slice(1));
+  return target && SHAPE_TAGS.has(target.tagName.toLowerCase()) && target.tagName.toLowerCase() !== "use" ? target : null;
+}
+
+function useShift(el: Element): Matrix {
+  return [1, 0, 0, 1, attrNum(el, "x"), attrNum(el, "y")];
+}
+
 function anchorsOf(el: Element): [number, number][] {
   switch (el.tagName.toLowerCase()) {
+    case "use": {
+      const target = useTarget(el);
+      if (!target) return [];
+      const shift = useShift(el);
+      return anchorsOf(target).map((pt) => apply(shift, pt));
+    }
     case "path":
       return pathAnchors(el.getAttribute("d") ?? "");
     case "rect": {
@@ -204,6 +223,13 @@ function escapeAttr(v: string): string {
 
 function outlineOf(el: Element): string {
   const tag = el.tagName.toLowerCase();
+  if (tag === "use") {
+    const target = useTarget(el);
+    if (!target) return "";
+    const [, , , , dx, dy] = useShift(el);
+    const inner = outlineOf(target);
+    return dx || dy ? `<g transform="translate(${dx} ${dy})">${inner}</g>` : inner;
+  }
   const attrs = GEOMETRY_ATTRS[tag];
   if (!attrs) return "";
   const kept = attrs
@@ -253,9 +279,10 @@ export function parseSvg(markup: string): SvgDoc | null {
     const matrix = parseTransform(el.getAttribute("transform"));
     const anchors = anchorsOf(el).map((pt) => apply(matrix, pt));
     const bounds = boundsOf(anchors);
+    const target = el.tagName.toLowerCase() === "use" ? useTarget(el) : null;
     return {
       index,
-      tag: el.tagName.toLowerCase(),
+      tag: target ? target.tagName.toLowerCase() : el.tagName.toLowerCase(),
       fill: painted,
       paint: painted === "none" ? "none" : painted.startsWith("url(") ? "gradient" : "solid",
       opacity: Number(el.getAttribute("fill-opacity") ?? el.getAttribute("opacity") ?? 1),

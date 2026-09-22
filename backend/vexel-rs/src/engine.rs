@@ -4,7 +4,7 @@ use crate::boundary::{contours, coverage_field, polygon_area, thin_coverage};
 use crate::core::grid::{Grid, Image, Mask};
 use crate::core::labels::{self, LabelIndex, Labels};
 use crate::core::morphology::dilate_cross;
-use crate::curves::{fit_shape, shape_svg, CurveParams, Shape};
+use crate::curves::{fit_shape, CurveParams, Shape};
 use crate::fills::{fit_fill, Fill, FitParams};
 use crate::merge::{adjacency, merge_regions, MergeParams};
 use crate::order::{enclosure, paint_order, shape_labels, shape_mask, Enclosure};
@@ -704,13 +704,15 @@ fn emit(
     );
 
     let mut defs: Vec<String> = Vec::new();
-    let mut elements: Vec<String> = Vec::new();
+    // Either a stroke's finished markup, or a shape with its paint attributes,
+    // in paint order; repeated shapes are written once and used (`reuse`).
+    let mut pending: Vec<Result<(Shape, String), String>> = Vec::new();
     for (i, lab) in order.iter().enumerate() {
         if invisible.contains(lab) {
             continue; // transparent canvas or hole: nothing to paint
         }
         if let Some(s) = stroke_of.get(lab) {
-            elements.push(s.clone());
+            pending.push(Err(s.clone()));
         }
         if skip.contains(lab) {
             continue;
@@ -750,8 +752,19 @@ fn emit(
         if !d.is_empty() {
             defs.push(d);
         }
-        elements.push(shape_svg(&shape, &format!("{}{}", attrs, extra), p.path_precision));
+        pending.push(Ok((shape, format!("{}{}", attrs, extra))));
     }
+    let shapes: Vec<(Shape, String)> = pending.iter().filter_map(|it| it.as_ref().ok().cloned()).collect();
+    let (use_defs, use_elements) = crate::reuse::emit(&shapes, p.path_precision, 1);
+    defs.extend(use_defs);
+    let mut used = use_elements.into_iter();
+    let elements: Vec<String> = pending
+        .into_iter()
+        .map(|it| match it {
+            Err(markup) => markup,
+            Ok(_) => used.next().unwrap_or_default(),
+        })
+        .collect();
 
     let body = if defs.is_empty() { String::new() } else { format!("<defs>{}</defs>", defs.concat()) };
     format!(

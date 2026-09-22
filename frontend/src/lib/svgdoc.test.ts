@@ -16,6 +16,13 @@ test("reads the anchors a user would drag, not the control points", () => {
     [8, 20],
   ]);
   expect(pathAnchors("M0 0h10v10")).toEqual([[0, 0], [10, 0], [10, 10]]);
+  // Vexel writes circular arcs: the radius, rotation and flags are not anchors,
+  // the arc's end is.
+  expect(pathAnchors("M10 50A40 40 0 0 1 90 50L90 60Z")).toEqual([
+    [10, 50],
+    [90, 50],
+    [90, 60],
+  ]);
 });
 
 test("describes each painted shape and skips defs", () => {
@@ -83,4 +90,22 @@ test("translate, scale and matrix all land where the renderer puts them", () => 
   expect(doc.shapes[0].bounds).toEqual([5, 7, 10, 10]);
   expect(doc.shapes[1].bounds).toEqual([0, 0, 20, 30]);
   expect(doc.shapes[2].bounds).toEqual([4, 4, 10, 10]);
+});
+
+
+test("a <use> of a defined shape is that shape, moved, with its own paint", () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<defs><circle cx="32" cy="32" r="12" id="u1"/></defs>
+<use href="#u1" fill="#2b9d8f"/><use href="#u1" x="64" y="0" fill="#ff8800"/></svg>`;
+  const doc = parseSvg(svg)!;
+  expect(doc.shapes.map((s) => s.tag)).toEqual(["circle", "circle"]);
+  expect(doc.shapes.map((s) => s.fill)).toEqual(["#2b9d8f", "#ff8800"]);
+  expect(doc.shapes[1].bounds).toEqual([84, 20, 24, 24]);
+  expect(doc.shapes[1].outline).toContain('translate(64 0)');
+  expect(doc.shapes[1].outline).toContain('r="12"');
+  expect(shapeLabel(doc.shapes[1])).toBe("Circle 2");
+  // hiding the second copy removes its <use>, not the definition
+  const hidden = doc.render(new Set([1]));
+  expect(hidden).toContain('id="u1"');
+  expect(hidden.match(/<use/g)?.length).toBe(1);
 });

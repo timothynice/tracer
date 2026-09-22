@@ -20,11 +20,13 @@ pub mod prepare;
 pub mod refine;
 pub mod regularity;
 pub mod rescue;
+pub mod reuse;
 pub mod shadows;
 pub mod stats;
 pub mod topology;
 pub mod timing;
 pub mod strokes;
+pub mod symmetry;
 pub mod weights;
 
 

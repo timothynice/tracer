@@ -43,12 +43,19 @@ import numpy as np
 
 from studi0trace.engines.vexel.boundary import FillAt
 from studi0trace.engines.vexel.regularity import regularize
+from studi0trace.engines.vexel.symmetry import reflect, ring_symmetries
 from studi0trace.engines.vexel.curves import (
+    CORNER_REACH,
+    MERGE_DEG,
+    CircArc,
+    Cubic,
     CurveParams,
     Line,
     Segment,
     corners_from_runs,
     fit_stretch,
+    line_runs,
+    merge_lines,
     _intersect,
     fit_contour_segments,
     fit_cubics,
@@ -167,6 +174,7 @@ class Arc:
     trim0: float = 1.5  # vertices within this of each end are not believed (NODE_TRIM, widened by the node's move)
     trim1: float = 1.5
     sliver: np.ndarray | None = None  # per vertex: placed on a pixel handed back to a cut-off wedge (three-fill mixture)
+    mirror: tuple[np.ndarray, np.ndarray] | None = None  # a closed arc's mirror axis (point, unit direction), when it has one
 
     @property
     def closed(self) -> bool:
@@ -1189,6 +1197,14 @@ def build(
         Arc(pair=ch["pair"], pts=pts, normal=normal, n0=ch["n0"], n1=ch["n1"], sliver=(sliver if sliver.any() else None))
         for ch, (pts, normal, sliver) in zip(chains, placed)
     ]
+    edge_arc: dict[int, tuple[int, int]] = {}
+    for idx, ch in enumerate(chains):
+        for pos, key in enumerate(ch["edges"]):
+            edge_arc[key] = (idx, pos)
+    # A region that is mirror- or rotationally symmetric is made exactly so
+    # before its nodes are placed and its curves fitted; the vertices live in
+    # the shared arcs, so the neighbour across each edge moves with it.
+    _symmetrize(Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=[]))
     _junctions(arcs, padded, params.corner_threshold, params.tol)
     for arc in arcs:
         arc.segments = _fit_arc(arc, params)
@@ -1211,11 +1227,41 @@ def build(
             loose = replace(params, tol=min(2.0 * params.tol, UNDER_TOL * bleed))
             arc.under = _fit_under(_bled(arc, bleed if b_later else -bleed, taper), loose)
 
-    edge_arc: dict[int, tuple[int, int]] = {}
-    for idx, ch in enumerate(chains):
-        for pos, key in enumerate(ch["edges"]):
-            edge_arc[key] = (idx, pos)
     return Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=later_is_b)
+
+
+def _symmetrize(bnd: Boundary) -> int:
+    """Symmetrise every single-ring region's placed vertices in place; the
+    number of regions changed. See `symmetry.symmetrize_ring`."""
+    changed = 0
+    for lab in np.unique(bnd.padded):
+        if lab == 0:
+            continue
+        rings = bnd.rings(frozenset([int(lab)]))
+        if len(rings) != 1:
+            continue
+        ring = rings[0]
+        poly = bnd.polyline(ring)
+        # a ring on the canvas frame stays put: its frame vertices are exact
+        # and averaging them with a partner would pull them off the edge
+        h, w = bnd.padded.shape[0] - 2, bnd.padded.shape[1] - 2
+        if (poly[:, 0] <= 0.0).any() or (poly[:, 1] <= 0.0).any() or (poly[:, 0] >= w).any() or (poly[:, 1] >= h).any():
+            continue
+        sym, axes = ring_symmetries(poly)
+        if sym is None:
+            continue
+        pos = 0
+        for idx, rev in ring:
+            arc = bnd.arcs[idx]
+            k = len(arc.pts)
+            piece = sym[pos:pos + k]
+            arc.pts = piece[::-1].copy() if rev else piece.copy()
+            pos += k
+        if len(ring) == 1 and bnd.arcs[ring[0][0]].closed and axes:
+            # one closed arc with a mirror axis is fitted on one half and reflected
+            bnd.arcs[ring[0][0]].mirror = axes[0]
+        changed += 1
+    return changed
 
 
 def _fit_under(moved: Arc, params: CurveParams) -> list[Segment]:
@@ -1364,6 +1410,10 @@ def _open_corners(pts: np.ndarray, threshold_deg: float, scales: tuple[float, ..
 def _fit_arc(arc: Arc, params: CurveParams) -> list[Segment]:
     pts = arc.pts
     if arc.closed:
+        if arc.mirror is not None and len(pts) >= 3:
+            mirrored = _fit_mirrored(pts, arc.mirror, params)
+            if mirrored is not None:
+                return mirrored
         # A region wholly inside one neighbour: no node anywhere on it, so this
         # is an ordinary closed contour and the closed fit is the right one. It
         # keeps the curve G1 across the seam and looks for corners around the
@@ -1400,6 +1450,153 @@ def _fit_arc(arc: Arc, params: CurveParams) -> list[Segment]:
         # pinned tangent says, and the curves between runs honour it.
         segments.extend(fit_stretch(piece, params.tol, t_start, t_end))
     return _snap_axis(segments, params.snap_axis_deg)
+
+
+MIRROR_CORNER_REACH = 3.1  # px of approach used to decide and sharpen a crossing on the axis
+
+
+def _fit_mirrored(pts: np.ndarray, axis: tuple[np.ndarray, np.ndarray], params: CurveParams) -> list[Segment] | None:
+    """A closed, mirror-symmetric ring fitted on one half and reflected.
+
+    The ring crosses its axis exactly twice. Each crossing is either smooth —
+    the tangent there is perpendicular to the axis, and the half is fitted
+    with that tangent pinned so the reflected joint is G1 — or a corner on the
+    axis (a heart's notch and tip), which is sharpened as the crossing of the
+    half's approach line with the axis itself, so it lands on the axis to the
+    last digit. The half between the crossings is fitted as an open arc would
+    be; the other half is its reflection, so the two sides are one geometry.
+    None when the ring does not cross the axis exactly twice.
+    """
+    c, d = axis
+    nrm = np.array([-d[1], d[0]])
+    side = (pts - c) @ nrm
+    n = len(pts)
+    crossings = [i for i in range(n) if (side[i] >= 0.0) != (side[(i + 1) % n] >= 0.0)]
+    if len(crossings) != 2:
+        return None
+    i0, i1 = crossings
+    # the half on the positive side, from crossing i0 to crossing i1
+    if side[(i0 + 1) % n] < 0.0:
+        i0, i1 = i1, i0
+    idx = [(i0 + 1 + k) % n for k in range(((i1 - i0) % n))]
+    if len(idx) < 4:
+        return None
+    half_inner = pts[idx]
+
+    def crossing(a: int, b: int) -> np.ndarray:
+        pa, pb = pts[a], pts[b]
+        sa, sb = float(side[a]), float(side[b])
+        f = sa / (sa - sb) if sa != sb else 0.5
+        x = pa + f * (pb - pa)
+        return c + d * float((x - c) @ d)  # exactly on the axis
+
+    x0 = crossing(i0, (i0 + 1) % n)
+    x1 = crossing(i1, (i1 + 1) % n)
+
+    def approach(points: np.ndarray, at: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+        """The line through the vertices 0.8–3.1 px from the crossing (the
+        half-pixel chamfer at a corner vertex left out)."""
+        dist = np.linalg.norm(points - at, axis=1)
+        sel = (dist >= 0.8) & (dist <= MIRROR_CORNER_REACH)
+        if int(sel.sum()) < 2:
+            sel = (dist > 0) & (dist <= 2.0 * MIRROR_CORNER_REACH)
+        if int(sel.sum()) < 2:
+            return None
+        return _line_through(points[sel])
+
+    def joint(x: np.ndarray, points: np.ndarray, into: bool) -> tuple[np.ndarray, np.ndarray | None]:
+        """The crossing point and the pinned tangent (None at a corner)."""
+        line = approach(points, x)
+        if line is None:
+            return x, None
+        p, direction = line
+        # how far the approach leans off the perpendicular: twice that is the
+        # turn at the reflected joint
+        lean = math.degrees(math.asin(min(1.0, abs(float(direction @ d)))))
+        if 2.0 * lean > params.corner_threshold:
+            hit = _intersect(p, direction, c, d)
+            if hit is not None and float(np.linalg.norm(hit - x)) <= 1.5:
+                return hit, None
+            return x, None
+        return x, (nrm.copy() if into else -nrm)
+
+    start, t_start = joint(x0, half_inner[: min(len(half_inner), 12)], True)
+    end, t_end = joint(x1, half_inner[-min(len(half_inner), 12):][::-1], False)
+    half = np.vstack([start, half_inner, end])
+    corners = _open_corners(half, params.corner_threshold)
+    sharp = {k: _sharp_corner(half, k) for k in corners}
+    bounds = sorted({0, len(half) - 1, *corners})
+    pieces: list[tuple[np.ndarray, int, int]] = []
+    for k in range(len(bounds) - 1):
+        lo, hi = bounds[k], bounds[k + 1]
+        piece = _sharpen_piece(half, lo, hi, corners, (0.0, 0.0))
+        if len(piece) < 2:
+            continue
+        if lo in sharp:
+            piece[0] = sharp[lo]
+        if hi in sharp:
+            piece[-1] = sharp[hi]
+        pieces.append((piece, lo, hi))
+    corners_from_runs([piece for piece, _, _ in pieces], closed=False)
+    # A corner on the axis is placed from the straight run that leads into
+    # it, crossed with the axis: the few vertices next to an acute tip are
+    # anti-aliasing mixtures pulled inward (a triangle's apex sat 0.9 px low
+    # from a 3 px approach), a run of tens of pixels places it to hundredths.
+    if pieces and t_start is None:
+        _axis_corner_from_run(pieces[0][0], True, c, d)
+    if pieces and t_end is None:
+        _axis_corner_from_run(pieces[-1][0], False, c, d)
+    segments: list[Segment] = []
+    for piece, lo, hi in pieces:
+        segments.extend(fit_stretch(piece, params.tol, t_start if lo == 0 else None, t_end if hi == len(half) - 1 else None))
+    if not segments:
+        return None
+    segments = _snap_axis(segments, params.snap_axis_deg)
+    mirrored = reverse_segments([_reflect_segment(seg, c, d) for seg in segments])
+    full = merge_lines([*segments, *mirrored])
+    # a smooth crossing between two lines is one line: the pair meeting at the
+    # second crossing was folded above; the pair at the first meets at the wrap
+    if len(full) > 1 and isinstance(full[0], Line) and isinstance(full[-1], Line):
+        a, b = full[0].p1 - full[0].p0, full[-1].p1 - full[-1].p0
+        la, lb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+        if la > 0 and lb > 0 and math.degrees(math.acos(min(1.0, max(-1.0, float(a @ b) / (la * lb))))) <= MERGE_DEG:
+            full[-1] = Line(full[-1].p0.copy(), full[0].p1.copy())
+            full = full[1:]
+    return full
+
+
+def _axis_corner_from_run(piece: np.ndarray, at_start: bool, c: np.ndarray, d: np.ndarray) -> None:
+    """Move the piece's end on the axis to where its adjacent line run crosses
+    the axis, when the run reaches within CORNER_REACH of that end and the
+    crossing is within 2 px of it. In place."""
+    runs = line_runs(piece)
+    if not runs:
+        return
+    if at_start:
+        i, _j, rc, rd = runs[0]
+        reach = float(np.sum(np.linalg.norm(np.diff(piece[: i + 1], axis=0), axis=1))) if i > 0 else 0.0
+        end = piece[0]
+    else:
+        _i, j, rc, rd = runs[-1]
+        reach = float(np.sum(np.linalg.norm(np.diff(piece[j:], axis=0), axis=1))) if j < len(piece) - 1 else 0.0
+        end = piece[-1]
+    if reach > CORNER_REACH:
+        return
+    hit = _intersect(rc, rd, c, d)
+    if hit is None or float(np.linalg.norm(hit - end)) > 2.0:
+        return
+    if at_start:
+        piece[0] = hit
+    else:
+        piece[-1] = hit
+
+
+def _reflect_segment(seg: Segment, c: np.ndarray, d: np.ndarray) -> Segment:
+    if isinstance(seg, Line):
+        return Line(reflect(seg.p0, c, d), reflect(seg.p1, c, d))
+    if isinstance(seg, CircArc):
+        return CircArc(reflect(seg.p0, c, d), reflect(seg.p1, c, d), seg.r, seg.large, not seg.sweep)
+    return Cubic(reflect(seg.p0, c, d), reflect(seg.c1, c, d), reflect(seg.c2, c, d), reflect(seg.p1, c, d))
 
 
 def _snap_axis(segments: list[Segment], snap_deg: float) -> list[Segment]:
