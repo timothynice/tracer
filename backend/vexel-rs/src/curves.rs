@@ -698,6 +698,91 @@ fn reparametrize(points: &[P], c: &(P, P, P, P), u: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+pub const SPLIT_REACH: usize = 2;
+pub const TANGENT_SCATTER: f64 = 0.10;
+
+/// Which way the curve is going at `points[at]`, from a least-squares line in
+/// arc length through the few vertices either side of it.
+///
+/// The obvious answer - the chord from one neighbour to the other - is a chord
+/// two pixels long, and two pixels of a sub-pixel outline is mostly noise. The
+/// join then leaves a few degrees off the direction the curve is really
+/// travelling, and that is the hitch you see when you zoom in. A longer chord
+/// is steadier, but it leans towards its own two ends where the curve bends,
+/// and the vertices are not evenly spaced, so it leans unevenly. Fitting a line
+/// against arc length uses all five and weights them by where they actually
+/// fell. Fitting a quadratic instead was tried: with five vertices it spends
+/// its freedom following the noise rather than smoothing it.
+fn local_tangent(points: &[P], at: usize, reach: usize) -> P {
+    let chord = normalize(sub(points[at + 1], points[at - 1]));
+    let r = reach.min(at).min(points.len() - 1 - at);
+    if r < 2 {
+        return chord;
+    }
+    let w = &points[at - r..=at + r];
+    let n = w.len();
+    let mut s = vec![0.0f64; n];
+    for i in 1..n {
+        s[i] = s[i - 1] + norm(sub(w[i], w[i - 1]));
+    }
+    if s[n - 1] <= 1e-9 {
+        return chord;
+    }
+    // Written as plain sums, in this order, so this and the Python side do the
+    // same arithmetic and land on the same bits.
+    let mut total = 0.0;
+    for &v in &s {
+        total += v;
+    }
+    let mean = total / n as f64;
+    for v in s.iter_mut() {
+        *v -= mean;
+    }
+    let mut got = [0.0f64; 2];
+    for (axis, out) in got.iter_mut().enumerate() {
+        let mut total = 0.0;
+        for p in w.iter() {
+            total += p[axis];
+        }
+        let mean = total / n as f64;
+        let mut acc = 0.0;
+        for (i, p) in w.iter().enumerate() {
+            acc += s[i] * (p[axis] - mean);
+        }
+        *out = acc;
+    }
+    if got[0] * got[0] + got[1] * got[1] <= 1e-18 {
+        return chord;
+    }
+    let got = normalize(got);
+    // Only where the five really do lie on a line. Where the placed vertices
+    // scramble - a small circle on a small canvas is the usual case - a line
+    // through them is a line through noise, and has come out pointing back the
+    // way the curve came. Real curvature over four pixels stays well inside
+    // this: a circle of radius ten sags a twentieth of a pixel.
+    let mut centre = [0.0f64; 2];
+    for (axis, out) in centre.iter_mut().enumerate() {
+        let mut total = 0.0;
+        for p in w.iter() {
+            total += p[axis];
+        }
+        *out = total / n as f64;
+    }
+    let mut acc = 0.0;
+    for p in w.iter() {
+        let d = [p[0] - centre[0], p[1] - centre[1]];
+        let along = d[0] * got[0] + d[1] * got[1];
+        let off = [d[0] - along * got[0], d[1] - along * got[1]];
+        acc += off[0] * off[0];
+        acc += off[1] * off[1];
+    }
+    if (acc / n as f64).sqrt() <= TANGENT_SCATTER {
+        got
+    } else {
+        chord
+    }
+}
+
 /// Schneider: fit one cubic to `points` with end tangents, split at the worst
 /// point and recurse when needed.
 pub fn fit_cubics(points: &[P], t1: P, t2: P, tol: f64, depth: usize) -> Vec<Segment> {
@@ -732,7 +817,8 @@ pub fn fit_cubics(points: &[P], t1: P, t2: P, tol: f64, depth: usize) -> Vec<Seg
         return vec![Segment::Cubic { p0: c.0, c1: c.1, c2: c.2, p1: c.3 }];
     }
     let split = split.clamp(1, points.len() - 2);
-    let centre_t = normalize(sub(points[split - 1], points[split + 1]));
+    let t = local_tangent(points, split, SPLIT_REACH);
+    let centre_t = [-t[0], -t[1]];
     let mut left = fit_cubics(&points[..split + 1], t1, centre_t, tol, depth + 1);
     let right = fit_cubics(&points[split..], [-centre_t[0], -centre_t[1]], t2, tol, depth + 1);
     left.extend(right);

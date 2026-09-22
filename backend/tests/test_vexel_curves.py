@@ -2,6 +2,7 @@ import math
 
 import numpy as np
 
+from studi0trace.engines.vexel import curves
 from studi0trace.engines.vexel.curves import (
     Circle, Cubic, CurveParams, Ellipse, Line, PathShape, Rect, _bezier, find_corners, fit_open,
     fit_shape, path_d, shape_svg, straight_runs,
@@ -138,3 +139,51 @@ def test_a_circle_is_not_chopped_into_straight_runs():
     for radius in (20.0, 60.0, 150.0):
         circle = np.column_stack([radius * np.cos(t), radius * np.sin(t)])
         assert straight_runs(circle) == [], f"a circle of radius {radius} was cut into lines"
+
+
+def test_split_tangent_beats_the_chord_between_the_two_neighbours():
+    """The tangent the two halves share at a split is a line fit, not a chord.
+
+    The chord between the split's two neighbours is two pixels long, and two
+    pixels of a sub-pixel outline is mostly noise: the join then leaves a few
+    degrees off the direction the curve is really travelling, which is the
+    hitch you see when you zoom in. Shake the vertices by the few hundredths of
+    a pixel the placement stage really has, space them unevenly the way
+    crack-following does, and the line fit must hold the true tangent better.
+    """
+    rng = np.random.default_rng(7)
+    th = np.sort(rng.uniform(0.0, np.pi / 2, 200))
+    poly = np.column_stack([40 * np.cos(th), 40 * np.sin(th)])
+    poly += rng.normal(0.0, 0.04, poly.shape)
+
+    def off_by(got: np.ndarray, at: int) -> float:
+        want = np.array([-np.sin(th[at]), np.cos(th[at])])
+        return abs(np.degrees(np.arccos(np.clip(abs(float(got @ want)), 0.0, 1.0))))
+
+    at = range(5, 195)
+    chord = np.mean([off_by(curves._normalize(poly[k + 1] - poly[k - 1]), k) for k in at])
+    fitted = np.mean([off_by(curves._local_tangent(poly, k, curves.SPLIT_REACH), k) for k in at])
+    assert fitted < chord / 1.3
+
+
+def test_split_tangent_declines_when_the_vertices_scatter():
+    """Vertices that scramble are not a line, and a line through them can come
+    out pointing back the way the curve came. The two neighbours' chord is the
+    answer there. Real curvature is nowhere near enough to trip this: a circle
+    a gently curving one is fitted, not handed back."""
+    scrambled = np.array([[36.862, 23.711], [35.317, 23.834], [35.218, 23.476],
+                          [35.611, 23.627], [34.793, 24.315]])
+    chord = curves._normalize(scrambled[3] - scrambled[1])
+    assert np.allclose(curves._local_tangent(scrambled, 2, curves.SPLIT_REACH), chord)
+
+    th = np.array([-0.050, -0.037, 0.0, 0.008, 0.030])   # curving, unevenly spaced
+    arc = np.column_stack([60 * np.cos(th), 60 * np.sin(th)])
+    fitted = curves._local_tangent(arc, 2, curves.SPLIT_REACH)
+    chord = curves._normalize(arc[3] - arc[1])
+    want = np.array([0.0, 1.0])
+
+    def off_by(v):
+        return abs(np.degrees(np.arccos(np.clip(float(v @ want), -1.0, 1.0))))
+
+    assert not np.allclose(fitted, chord)
+    assert off_by(fitted) < off_by(chord)

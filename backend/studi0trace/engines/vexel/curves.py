@@ -399,6 +399,52 @@ def _reparametrize(points: np.ndarray, c: Cubic, u: np.ndarray) -> np.ndarray:
     return np.clip(u - step, 0.0, 1.0)
 
 
+SPLIT_REACH = 2
+TANGENT_SCATTER = 0.10
+
+
+def _local_tangent(points: np.ndarray, at: int, reach: int) -> np.ndarray:
+    """Which way the curve is going at `points[at]`, from a least-squares line in
+    arc length through the few vertices either side of it.
+
+    The obvious answer - the chord from one neighbour to the other - is a chord
+    two pixels long, and two pixels of a sub-pixel outline is mostly noise. The
+    join then leaves a few degrees off the direction the curve is really
+    travelling, and that is the hitch you see when you zoom in. A longer chord
+    is steadier, but it leans towards its own two ends where the curve bends,
+    and the vertices are not evenly spaced, so it leans unevenly. Fitting a line
+    against arc length uses all five and weights them by where they actually
+    fell. Fitting a quadratic instead was tried: with five vertices it spends
+    its freedom following the noise rather than smoothing it.
+    """
+    chord = _normalize(points[at + 1] - points[at - 1])
+    r = min(reach, at, len(points) - 1 - at)
+    if r < 2:
+        return chord
+    w = points[at - r: at + r + 1]
+    s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(w, axis=0), axis=1))])
+    if s[-1] <= 1e-9:
+        return chord
+    # Written as plain sums, in this order, so the Rust side can do the same
+    # arithmetic and land on the same bits.
+    s = s - float(np.sum(s)) / len(s)
+    got = np.array([float(np.sum(s * (w[:, 0] - float(np.sum(w[:, 0])) / len(w)))),
+                    float(np.sum(s * (w[:, 1] - float(np.sum(w[:, 1])) / len(w))))])
+    if float(got[0] * got[0] + got[1] * got[1]) <= 1e-18:
+        return chord
+    got = _normalize(got)
+    # Only where the five really do lie on a line. Where the placed vertices
+    # scramble - a small circle on a small canvas is the usual case - a line
+    # through them is a line through noise, and has been seen to come out
+    # pointing back the way the curve came. It also declines on a curve tighter
+    # than about twenty pixels' radius, where the five span enough of the bend
+    # to lean; there the two neighbours are the more local answer anyway, and
+    # measuring says the same.
+    off = (w - w.mean(axis=0)) - np.outer((w - w.mean(axis=0)) @ got, got)
+    scatter = float(np.sqrt(float(np.sum(off * off)) / len(w)))
+    return got if scatter <= TANGENT_SCATTER else chord
+
+
 def fit_cubics(points: np.ndarray, t1: np.ndarray, t2: np.ndarray, tol: float, depth: int = 0) -> list[Cubic]:
     """Schneider: fit one cubic to `points` with end tangents t1 (at start) and t2 (at end,
     pointing backwards); split at the worst point and recurse when needed."""
@@ -420,7 +466,7 @@ def fit_cubics(points: np.ndarray, t1: np.ndarray, t2: np.ndarray, tol: float, d
     if depth > 24 or len(points) < 4:
         return [c]
     split = min(max(split, 1), len(points) - 2)
-    centre_t = _normalize(points[split - 1] - points[split + 1])
+    centre_t = -_local_tangent(points, split, SPLIT_REACH)
     left = fit_cubics(points[: split + 1], t1, centre_t, tol, depth + 1)
     right = fit_cubics(points[split:], -centre_t, t2, tol, depth + 1)
     return left + right
