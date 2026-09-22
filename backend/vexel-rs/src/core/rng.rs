@@ -126,7 +126,7 @@ pub fn choice_without_replacement(rng: &mut Pcg64, pop_size: u64, size: usize) -
         while hash_set[loc] != u64::MAX && hash_set[loc] != val {
             loc = ((loc as u64 + 1) & mask) as usize;
         }
-        let slot = (j - pop_size + size as u64) as usize;
+        let slot = (j + size as u64 - pop_size) as usize;
         if hash_set[loc] == u64::MAX {
             hash_set[loc] = val;
             idx[slot] = val;
