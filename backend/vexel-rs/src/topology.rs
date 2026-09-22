@@ -22,8 +22,8 @@ use crate::boundary::FillAt;
 use crate::core::grid::{Grid, Image};
 use crate::core::labels::Labels;
 use crate::curves::{
-    end_tangent, fit_contour_segments, fit_cubics, fit_open, line_through, normalize, reverse_segments,
-    straight_runs, CurveParams, Segment, P,
+    corners_from_runs, fit_contour_segments, fit_open, intersect, line_through, normalize, reverse_segments,
+    fit_stretch, CurveParams, Segment, P,
 };
 
 /// How far a shape reaches under the shapes painted over it. One pixel covers an
@@ -47,6 +47,9 @@ pub const REACH: f64 = 0.75;
 /// APPROACH_RMS: at a shallow junction the lines' directions place the node.
 pub const APPROACH_MAX: f64 = 12.0;
 pub const APPROACH_RMS: f64 = 0.08;
+pub const FALLBACK_RMS: f64 = 0.5;
+/// Not 1.5: lattice-midpoint vertices sit at exact multiples of a half. See the Python.
+pub const APPROACH_TRIM: f64 = 1.6;
 /// The crossing of the incident lines is trusted when a vertex's placement
 /// noise, PLACEMENT_SIGMA px, projects to at most NODE_UNCERTAINTY px along the
 /// weakest direction of the crossing. See the Python.
@@ -56,17 +59,17 @@ pub const NODE_UNCERTAINTY: f64 = 0.6;
 pub const TIP_LIMIT: f64 = 4.0;
 /// Vertices this close to a node are not believed: a junction's pixels mix
 /// three fills. A wedge tip's sliver is worse still. See the Python.
-pub const NODE_TRIM: f64 = 1.5;
-pub const TIP_TRIM: f64 = 4.0;
+pub const NODE_TRIM: f64 = 1.6;
+pub const TIP_TRIM: f64 = 4.1;
 /// ...but never more than this share of the arc's own length from either end.
 pub const TRIM_SHARE: f64 = 0.3;
 /// An arc shorter than this has no direction worth reading; nodes it joins are
 /// one junction, and it collapses onto them.
-pub const SHORT_ARC: f64 = 2.0;
+pub const SHORT_ARC: f64 = 2.1;
 /// Two arcs leaving a node are one smooth curve only if one line or one cubic
 /// fits SMOOTH_SPAN px of each, node in the middle, within SMOOTH_TOL of the
 /// tolerance; pairs turning more than SMOOTH_MAX_TURN are not tried.
-pub const SMOOTH_SPAN: f64 = 10.0;
+pub const SMOOTH_SPAN: f64 = 10.1;
 pub const SMOOTH_TOL: f64 = 0.75;
 pub const SMOOTH_MAX_TURN: f64 = 90.0;
 
@@ -942,7 +945,11 @@ fn approach(pts: &[P], from_start: bool, reach: f64, trim: f64, grow_to: f64, ex
             if best.is_some() && rms > APPROACH_RMS {
                 break;
             }
-            best = Some((centre, dir, rms));
+            // uncertainty grows for short, sparse windows: see the Python
+            let dsel: Vec<f64> = ordered.iter().zip(d.iter()).zip(ok.iter()).filter(|((_, dd), o)| **dd >= trim && **dd <= far && **o).map(|((_, dd), _)| *dd).collect();
+            let span = (dsel.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - dsel.iter().cloned().fold(f64::INFINITY, f64::min)).max(0.5);
+            let lean = PLACEMENT_SIGMA * (12.0 / take.len() as f64).sqrt() * (reach / span);
+            best = Some((centre, dir, (rms * rms + lean * lean).sqrt()));
         }
         far += 2.0;
     }
@@ -961,7 +968,7 @@ fn approach(pts: &[P], from_start: bool, reach: f64, trim: f64, grow_to: f64, ex
             return None;
         }
         let (centre, dir) = line_through(&wide);
-        best = Some((centre, dir, 0.0));
+        best = Some((centre, dir, FALLBACK_RMS));
     }
     best
 }
@@ -974,14 +981,20 @@ fn node_estimate(lines: &[Option<(P, P, f64)>], mean: P, limit: f64) -> P {
         return mean;
     }
     let (mut m00, mut m01, mut m11) = (0.0f64, 0.0f64, 0.0f64);
+    let (mut w00, mut w01, mut w11) = (0.0f64, 0.0f64, 0.0f64);
     let (mut r0, mut r1) = (0.0f64, 0.0f64);
-    for (point, dir, _rms) in usable {
+    for (point, dir, rms) in usable {
         let n = [1.0 - dir[0] * dir[0], -dir[0] * dir[1], 1.0 - dir[1] * dir[1]];
         m00 += n[0];
         m01 += n[1];
         m11 += n[2];
-        r0 += n[0] * point[0] + n[1] * point[1];
-        r1 += n[1] * point[0] + n[2] * point[1];
+        // weighted by the inverse residual variance: see the Python
+        let w = 1.0 / (rms * rms + PLACEMENT_SIGMA * PLACEMENT_SIGMA);
+        w00 += w * n[0];
+        w01 += w * n[1];
+        w11 += w * n[2];
+        r0 += w * (n[0] * point[0] + n[1] * point[1]);
+        r1 += w * (n[1] * point[0] + n[2] * point[1]);
     }
     let half = (m00 + m11) / 2.0;
     let spread = (((m00 - m11) / 2.0).powi(2) + m01 * m01).sqrt();
@@ -992,11 +1005,11 @@ fn node_estimate(lines: &[Option<(P, P, f64)>], mean: P, limit: f64) -> P {
     if PLACEMENT_SIGMA / lam_min.sqrt() > NODE_UNCERTAINTY {
         return mean;
     }
-    let det = m00 * m11 - m01 * m01;
+    let det = w00 * w11 - w01 * w01;
     if det.abs() <= 1e-300 {
         return mean;
     }
-    let guess = [(m11 * r0 - m01 * r1) / det, (m00 * r1 - m01 * r0) / det];
+    let guess = [(w11 * r0 - w01 * r1) / det, (w00 * r1 - w01 * r0) / det];
     let mv = [guess[0] - mean[0], guess[1] - mean[1]];
     let away = (mv[0] * mv[0] + mv[1] * mv[1]).sqrt();
     if away > limit {
@@ -1031,7 +1044,7 @@ fn smooth_through(pa: &[P], pb: &[P], node: P, tol: f64, exclude_a: Option<&[boo
                 cum += ((p[k][0] - p[k - 1][0]).powi(2) + (p[k][1] - p[k - 1][1]).powi(2)).sqrt();
             }
             let excluded = exclude.is_some_and(|e| e[k]);
-            if cum >= NODE_TRIM && cum <= SMOOTH_SPAN && !excluded {
+            if cum >= APPROACH_TRIM && cum <= SMOOTH_SPAN && !excluded {
                 out.push(p[k]);
             }
         }
@@ -1050,7 +1063,7 @@ fn smooth_through(pa: &[P], pb: &[P], node: P, tol: f64, exclude_a: Option<&[boo
 
 /// A node on the canvas edge stays on it. See the Python `_on_border`.
 fn on_border(target: P, arcs: &[Arc], incident: &[ArcEnd]) -> P {
-    const REACH: f64 = 6.0;
+    const REACH: f64 = 6.1;
     let mut out = target;
     for (i, at_start) in incident {
         let arc = &arcs[*i];
@@ -1084,8 +1097,8 @@ fn find_root(parent: &mut HashMap<u64, u64>, mut node: u64) -> u64 {
 }
 
 fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64) {
-    const REACH_PX: f64 = 4.0;
-    const TRIM: f64 = 0.8;
+    const REACH_PX: f64 = 4.1;
+    const TRIM: f64 = APPROACH_TRIM;
     const LIMIT: f64 = 2.0;
 
     let mut ends: HashMap<u64, Vec<ArcEnd>> = HashMap::new();
@@ -1153,7 +1166,9 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
                     ((p[0] - target[0]).powi(2) + (p[1] - target[1]).powi(2)).sqrt()
                 })
                 .fold(0.0f64, f64::max);
-            if far > SHORT_ARC {
+            // a group stands only where the long arcs actually crossed: see the Python
+            let crossed = target[0] != mean[0] || target[1] != mean[1];
+            if !crossed || far > SHORT_ARC {
                 for node in members {
                     resolved.push(ends[&node].clone());
                 }
@@ -1443,6 +1458,33 @@ fn open_corners(pts: &[P], threshold_deg: f64) -> Vec<usize> {
 /// One run between two breaks, with the chamfer dropped at any end that is a
 /// corner. The end points themselves stand: an arc end is a node that every
 /// neighbouring arc has already agreed on.
+/// Where an arc's interior corner really is. See the Python `_sharp_corner`.
+fn sharp_corner(pts: &[P], k: usize) -> P {
+    const REACH: f64 = 3.1;
+    const TRIM: f64 = 0.8;
+    fn near(q: &[P]) -> Vec<P> {
+        let d: Vec<f64> = q.iter().map(|p| ((p[0] - q[0][0]).powi(2) + (p[1] - q[0][1]).powi(2)).sqrt()).collect();
+        let mut sel: Vec<P> = q.iter().zip(&d).filter(|(_, dd)| **dd >= TRIM && **dd <= REACH).map(|(p, _)| *p).collect();
+        if sel.len() < 2 {
+            sel = q.iter().zip(&d).filter(|(_, dd)| **dd > 0.0 && **dd <= 2.0 * REACH).map(|(p, _)| *p).collect();
+        }
+        sel
+    }
+    let before: Vec<P> = pts[..=k].iter().rev().copied().collect();
+    let a = near(&before);
+    let b = near(&pts[k..]);
+    if a.len() >= 2 && b.len() >= 2 {
+        let (p, d) = line_through(&a);
+        let (q, e) = line_through(&b);
+        if let Some(x) = intersect(p, d, q, e) {
+            if ((x[0] - pts[k][0]).powi(2) + (x[1] - pts[k][1]).powi(2)).sqrt() <= 1.5 {
+                return x;
+            }
+        }
+    }
+    pts[k]
+}
+
 fn sharpen_piece(pts: &[P], lo: usize, hi: usize, corners: &[usize], trims: (f64, f64), sliver: Option<&[bool]>) -> Vec<P> {
     // One run between two breaks, with the vertices next to a break dropped
     // where they cannot be trusted: the chamfer next to an interior corner, the
@@ -1492,35 +1534,41 @@ fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f64, f
         return Vec::new();
     }
     let corners = open_corners(pts, params.corner_threshold);
-    let mut cum = vec![0.0f64; n];
-    for k in 1..n {
-        cum[k] = cum[k - 1] + ((pts[k][0] - pts[k - 1][0]).powi(2) + (pts[k][1] - pts[k - 1][1]).powi(2)).sqrt();
-    }
-    // Flat runs are cut out as well as corners, but never inside a node's trim
-    // window, which would leave a piece too short to trim. See the Python.
+    let sharp: Vec<P> = corners.iter().map(|k| sharp_corner(pts, *k)).collect();
     let mut bounds = vec![0usize, n - 1];
     bounds.extend_from_slice(&corners);
-    bounds.extend(
-        straight_runs(pts)
-            .into_iter()
-            .filter(|k| *k > 0 && *k + 1 < n && cum[*k] > trims.0 && cum[n - 1] - cum[*k] > trims.1),
-    );
     bounds.sort_unstable();
     bounds.dedup();
 
-    let mut segments: Vec<Segment> = Vec::new();
+    let mut pieces: Vec<Vec<P>> = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     for k in 0..bounds.len() - 1 {
         let (lo, hi) = (bounds[k], bounds[k + 1]);
         if hi <= lo {
             continue;
         }
-        let piece = sharpen_piece(pts, lo, hi, &corners, trims, sliver);
+        let mut piece = sharpen_piece(pts, lo, hi, &corners, trims, sliver);
         if piece.len() < 2 {
             continue;
         }
-        let ts = if lo == 0 { t0 } else { None };
-        let te = if hi == n - 1 { t1 } else { None };
-        segments.extend(fit_piece(&piece, params.tol, ts, te));
+        if let Some(c) = corners.iter().position(|x| *x == lo) {
+            piece[0] = sharp[c];
+        }
+        if let Some(c) = corners.iter().position(|x| *x == hi) {
+            let last = piece.len() - 1;
+            piece[last] = sharp[c];
+        }
+        pieces.push(piece);
+        spans.push((lo, hi));
+    }
+    // Interior corners move to where the neighbouring line runs cross. See the Python.
+    corners_from_runs(&mut pieces, false);
+    let mut segments: Vec<Segment> = Vec::new();
+    for (piece, (lo, hi)) in pieces.iter().zip(spans.iter()) {
+        let ts = if *lo == 0 { t0 } else { None };
+        let te = if *hi == n - 1 { t1 } else { None };
+        // Lines first: see the Python `_fit_arc`.
+        segments.extend(fit_stretch(piece, params.tol, ts, te));
     }
     snap_axis(segments, params.snap_axis_deg)
 }
@@ -1537,36 +1585,6 @@ fn fit_under(moved: &[P], arc: &Arc, params: &CurveParams) -> Vec<Segment> {
     out.extend(fit_arc(&moved[1..n - 1], false, None, None, (0.0, 0.0), inner_sliver.as_deref(), params));
     out.push(Segment::Line { p0: moved[n - 2], p1: moved[n - 1] });
     out
-}
-
-/// `curves::fit_open`, except that a pinned tangent is not thrown away when the
-/// run happens to be nearly straight. A line is the cheapest fit and `fit_open`
-/// reaches for it first, which is right everywhere else — but a tangent is only
-/// ever pinned to make a join smooth. See the Python.
-fn fit_piece(points: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) -> Vec<Segment> {
-    if points.len() < 2 {
-        return Vec::new();
-    }
-    if t_start.is_none() && t_end.is_none() {
-        return fit_open(points, tol, None, None);
-    }
-    let chord = [points[points.len() - 1][0] - points[0][0], points[points.len() - 1][1] - points[0][1]];
-    let span = (chord[0] * chord[0] + chord[1] * chord[1]).sqrt();
-    if span > 1e-9 {
-        let along = [chord[0] / span, chord[1] / span];
-        let mut drift: f64 = 0.0;
-        for (pinned, want) in [(t_start, along), (t_end, [-along[0], -along[1]])] {
-            if let Some(t) = pinned {
-                drift = drift.max((t[0] * want[0] + t[1] * want[1]).clamp(-1.0, 1.0).acos().to_degrees());
-            }
-        }
-        if drift <= 2.0 {
-            return fit_open(points, tol, t_start, t_end);
-        }
-    }
-    let t1 = t_start.unwrap_or_else(|| end_tangent(points, true));
-    let t2 = t_end.unwrap_or_else(|| end_tangent(points, false));
-    fit_cubics(points, t1, t2, tol, 0)
 }
 
 /// Make a nearly horizontal or vertical line exactly so, as
@@ -1901,7 +1919,7 @@ mod node_tests {
     fn approach_grows_along_a_straight_run_and_reports_its_scatter() {
         let pts: Vec<P> = (0..40).map(|k| [k as f64 * 0.5, 0.0]).collect();
         let (centre, dir, rms) = approach(&pts, true, 4.0, 0.8, APPROACH_MAX, None).unwrap();
-        assert!(rms < 1e-12 && dir[1].abs() < 1e-12, "{centre:?} {dir:?} {rms}");
+        assert!(rms < 0.05 && dir[1].abs() < 1e-12, "{centre:?} {dir:?} {rms}");  // the residual carries the direction uncertainty of the window
         assert!(centre[0] > 4.0, "the window should have grown past the first reach: {centre:?}");
     }
 }

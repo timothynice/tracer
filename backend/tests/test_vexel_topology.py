@@ -438,7 +438,7 @@ def test_a_wedge_side_runs_straight_into_its_tip():
 
 
 def test_a_tilted_square_stays_four_lines():
-    for ang in (38,):  # 25, 45 and 50 wait for the line-first fit (Task 6): the closed-contour path still cuts and bows them
+    for ang in (5, 25, 38, 45, 50):
         svg = trace(tilted_square_png(ang))
         d = re.search(r'\bd="([^"]*)"', re.search(r'<path ([^>]*fill="#1b9c9c"[^>]*)/>', svg).group(1)).group(1)
         assert d.count("C") == 0 and d.count("L") == 4, f"{ang} deg: {d[:90]}"
@@ -518,3 +518,44 @@ def test_a_node_on_the_canvas_edge_stays_on_the_edge():
     top = anchors[anchors[:, 1] < 0.5]
     assert len(top) >= 2 and np.all(top[:, 1] == 0.0), top
     assert anchors[:, 1].min() == 0.0 and anchors[:, 0].max() == 256.0, "the shape must reach the frame exactly"
+
+
+def jpeg(png: bytes, quality: int = 75) -> bytes:
+    im = Image.open(io.BytesIO(png)).convert("RGB")
+    out = io.BytesIO()
+    im.save(out, "JPEG", quality=quality)
+    return out.getvalue()
+
+
+def downsampled(png: bytes) -> bytes:
+    """Rendered at 2x by the caller? No: resized 2x up and back down, a different
+    anti-aliasing kernel than the renderer's."""
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    w, h = im.size
+    lo = im.resize((2 * w, 2 * h), Image.Resampling.BICUBIC).resize((w, h), Image.Resampling.BILINEAR)
+    out = io.BytesIO()
+    lo.save(out, "PNG")
+    return out.getvalue()
+
+
+def nearest_path_d(svg: str, fill: str) -> str:
+    """The `d` of the path whose fill is closest to `fill`: JPEG moves a colour a step."""
+    want = np.array([int(fill[i:i + 2], 16) for i in (1, 3, 5)])
+    best = None
+    for attrs in re.findall(r"<path ([^>]*)/>", svg):
+        m = re.search(r'fill="#([0-9a-fA-F]{6})"', attrs)
+        if not m:
+            continue
+        got = np.array([int(m.group(1)[i:i + 2], 16) for i in (0, 2, 4)])
+        dist = float(np.linalg.norm(got - want))
+        if best is None or dist < best[0]:
+            best = (dist, re.search(r'\bd="([^"]*)"', attrs).group(1))
+    assert best is not None, "no filled path"
+    return best[1]
+
+
+def test_a_tilted_square_is_four_lines_under_jpeg_and_resampling():
+    for degrade in (jpeg, downsampled):
+        for ang in (5, 25, 38, 45, 50):
+            d = nearest_path_d(trace(degrade(tilted_square_png(ang))), "#1b9c9c")
+            assert d.count("C") == 0 and d.count("L") == 4, f"{degrade.__name__} {ang} deg: {d[:90]}"

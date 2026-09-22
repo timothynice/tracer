@@ -1,10 +1,13 @@
 """Stage 7: corners, whole-shape fitting, and piecewise cubic Bézier fitting.
 
-Input polylines come from marching squares (a vertex every ≤ 1 px). Corners
-are turning angles that persist across two chord scales; between corners,
-Schneider's least-squares cubic fitting with recursive splitting produces
-G1-continuous curves within `tol`. Closed contours with no corners are tried
-as circles/ellipses first, four axis-aligned corners as rectangles.
+Input polylines come from the boundary graph (a vertex every ≤ 1 px). Corners
+are turning angles that persist across two chord scales; between corners a
+stretch is fitted lines first — straight runs found from the residuals about
+their own total-least-squares line, gaps between them as cubics — and kept
+that way when it costs no more segments than the plain curve fit, which is
+Schneider's least-squares cubics with recursive splitting (or one C2 spline)
+within `tol`. Closed contours with no corners are tried as circles/ellipses
+first, four axis-aligned corners as rectangles.
 """
 from __future__ import annotations
 
@@ -86,61 +89,422 @@ class CurveParams:
     snap_axis_deg: float = 1.5
 
 
-# A run of outline this long (px) that bends less than STRAIGHT_SAG across its
-# own chord is a straight edge, and is emitted as one. The sag bound is what
-# keeps a genuine curve out of it: a circle of radius R sags L²/8R over a chord
-# L, so at these numbers nothing under a radius of about four hundred pixels
-# qualifies, while a stroke of text or the side of a rounded square — which are
-# flat to within the placement's own noise, measured at 0.05 px — does.
-MIN_LINE = 18.0
-STRAIGHT_SAG = 0.10
+# --- lines first ---------------------------------------------------------------------
+#
+# A straight edge is found by fitting a line and looking at the residuals, not by
+# measuring vertices against a chord between two pre-placed corners: the corners
+# are the least certain points on the outline, and a chord that tilts by a third
+# of a pixel made a perfectly straight edge fail the old test and come out as
+# cubics that bow. The noise model, measured at every angle from 5 to 100 degrees
+# and for every colour pair: vertex RMS 0.046-0.063 px, p95 <= 0.12 px.
+LINE_RMS = 0.10       # RMS residual about the total-least-squares line
+LINE_P98 = 0.30       # 98th percentile of |residual|
+LINE_MIN = 8.1        # px; shorter runs are curves, which keeps a small round corner round (off a half: see topology.NODE_TRIM)
+LINE_SAG = 0.10       # px; a run whose residuals bow systematically by more than this is an arc, not a line
+LINE_END = 0.15       # px; a run sheds an end vertex that sits further than this off the line - the start of a bend
+MERGE_DEG = 2.0       # consecutive lines within this are one line
+GAP_MIN = 1.6         # px; a line this short is a stub, not an edge
+CORNER_GAP = 2.1      # px; a gap this short between two lines is their corner (a lattice chamfer is three vertices, 1.6 px)
+CORNER_REACH = 3.1    # px; a line run ending within this of a corner places the corner
+SNAP_END = 0.5        # px; a piece end this close to its line is taken onto the line rather than left as a jog
+CHORD_TURN = 20.0     # degrees; runs turning this little against each other are chords of one curve
+CHORD_GAP = 12.1      # px; runs this close along the arc are neighbours for that test (a chord sits 5-8 px past the side it follows)
+CHORD_END = 2.0 * LINE_MIN  # px; a chord at the end of such a chain is kept as a line only when this long
+LINE_COST = 0.5       # a line is cheaper than a cubic when the two answers are weighed
 
 
-def straight_runs(poly: np.ndarray, closed: bool = False) -> list[int]:
-    """Where the outline stops being straight and starts bending, or the reverse.
+def _prefix(pts: np.ndarray) -> tuple[np.ndarray, ...]:
+    x, y = pts[:, 0], pts[:, 1]
+    z = np.zeros(1)
+    return (
+        np.concatenate([z, np.cumsum(x)]),
+        np.concatenate([z, np.cumsum(y)]),
+        np.concatenate([z, np.cumsum(x * x)]),
+        np.concatenate([z, np.cumsum(x * y)]),
+        np.concatenate([z, np.cumsum(y * y)]),
+    )
 
-    Without this a long flat edge is fitted as a cubic like everything else, and
-    a cubic through points that wander a few hundredths of a pixel bows: the
-    sides of a square come out barrelled and a letter's stem comes out bent. The
-    boundaries returned are handed to the fitter as extra places to split, and
-    `fit_open` already prefers a straight line when one fits, so the flat parts
-    come out flat and only what is between them is a curve.
 
-    What is returned is where flat gives way to bending, not where one flat run
-    happens to end and the next begins — two straight runs meeting head on are a
-    corner, and `find_corners` is what says so.
+def _tls_from_prefix(prefix: tuple[np.ndarray, ...], i: int, j: int) -> tuple[np.ndarray, np.ndarray, float]:
+    """Centre, unit direction and RMS residual of the TLS line through pts[i..j]
+    inclusive, from prefix sums, so growing a run costs O(1) a step. Written as
+    plain sums, in this order, so the Rust side lands on the same bits."""
+    n = float(j + 1 - i)
+    sx, sy, sxx, sxy, syy = (float(p[j + 1] - p[i]) for p in prefix)
+    mx, my = sx / n, sy / n
+    cxx, cxy, cyy = sxx / n - mx * mx, sxy / n - mx * my, syy / n - my * my
+    half = (cxx + cyy) / 2.0
+    spread = math.hypot((cxx - cyy) / 2.0, cxy)
+    lam_min = max(half - spread, 0.0)
+    lam_max = half + spread
+    if abs(cxy) > 1e-15:
+        d = np.array([lam_max - cyy, cxy])
+    else:
+        d = np.array([1.0, 0.0]) if cxx >= cyy else np.array([0.0, 1.0])
+    norm = math.hypot(d[0], d[1])
+    d = d / norm if norm > 0.0 else np.array([1.0, 0.0])
+    return np.array([mx, my]), d, math.sqrt(lam_min)
+
+
+def _percentile98(values: np.ndarray) -> float:
+    """numpy's default (linear) 98th percentile, spelled out for the Rust port."""
+    v = np.sort(values)
+    if len(v) == 1:
+        return float(v[0])
+    pos = 0.98 * (len(v) - 1)
+    lo = int(math.floor(pos))
+    frac = pos - lo
+    hi = min(lo + 1, len(v) - 1)
+    return float(v[lo] + (v[hi] - v[lo]) * frac)
+
+
+def _sag(pts: np.ndarray, c: np.ndarray, d: np.ndarray) -> float:
+    """How much the run bows: the quadratic term of a parabola fitted to the
+    residuals along the run, as its rise over the run's half-length. Noise
+    averages out of it; an arc of a circle does not — a 12 px chord on a 60 px
+    radius passes the RMS test at 0.09 and shows up here at 0.30."""
+    along = (pts - c) @ d
+    off = (pts - c) @ np.array([-d[1], d[0]])
+    s = along - float(np.sum(along)) / len(along)
+    s2 = s * s
+    # least squares for off = a*s^2 + b*s + e, written as plain sums
+    n = float(len(s))
+    S2, S3, S4 = float(np.sum(s2)), float(np.sum(s2 * s)), float(np.sum(s2 * s2))
+    O, O1, O2 = float(np.sum(off)), float(np.sum(off * s)), float(np.sum(off * s2))
+    # normal equations for (a, b, e): rows [S4 S3 S2; S3 S2 0; S2 0 n]
+    det = S4 * (S2 * n) - S3 * (S3 * n) + S2 * (0.0 - S2 * S2)
+    if abs(det) < 1e-18:
+        return 0.0
+    a = (O2 * (S2 * n) - S3 * (O1 * n) + S2 * (0.0 - O * S2)) / det
+    half = 0.5 * float(np.max(along) - np.min(along))
+    return abs(a) * half * half
+
+
+def line_runs(pts: np.ndarray) -> list[tuple[int, int, np.ndarray, np.ndarray]]:
+    """Maximal straight runs `(i, j, centre, direction)` of an open polyline.
+
+    A run grows from `i` while the RMS residual about its own line stays under
+    LINE_RMS, is trimmed from the far end until its 98th-percentile residual is
+    under LINE_P98, and is kept if it spans LINE_MIN px and does not bow by
+    more than LINE_SAG (a chord of a gentle arc passes the RMS test; its
+    residuals are a parabola, and noise's are not). Runs never overlap; the
+    scan resumes at the run's end, or one vertex on where no run was found.
     """
-    n = len(poly)
+    n = len(pts)
     if n < 3:
         return []
-    seg = np.linalg.norm(np.diff(poly, axis=0), axis=1)
-    cum = np.concatenate([[0.0], np.cumsum(seg)])
-    flat = np.zeros(n, bool)
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
+    prefix = _prefix(pts)
+    runs: list[tuple[int, int, np.ndarray, np.ndarray]] = []
     i = 0
-    while i < n - 1:
-        best = i
-        j = i + 1
+    while i < n - 2:
+        best: tuple[int, np.ndarray, np.ndarray] | None = None
+        j = i + 2
         while j < n:
-            run = poly[i : j + 1]
-            chord = run[-1] - run[0]
-            length = float(np.hypot(*chord))
-            if length < 1e-9:
-                j += 1
-                continue
-            normal = np.array([-chord[1], chord[0]]) / length
-            if float(np.abs((run - run[0]) @ normal).max()) > STRAIGHT_SAG:
+            c, d, rms = _tls_from_prefix(prefix, i, j)
+            if rms > LINE_RMS:
                 break
-            best = j
+            best = (j, c, d)
             j += 1
-        if cum[best] - cum[i] >= MIN_LINE:
-            flat[i : best + 1] = True
-            i = best
+        if best is not None:
+            j, c, d = best
+            while j > i + 1:
+                off = np.abs((pts[i:j + 1] - c) @ np.array([-d[1], d[0]]))
+                if _percentile98(off) <= LINE_P98:
+                    break
+                j -= 1
+                c, d, _ = _tls_from_prefix(prefix, i, j)
+            # A run that grew into the start of a bend bows; shed the far end
+            # until what is left is straight, rather than losing the side too.
+            while j > i + 1 and _sag(pts[i:j + 1], c, d) > LINE_SAG:
+                j -= 1
+                c, d, _ = _tls_from_prefix(prefix, i, j)
+            # A run may also *begin* inside a bend, where the scan resumed after
+            # the last run: the bend's vertices at either end tilt the line by a
+            # pixel across a card's side. Shed end vertices that sit off it.
+            a = i
+            while j > a + 1:
+                normal = np.array([-d[1], d[0]])
+                head = abs(float((pts[a] - c) @ normal))
+                tail = abs(float((pts[j] - c) @ normal))
+                if head <= LINE_END and tail <= LINE_END:
+                    break
+                if head > tail:
+                    a += 1
+                else:
+                    j -= 1
+                c, d, _ = _tls_from_prefix(prefix, a, j)
+            if j > a + 1 and cum[j] - cum[a] >= LINE_MIN:
+                # the eigenvector's sign is arbitrary: point it along the run,
+                # or a run read backwards looks like a 176 degree turn
+                if float((pts[j] - pts[a]) @ d) < 0.0:
+                    d = -d
+                runs.append((a, j, c, d))
+                i = j
+                continue
+        i += 1
+    return runs
+
+
+def _project(c: np.ndarray, d: np.ndarray, p: np.ndarray) -> np.ndarray:
+    return c + d * float((p - c) @ d)
+
+
+def _turn_deg(a: np.ndarray, b: np.ndarray) -> float:
+    return math.degrees(math.acos(min(1.0, max(-1.0, float(a @ b)))))
+
+
+def lines_first(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, t_end: np.ndarray | None = None) -> list[Segment] | None:
+    """The stretch as its straight runs, each one Line, with the gaps between them
+    fitted as cubics that leave and arrive along the neighbouring lines. Two
+    lines meeting across a gap shorter than GAP_MIN meet at their intersection:
+    a corner. Consecutive runs within MERGE_DEG of one direction, and touching,
+    are one line. Returns None where no run was found.
+
+    The first and last points of the stretch are kept exactly: they are nodes
+    or corners that the neighbouring stretches have already been fitted to.
+    """
+    runs = line_runs(pts)
+    if not runs:
+        return None
+    n = len(pts)
+    prefix = _prefix(pts)
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
+    merged: list[tuple[int, int, np.ndarray, np.ndarray]] = []
+    for run in runs:
+        if merged:
+            i0, j0, _c0, d0 = merged[-1]
+            i1, j1, _c1, d1 = run
+            if _turn_deg(d0, d1) <= MERGE_DEG and cum[i1] - cum[j0] <= CHORD_GAP:
+                c, d, rms = _tls_from_prefix(prefix, i0, j1)
+                # two degrees over fifty pixels is most of a pixel at the joint:
+                # the runs are one line only if the joint fit says so too
+                if rms <= LINE_RMS:
+                    merged[-1] = (i0, j1, c, d)
+                    continue
+        merged.append(run)
+    runs = merged
+    # A big round corner passes the residual test in 10 px chords. A chord in
+    # the middle of a curve turns a little against both its neighbours; a
+    # polygon side turns a lot against at least one, or has none. A chord at
+    # the end of such a chain turns a little against one neighbour only, and is
+    # kept as a line only when it is long enough to be an edge in its own right.
+    if len(runs) > 1:
+        small = [
+            cum[runs[k + 1][0]] - cum[runs[k][1]] <= CHORD_GAP and _turn_deg(runs[k][3], runs[k + 1][3]) <= CHORD_TURN
+            for k in range(len(runs) - 1)
+        ]
+        keep = []
+        for k, (i, j, _c, _d) in enumerate(runs):
+            before = k > 0 and small[k - 1]
+            after = k < len(runs) - 1 and small[k]
+            length = float(np.linalg.norm(pts[j] - pts[i]))
+            if before and after:
+                continue
+            if (before or after) and length < CHORD_END:
+                continue
+            keep.append(runs[k])
+        runs = keep
+        if not runs:
+            return None
+
+    segs: list[Segment] = []
+    prev: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None  # end point, direction and centre of the last line
+    cursor = 0
+
+    def on_line(a: int, b: int, c: np.ndarray, d: np.ndarray) -> bool:
+        """Do pts[a..b] all lie within LINE_P98 of the line (c, d)? Then the gap is
+        the line's own end, trimmed off the run by the residual test, not a curve."""
+        off = (pts[a:b + 1] - c) @ np.array([-d[1], d[0]])
+        return bool(np.abs(off).max() <= LINE_P98)
+
+    def snaps(end: np.ndarray, a: int, b: int, c: np.ndarray, d: np.ndarray) -> bool:
+        """A short jog whose end point sits within SNAP_END of the line: the line
+        takes the end. A jog that reaches further is a real feature and stays."""
+        off = abs(float((end - c) @ np.array([-d[1], d[0]])))
+        return cum[b] - cum[a] < CORNER_REACH and off <= SNAP_END
+
+    def gap(a: int, b: int, ta: np.ndarray | None, tb: np.ndarray | None) -> list[Segment] | None:
+        """Cubics through pts[a..b]; None means "a corner", the two lines meet."""
+        run = pts[a:b + 1]
+        if len(run) < 2 or float(np.linalg.norm(run[-1] - run[0])) < 1e-9:
+            return []
+        if float(np.linalg.norm(run[-1] - run[0])) < CORNER_GAP:
+            if ta is not None and tb is not None:
+                return None
+            return [Line(run[0].copy(), run[-1].copy())]
+        if len(run) == 2:
+            return [Line(run[0].copy(), run[-1].copy())]
+        t1 = ta if ta is not None else _end_tangent(run, True)
+        t2 = tb if tb is not None else _end_tangent(run, False)
+        return list(fit_cubics(run, t1, t2, tol))
+
+    for k, (i, j, c, d) in enumerate(runs):
+        if float((pts[j] - pts[i]) @ d) < 0.0:
+            d = -d
+        start = pts[0].copy() if i == 0 else _project(c, d, pts[i])
+        end = pts[n - 1].copy() if j == n - 1 else _project(c, d, pts[j])
+        if i > cursor and cursor == 0:
+            if on_line(0, i, c, d) or snaps(pts[0], 0, i, c, d):
+                start = pts[0].copy()      # the run's own beginning, trimmed by the residual test
+            else:
+                # the piece starts with a short jog to its corner or node: keep
+                # it as one, since snapping the line's start onto that point
+                # would tilt the whole line by the jog
+                before = gap(0, i, t_start, -d)
+                if not before:
+                    segs.append(Line(pts[0].copy(), start.copy()))
+                else:
+                    before[-1].p1 = start.copy()
+                    segs.extend(before)
+        elif i > cursor:
+            absorbed = (prev is not None and on_line(cursor, i, prev[2], prev[1])) or on_line(cursor, i, c, d)
+            before = None if (absorbed and prev is not None) else gap(cursor, i, t_start if cursor == 0 else (prev[1] if prev else None), -d)
+            if before is None:
+                # a corner between two lines: they meet where they cross
+                x = _intersect(prev[0], prev[1], c, d)
+                if x is not None and float(np.linalg.norm(x - pts[i])) <= 3.0:
+                    segs[-1].p1 = x.copy()
+                    start = x.copy()
+                else:
+                    segs.append(Line(segs[-1].p1.copy(), start.copy()))
+            else:
+                if before and segs:
+                    before[0].p0 = segs[-1].p1.copy()
+                if before:
+                    before[-1].p1 = start.copy()
+                segs.extend(before)
+        elif segs:
+            start = segs[-1].p1.copy()
+        segs.append(Line(start, end.copy()))
+        prev = (end, d, c)
+        cursor = j
+    if cursor < n - 1:
+        if on_line(cursor, n - 1, prev[2], prev[1]) or snaps(pts[n - 1], cursor, n - 1, prev[2], prev[1]):
+            if isinstance(segs[-1], Line):
+                segs[-1].p1 = pts[n - 1].copy()
+            else:
+                segs.append(Line(prev[0].copy(), pts[n - 1].copy()))
         else:
-            i += 1
-    if not flat.any() or flat.all():
+            # a short tail that is not on the line is a jog to a node and stays
+            # one: snapping the line's end onto that node tilted a 50 px edge by 2 px
+            after = gap(cursor, n - 1, prev[1], t_end)
+            if not after:
+                segs.append(Line(prev[0].copy(), pts[n - 1].copy()))
+            else:
+                after[0].p0 = prev[0].copy()
+                after[-1].p1 = pts[n - 1].copy()
+                segs.extend(after)
+    if not np.allclose(segs[0].p0, pts[0]):
+        if isinstance(segs[0], Line) and float(np.linalg.norm(segs[0].p0 - pts[0])) <= 3.0:
+            segs[0].p0 = pts[0].copy()
+        else:
+            segs.insert(0, Line(pts[0].copy(), segs[0].p0.copy()))
+    return merge_lines(segs)
+
+
+def merge_lines(segs: list[Segment]) -> list[Segment]:
+    """Tidy the lines of a stretch. A line within MERGE_DEG of the line before it
+    joins it. A stub shorter than GAP_MIN joins the line before it only if it lies
+    on that line; a stub that turns — the chamfer of a lattice corner — between
+    two lines is replaced by their intersection, and anywhere else is kept, since
+    folding it would swing the neighbouring line's end off its edge by the
+    stub's own length (half a pixel across a whole canvas border, once)."""
+    out: list[Segment] = []
+    k = 0
+    while k < len(segs):
+        seg = segs[k]
+        if out and isinstance(seg, Line) and isinstance(out[-1], Line):
+            prev = out[-1]
+            a = prev.p1 - prev.p0
+            b = seg.p1 - seg.p0
+            la, lb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+            if la > 0.0 and lb > 0.0:
+                da, db = a / la, b / lb
+                off_end = abs(float((seg.p1 - prev.p0) @ np.array([-da[1], da[0]])))
+                joined = seg.p1 - prev.p0
+                lj = float(np.linalg.norm(joined))
+                # the joint must lie on the merged line: an angle alone lets a
+                # two-degree bend over fifty pixels move it most of a pixel
+                joint_off = abs(float((seg.p0 - prev.p0) @ np.array([-joined[1], joined[0]]) / lj)) if lj > 0 else 0.0
+                if (_turn_deg(da, db) <= MERGE_DEG and joint_off <= LINE_END) or (lb < GAP_MIN and off_end <= LINE_END):
+                    out[-1] = Line(prev.p0.copy(), seg.p1.copy())
+                    k += 1
+                    continue
+                nxt = segs[k + 1] if k + 1 < len(segs) else None
+                if lb < GAP_MIN and isinstance(nxt, Line):
+                    c = nxt.p1 - nxt.p0
+                    lc = float(np.linalg.norm(c))
+                    if lc > 0.0:
+                        x = _intersect(prev.p0, da, nxt.p0, c / lc)
+                        if x is not None and float(np.linalg.norm(x - seg.p0)) <= 3.0:
+                            out[-1] = Line(prev.p0.copy(), x.copy())
+                            segs[k + 1] = Line(x.copy(), nxt.p1.copy())
+                            k += 1
+                            continue
+        out.append(seg)
+        k += 1
+    return out
+
+
+def corners_from_runs(pieces: list[np.ndarray], closed: bool) -> None:
+    """Move each corner shared by two pieces to where their adjacent line runs
+    cross. The corner arrived sharpened from a 0.8-3 px window either side, and
+    at an acute tip those few vertices are anti-aliasing mixtures pulled inward:
+    a triangle's apex sat 0.57 px inside, and a line drawn from it ran inside the
+    whole edge. Two runs of tens of pixels place the crossing to a few
+    hundredths. Only corners with a run ending within CORNER_REACH on both sides
+    move, and never by more than 1.5 px. Pieces are modified in place; the
+    corner stays one point for both."""
+    n = len(pieces)
+    if n < 2:
+        return
+    runs = [line_runs(piece) for piece in pieces]
+    for idx in (range(n) if closed else range(1, n)):
+        prev, nxt = pieces[idx - 1], pieces[idx]
+        rp, rn = runs[idx - 1], runs[idx]
+        if not rp or not rn:
+            continue
+        _i0, j0, c0, d0 = rp[-1]
+        i1, _j1, c1, d1 = rn[0]
+        tail = float(np.sum(np.linalg.norm(np.diff(prev[j0:], axis=0), axis=1))) if j0 < len(prev) - 1 else 0.0
+        head = float(np.sum(np.linalg.norm(np.diff(nxt[:i1 + 1], axis=0), axis=1))) if i1 > 0 else 0.0
+        if tail > CORNER_REACH or head > CORNER_REACH:
+            continue
+        x = _intersect(c0, d0, c1, d1)
+        if x is None or float(np.linalg.norm(x - prev[-1])) > 1.5:
+            continue
+        prev[-1] = x
+        nxt[0] = x
+
+
+def fit_stretch(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, t_end: np.ndarray | None = None) -> list[Segment]:
+    """One run between two breaks, as lines first or as a curve.
+
+    Both are fitted; the lines-first answer is kept when it needs no more
+    segments than the curve. A circle chopped into 9 px runs loses to its one
+    cubic; a square's side, one line, ties with one cubic and stays a line; a
+    rounded corner between two sides, line-cubic-line, beats the four cubics the
+    smooth fitter needs for it. A pinned tangent is honoured by the cubics; a
+    line at a pinned end follows its own vertices, which at a wedge tip is the
+    tangent that was pinned, and elsewhere is within a degree of it.
+    """
+    if len(pts) < 2:
         return []
-    change = np.nonzero(flat[1:] != flat[:-1])[0]
-    return sorted({int(k) + (1 if flat[k + 1] else 0) for k in change})
+    if t_start is None and t_end is None:
+        curve = fit_open(pts, tol)
+    else:
+        t1 = t_start if t_start is not None else _end_tangent(pts, True)
+        t2 = t_end if t_end is not None else _end_tangent(pts, False)
+        curve = list(fit_cubics(pts, t1, t2, tol))
+    lines = lines_first(pts, tol, t_start, t_end)
+    if lines is not None and _cost(lines) <= _cost(curve):
+        return lines
+    return curve
+
+
+def _cost(segs: list[Segment]) -> float:
+    return sum(LINE_COST if isinstance(s, Line) else 1.0 for s in segs)
 
 
 # --- helpers ----------------------------------------------------------------------
@@ -768,21 +1132,46 @@ def split_pieces(poly: np.ndarray, corners: list[int], reach: float = 3.0, trim:
 
 def fit_contour_segments(poly: np.ndarray, params: CurveParams) -> tuple[list[Segment], list[int]]:
     corners = find_corners(poly, params.corner_threshold)
-    flats = [k for k in straight_runs(poly, closed=True) if k not in corners]
-    if not corners and not flats:
-        return fit_closed_smooth(poly, params.tol), corners
     if not corners:
-        # No corner, but flat runs to hold: cut at those instead, which keeps a
-        # rounded square's sides straight rather than rolling the whole outline
-        # into one smooth loop.
-        corners = flats
-        flats = []
+        return fit_closed(poly, params.tol), corners
+    pieces = [piece for piece in split_pieces(poly, corners) if len(piece) >= 2]
+    corners_from_runs(pieces, closed=True)
     segments: list[Segment] = []
-    for piece in split_pieces(poly, sorted(set(corners) | set(flats))):
-        if len(piece) < 2:
-            continue
-        segments.extend(fit_open(piece, params.tol))
+    for piece in pieces:
+        segments.extend(fit_stretch(piece, params.tol))
     return snap_axis_lines(segments, params.snap_axis_deg), sorted(corners)
+
+
+def fit_closed(poly: np.ndarray, tol: float) -> list[Segment]:
+    """Closed contour without corners: lines first where it has straight runs,
+    else the smooth closed fit. A rounded square has no corner sharp enough to
+    split it and used to go to the smooth fit whole, sides barrelled; its sides
+    are straight runs, and the loop is opened inside the first of them so the
+    seam falls on a line. Two collinear lines meeting at the seam become one."""
+    smooth = fit_closed_smooth(poly, tol)
+    n = len(poly)
+    if n < 4:
+        return smooth
+    runs = line_runs(np.vstack([poly, poly[:1]]))
+    if not runs:
+        return smooth
+    # open the loop in the middle of the longest run: a seam at a run's first
+    # vertex can sit in a corner's chamfer, and the two half-lines then meet
+    # there with a stub between them
+    i, j, _c, _d = max(runs, key=lambda r: r[1] - r[0])
+    start = ((i + j) // 2) % n
+    rolled = np.vstack([poly[start:], poly[:start], poly[start:start + 1]])
+    lines = lines_first(rolled, tol)
+    if lines is None:
+        return smooth
+    if len(lines) > 1 and isinstance(lines[0], Line) and isinstance(lines[-1], Line):
+        a = lines[0].p1 - lines[0].p0
+        b = lines[-1].p1 - lines[-1].p0
+        la, lb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+        if la > 0 and lb > 0 and _turn_deg(a / la, b / lb) <= MERGE_DEG:
+            lines[-1] = Line(lines[-1].p0.copy(), lines[0].p1.copy())
+            lines = lines[1:]
+    return lines if _cost(lines) <= _cost(smooth) else smooth
 
 
 def fit_shape(contours: list[np.ndarray], params: CurveParams) -> Shape:

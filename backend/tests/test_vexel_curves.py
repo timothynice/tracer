@@ -5,7 +5,7 @@ import numpy as np
 from studi0trace.engines.vexel import curves
 from studi0trace.engines.vexel.curves import (
     Circle, Cubic, CurveParams, Ellipse, Line, PathShape, Rect, _bezier, find_corners, fit_open,
-    fit_shape, path_d, shape_svg, straight_runs,
+    fit_closed, fit_shape, fit_stretch, line_runs, path_d, shape_svg,
 )
 
 P = CurveParams(corner_threshold=60, tol=0.4, shape_fitting=True)
@@ -122,25 +122,56 @@ def test_a_rounded_square_keeps_its_sides_straight():
             pts.append(list(np.array(here) + f * (far - np.array(here))))
     poly = np.array(pts)
 
-    cuts = straight_runs(poly)
-    assert len(cuts) >= 6, f"the flat sides were not found: {cuts}"
-
     segs = fit_shape([poly], P).contours[0]
     lines = [s for s in segs if isinstance(s, Line)]
-    assert len(lines) >= 3, f"a rounded square came out with {len(lines)} straight sides"
+    assert len(lines) == 4, f"a rounded square came out with {len(lines)} straight sides: {''.join('L' if isinstance(s, Line) else 'C' for s in segs)}"
     for s in lines:
         length = float(np.hypot(*(s.p1 - s.p0)))
         assert length > 10.0, "a side came out chopped into fragments"
 
 
-def test_a_circle_is_not_chopped_into_straight_runs():
-    """A curve must not be polygonised. The bound on how far a run may bend over
-    its own chord is what keeps it out: nothing under a radius of a few hundred
-    pixels can hold a straight run long enough to qualify."""
+def test_a_circle_is_not_chopped_into_lines():
+    """A curve must not be polygonised. Chords of a big circle pass the residual
+    test one at a time; what keeps them out is that chords turn a little against
+    each other and a polygon's sides do not, and that the curve fit is cheaper."""
     t = np.linspace(0, 2 * np.pi, 400, endpoint=False)
-    for radius in (20.0, 60.0, 150.0):
+    for radius in (20.0, 60.0, 150.0, 300.0):
         circle = np.column_stack([radius * np.cos(t), radius * np.sin(t)])
-        assert straight_runs(circle) == [], f"a circle of radius {radius} was cut into lines"
+        segs = fit_closed(circle, 0.4)
+        assert not any(isinstance(s, Line) for s in segs), f"a circle of radius {radius} was cut into lines"
+        quarter = circle[:100]
+        assert not any(isinstance(s, Line) for s in fit_stretch(quarter, 0.4)), f"a quarter arc of radius {radius} was cut into lines"
+
+
+def test_line_runs_finds_a_straight_edge_despite_end_noise():
+    """The corners are the least certain points on an outline. A line test that
+    measured against the chord between them failed a straight edge whenever a
+    corner sat a third of a pixel off; the residuals about the run's own line
+    do not care where the ends are."""
+    t = np.linspace(0, 1, 143)[:, None]
+    pts = np.array([[0.0, 0.0]]) * (1 - t) + np.array([[100.0, 3.0]]) * t
+    rng = np.random.default_rng(1)
+    pts = pts + rng.normal(0, 0.06, pts.shape)
+    pts[0] += (0.0, 0.35)
+    pts[-1] += (0.0, -0.3)
+    runs = line_runs(pts)
+    assert len(runs) == 1 and runs[0][0] <= 1 and runs[0][1] >= len(pts) - 2, runs
+    segs = fit_stretch(pts, 0.4)
+    assert len(segs) == 1 and isinstance(segs[0], Line)
+    assert np.allclose(segs[0].p0, pts[0]) and np.allclose(segs[0].p1, pts[-1])
+
+
+def test_a_rounded_corner_is_line_curve_line():
+    rng = np.random.default_rng(2)
+    side = np.column_stack([np.linspace(0, 40, 60), np.zeros(60)])
+    for r in (10.0, 25.0, 60.0):
+        th = np.linspace(-np.pi / 2, 0, max(25, int(r)))[1:]
+        corner = np.column_stack([40 + r * np.cos(th), r + r * np.sin(th)])
+        up = np.column_stack([np.full(60, 40.0 + r), np.linspace(r, r + 40, 60)])
+        pts = np.vstack([side, corner, up[1:]]) + rng.normal(0, 0.05, (len(side) + len(corner) + 59, 2))
+        segs = fit_stretch(pts, 0.4)
+        kinds = "".join("L" if isinstance(s, Line) else "C" for s in segs)
+        assert kinds.startswith("L") and kinds.endswith("L") and "C" in kinds and kinds.count("L") == 2, f"r={r}: {kinds}"
 
 
 def test_split_tangent_beats_the_chord_between_the_two_neighbours():

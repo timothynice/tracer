@@ -149,74 +149,526 @@ fn points_at_arcs(poly: &[P], cum: &[f64], s: f64) -> P {
     [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])]
 }
 
-/// A run of outline this long (px) that bends less than `STRAIGHT_SAG` across
-/// its own chord is a straight edge, and is emitted as one. See the Python.
-pub const MIN_LINE: f64 = 18.0;
-pub const STRAIGHT_SAG: f64 = 0.10;
+// --- lines first ---------------------------------------------------------------------
+//
+// Port of the Python `line_runs` / `lines_first` / `fit_stretch`. Same arithmetic,
+// same order, so both implementations land on the same bits.
+pub const LINE_RMS: f64 = 0.10;
+pub const LINE_P98: f64 = 0.30;
+pub const LINE_MIN: f64 = 8.1;
+pub const LINE_SAG: f64 = 0.10;
+pub const LINE_END: f64 = 0.15;
+pub const MERGE_DEG: f64 = 2.0;
+pub const GAP_MIN: f64 = 1.6;
+pub const CORNER_GAP: f64 = 2.1;
+pub const CORNER_REACH: f64 = 3.1;
+pub const SNAP_END: f64 = 0.5;
+pub const CHORD_TURN: f64 = 20.0;
+pub const CHORD_GAP: f64 = 12.1;
+pub const CHORD_END: f64 = 2.0 * LINE_MIN;
+pub const LINE_COST: f64 = 0.5;
 
-/// Where the outline stops being straight and starts bending, or the reverse.
-///
-/// Without this a long flat edge is fitted as a cubic like everything else, and
-/// a cubic through points that wander a few hundredths of a pixel bows: the
-/// sides of a square come out barrelled and a letter's stem comes out bent.
-/// What is returned is where flat gives way to bending, not where one flat run
-/// happens to end and the next begins — two straight runs meeting head on are a
-/// corner, and `find_corners` is what says so. See the Python.
-pub fn straight_runs(poly: &[P]) -> Vec<usize> {
-    let n = poly.len();
+struct Prefix {
+    sx: Vec<f64>,
+    sy: Vec<f64>,
+    sxx: Vec<f64>,
+    sxy: Vec<f64>,
+    syy: Vec<f64>,
+}
+
+fn prefix(pts: &[P]) -> Prefix {
+    let n = pts.len();
+    let mut p = Prefix { sx: vec![0.0; n + 1], sy: vec![0.0; n + 1], sxx: vec![0.0; n + 1], sxy: vec![0.0; n + 1], syy: vec![0.0; n + 1] };
+    for (k, q) in pts.iter().enumerate() {
+        p.sx[k + 1] = p.sx[k] + q[0];
+        p.sy[k + 1] = p.sy[k] + q[1];
+        p.sxx[k + 1] = p.sxx[k] + q[0] * q[0];
+        p.sxy[k + 1] = p.sxy[k] + q[0] * q[1];
+        p.syy[k + 1] = p.syy[k] + q[1] * q[1];
+    }
+    p
+}
+
+/// Centre, unit direction and RMS residual of the TLS line through pts[i..=j].
+fn tls_from_prefix(p: &Prefix, i: usize, j: usize) -> (P, P, f64) {
+    let n = (j + 1 - i) as f64;
+    let sx = p.sx[j + 1] - p.sx[i];
+    let sy = p.sy[j + 1] - p.sy[i];
+    let sxx = p.sxx[j + 1] - p.sxx[i];
+    let sxy = p.sxy[j + 1] - p.sxy[i];
+    let syy = p.syy[j + 1] - p.syy[i];
+    let (mx, my) = (sx / n, sy / n);
+    let (cxx, cxy, cyy) = (sxx / n - mx * mx, sxy / n - mx * my, syy / n - my * my);
+    let half = (cxx + cyy) / 2.0;
+    let spread = ((cxx - cyy) / 2.0).hypot(cxy);
+    let lam_min = (half - spread).max(0.0);
+    let lam_max = half + spread;
+    let mut d: P = if cxy.abs() > 1e-15 {
+        [lam_max - cyy, cxy]
+    } else if cxx >= cyy {
+        [1.0, 0.0]
+    } else {
+        [0.0, 1.0]
+    };
+    let norm = d[0].hypot(d[1]);
+    if norm > 0.0 {
+        d = [d[0] / norm, d[1] / norm];
+    } else {
+        d = [1.0, 0.0];
+    }
+    ([mx, my], d, lam_min.sqrt())
+}
+
+/// numpy's default (linear) 98th percentile.
+fn percentile98(values: &mut Vec<f64>) -> f64 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = values.len();
+    if n == 1 {
+        return values[0];
+    }
+    let pos = 0.98 * (n - 1) as f64;
+    let lo = pos.floor() as usize;
+    let frac = pos - lo as f64;
+    let hi = (lo + 1).min(n - 1);
+    values[lo] + (values[hi] - values[lo]) * frac
+}
+
+/// How much the run bows: the quadratic term of a parabola fitted to the
+/// residuals along the run, as its rise over the run's half-length. Same
+/// arithmetic as the Python `_sag`.
+fn sag(pts: &[P], c: P, d: P) -> f64 {
+    let n = pts.len() as f64;
+    let along: Vec<f64> = pts.iter().map(|p| (p[0] - c[0]) * d[0] + (p[1] - c[1]) * d[1]).collect();
+    let off: Vec<f64> = pts.iter().map(|p| (p[0] - c[0]) * (-d[1]) + (p[1] - c[1]) * d[0]).collect();
+    let mean = along.iter().sum::<f64>() / n;
+    let s: Vec<f64> = along.iter().map(|a| a - mean).collect();
+    let (mut s2sum, mut s3sum, mut s4sum, mut o, mut o1, mut o2) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for (k, sk) in s.iter().enumerate() {
+        let s2 = sk * sk;
+        s2sum += s2;
+        s3sum += s2 * sk;
+        s4sum += s2 * s2;
+        o += off[k];
+        o1 += off[k] * sk;
+        o2 += off[k] * s2;
+    }
+    let det = s4sum * (s2sum * n) - s3sum * (s3sum * n) + s2sum * (0.0 - s2sum * s2sum);
+    if det.abs() < 1e-18 {
+        return 0.0;
+    }
+    let a = (o2 * (s2sum * n) - s3sum * (o1 * n) + s2sum * (0.0 - o * s2sum)) / det;
+    let lo = along.iter().cloned().fold(f64::INFINITY, f64::min);
+    let hi = along.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let half = 0.5 * (hi - lo);
+    a.abs() * half * half
+}
+
+pub struct Run {
+    pub i: usize,
+    pub j: usize,
+    pub c: P,
+    pub d: P,
+}
+
+/// Maximal straight runs of an open polyline. See the Python `line_runs`.
+pub fn line_runs(pts: &[P]) -> Vec<Run> {
+    let n = pts.len();
     if n < 3 {
         return Vec::new();
     }
     let mut cum = vec![0.0f64; n];
     for k in 1..n {
-        cum[k] = cum[k - 1]
-            + ((poly[k][0] - poly[k - 1][0]).powi(2) + (poly[k][1] - poly[k - 1][1]).powi(2)).sqrt();
+        cum[k] = cum[k - 1] + ((pts[k][0] - pts[k - 1][0]).powi(2) + (pts[k][1] - pts[k - 1][1]).powi(2)).sqrt();
     }
-    let mut flat = vec![false; n];
+    let p = prefix(pts);
+    let mut runs = Vec::new();
     let mut i = 0usize;
-    while i + 1 < n {
-        let mut best = i;
-        let mut j = i + 1;
+    while i + 2 < n {
+        let mut best: Option<(usize, P, P)> = None;
+        let mut j = i + 2;
         while j < n {
-            let chord = [poly[j][0] - poly[i][0], poly[j][1] - poly[i][1]];
-            let length = (chord[0] * chord[0] + chord[1] * chord[1]).sqrt();
-            if length < 1e-9 {
-                j += 1;
-                continue;
-            }
-            let normal = [-chord[1] / length, chord[0] / length];
-            let mut worst = 0.0f64;
-            for q in &poly[i..=j] {
-                let off = (q[0] - poly[i][0]) * normal[0] + (q[1] - poly[i][1]) * normal[1];
-                worst = worst.max(off.abs());
-            }
-            if worst > STRAIGHT_SAG {
+            let (c, d, rms) = tls_from_prefix(&p, i, j);
+            if rms > LINE_RMS {
                 break;
             }
-            best = j;
+            best = Some((j, c, d));
             j += 1;
         }
-        if cum[best] - cum[i] >= MIN_LINE {
-            for f in flat.iter_mut().take(best + 1).skip(i) {
-                *f = true;
+        if let Some((mut j, mut c, mut d)) = best {
+            while j > i + 1 {
+                let mut off: Vec<f64> = (i..=j).map(|k| ((pts[k][0] - c[0]) * (-d[1]) + (pts[k][1] - c[1]) * d[0]).abs()).collect();
+                if percentile98(&mut off) <= LINE_P98 {
+                    break;
+                }
+                j -= 1;
+                let (c2, d2, _) = tls_from_prefix(&p, i, j);
+                c = c2;
+                d = d2;
             }
-            i = best;
-        } else {
-            i += 1;
+            // A run that grew into the start of a bend bows; shed the far end
+            // until what is left is straight. See the Python.
+            while j > i + 1 && sag(&pts[i..=j], c, d) > LINE_SAG {
+                j -= 1;
+                let (c2, d2, _) = tls_from_prefix(&p, i, j);
+                c = c2;
+                d = d2;
+            }
+            // A run may also begin inside a bend. Shed end vertices off the line. See the Python.
+            let mut a = i;
+            while j > a + 1 {
+                let head = ((pts[a][0] - c[0]) * (-d[1]) + (pts[a][1] - c[1]) * d[0]).abs();
+                let tail = ((pts[j][0] - c[0]) * (-d[1]) + (pts[j][1] - c[1]) * d[0]).abs();
+                if head <= LINE_END && tail <= LINE_END {
+                    break;
+                }
+                if head > tail {
+                    a += 1;
+                } else {
+                    j -= 1;
+                }
+                let (c2, d2, _) = tls_from_prefix(&p, a, j);
+                c = c2;
+                d = d2;
+            }
+            if j > a + 1 && cum[j] - cum[a] >= LINE_MIN {
+                // point the direction along the run: see the Python
+                if (pts[j][0] - pts[a][0]) * d[0] + (pts[j][1] - pts[a][1]) * d[1] < 0.0 {
+                    d = [-d[0], -d[1]];
+                }
+                runs.push(Run { i: a, j, c, d });
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    runs
+}
+
+fn project(c: P, d: P, q: P) -> P {
+    let t = (q[0] - c[0]) * d[0] + (q[1] - c[1]) * d[1];
+    [c[0] + d[0] * t, c[1] + d[1] * t]
+}
+
+fn turn_deg(a: P, b: P) -> f64 {
+    (a[0] * b[0] + a[1] * b[1]).clamp(-1.0, 1.0).acos().to_degrees()
+}
+
+fn dist(a: P, b: P) -> f64 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+fn seg_start(s: &Segment) -> P {
+    match s {
+        Segment::Line { p0, .. } => *p0,
+        Segment::Cubic { p0, .. } => *p0,
+    }
+}
+
+fn seg_end(s: &Segment) -> P {
+    match s {
+        Segment::Line { p1, .. } => *p1,
+        Segment::Cubic { p1, .. } => *p1,
+    }
+}
+
+fn set_start(s: &mut Segment, q: P) {
+    match s {
+        Segment::Line { p0, .. } => *p0 = q,
+        Segment::Cubic { p0, .. } => *p0 = q,
+    }
+}
+
+fn set_end(s: &mut Segment, q: P) {
+    match s {
+        Segment::Line { p1, .. } => *p1 = q,
+        Segment::Cubic { p1, .. } => *p1 = q,
+    }
+}
+
+/// The stretch as its straight runs, each one Line, with the gaps fitted as
+/// cubics. See the Python `lines_first`. None where no run was found.
+pub fn lines_first(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) -> Option<Vec<Segment>> {
+    let runs = line_runs(pts);
+    if runs.is_empty() {
+        return None;
+    }
+    let n = pts.len();
+    let p = prefix(pts);
+    let mut cum = vec![0.0f64; n];
+    for k in 1..n {
+        cum[k] = cum[k - 1] + ((pts[k][0] - pts[k - 1][0]).powi(2) + (pts[k][1] - pts[k - 1][1]).powi(2)).sqrt();
+    }
+    // merge touching, nearly collinear runs
+    let mut merged: Vec<Run> = Vec::new();
+    for run in runs {
+        if let Some(last) = merged.last() {
+            if turn_deg(last.d, run.d) <= MERGE_DEG && cum[run.i] - cum[last.j] <= CHORD_GAP {
+                let (c, d, rms) = tls_from_prefix(&p, last.i, run.j);
+                if rms <= LINE_RMS {
+                    let i0 = last.i;
+                    merged.pop();
+                    merged.push(Run { i: i0, j: run.j, c, d });
+                    continue;
+                }
+            }
+        }
+        merged.push(run);
+    }
+    let mut runs = merged;
+    // chords of a curve go back to being curve: see the Python.
+    if runs.len() > 1 {
+        let small: Vec<bool> = (0..runs.len() - 1)
+            .map(|k| cum[runs[k + 1].i] - cum[runs[k].j] <= CHORD_GAP && turn_deg(runs[k].d, runs[k + 1].d) <= CHORD_TURN)
+            .collect();
+        let mut keep = Vec::new();
+        for (k, run) in runs.into_iter().enumerate() {
+            let before = k > 0 && small[k - 1];
+            let after = k < small.len() && small[k];
+            let length = dist(pts[run.j], pts[run.i]);
+            if before && after {
+                continue;
+            }
+            if (before || after) && length < CHORD_END {
+                continue;
+            }
+            keep.push(run);
+        }
+        runs = keep;
+        if runs.is_empty() {
+            return None;
         }
     }
-    if !flat.iter().any(|v| *v) || flat.iter().all(|v| *v) {
+
+    let on_line = |a: usize, b: usize, c: P, d: P| -> bool {
+        (a..=b).all(|k| ((pts[k][0] - c[0]) * (-d[1]) + (pts[k][1] - c[1]) * d[0]).abs() <= LINE_P98)
+    };
+    let snaps = |end: P, a: usize, b: usize, c: P, d: P| -> bool {
+        let off = ((end[0] - c[0]) * (-d[1]) + (end[1] - c[1]) * d[0]).abs();
+        cum[b] - cum[a] < CORNER_REACH && off <= SNAP_END
+    };
+    // Cubics through pts[a..=b]; None means "a corner": the two lines meet.
+    let gap = |a: usize, b: usize, ta: Option<P>, tb: Option<P>| -> Option<Vec<Segment>> {
+        let run = &pts[a..=b];
+        if run.len() < 2 || dist(run[run.len() - 1], run[0]) < 1e-9 {
+            return Some(Vec::new());
+        }
+        if dist(run[run.len() - 1], run[0]) < CORNER_GAP {
+            if ta.is_some() && tb.is_some() {
+                return None;
+            }
+            return Some(vec![Segment::Line { p0: run[0], p1: run[run.len() - 1] }]);
+        }
+        if run.len() == 2 {
+            return Some(vec![Segment::Line { p0: run[0], p1: run[1] }]);
+        }
+        let t1 = ta.unwrap_or_else(|| end_tangent(run, true));
+        let t2 = tb.unwrap_or_else(|| end_tangent(run, false));
+        Some(fit_cubics(run, t1, t2, tol, 0))
+    };
+
+    let mut segs: Vec<Segment> = Vec::new();
+    let mut prev: Option<(P, P, P)> = None; // end point, direction, centre of the last line
+    let mut cursor = 0usize;
+    for run in &runs {
+        let (i, j, c) = (run.i, run.j, run.c);
+        let mut d = run.d;
+        if (pts[j][0] - pts[i][0]) * d[0] + (pts[j][1] - pts[i][1]) * d[1] < 0.0 {
+            d = [-d[0], -d[1]];
+        }
+        let mut start = if i == 0 { pts[0] } else { project(c, d, pts[i]) };
+        let end = if j == n - 1 { pts[n - 1] } else { project(c, d, pts[j]) };
+        if i > cursor && cursor == 0 {
+            if on_line(0, i, c, d) || snaps(pts[0], 0, i, c, d) {
+                start = pts[0];
+            } else {
+                match gap(0, i, t_start, Some([-d[0], -d[1]])) {
+                    Some(mut before) if !before.is_empty() => {
+                        let k = before.len() - 1;
+                        set_end(&mut before[k], start);
+                        segs.extend(before);
+                    }
+                    _ => segs.push(Segment::Line { p0: pts[0], p1: start }),
+                }
+            }
+        } else if i > cursor {
+            let absorbed = prev.is_some_and(|(_, pd, pc)| on_line(cursor, i, pc, pd)) || on_line(cursor, i, c, d);
+            let before = if absorbed && prev.is_some() {
+                None
+            } else {
+                gap(cursor, i, if cursor == 0 { t_start } else { prev.map(|v| v.1) }, Some([-d[0], -d[1]]))
+            };
+            match before {
+                None => {
+                    let (pe, pd, _) = prev.unwrap();
+                    match intersect(pe, pd, c, d) {
+                        Some(x) if dist(x, pts[i]) <= 3.0 => {
+                            let last = segs.len() - 1;
+                            set_end(&mut segs[last], x);
+                            start = x;
+                        }
+                        _ => {
+                            let from = seg_end(segs.last().unwrap());
+                            segs.push(Segment::Line { p0: from, p1: start });
+                        }
+                    }
+                }
+                Some(mut before) => {
+                    if !before.is_empty() {
+                        if let Some(last) = segs.last() {
+                            let from = seg_end(last);
+                            set_start(&mut before[0], from);
+                        }
+                        let k = before.len() - 1;
+                        set_end(&mut before[k], start);
+                    }
+                    segs.extend(before);
+                }
+            }
+        } else if let Some(last) = segs.last() {
+            start = seg_end(last);
+        }
+        segs.push(Segment::Line { p0: start, p1: end });
+        prev = Some((end, d, c));
+        cursor = j;
+    }
+    if cursor < n - 1 {
+        let (pe, pd, pc) = prev.unwrap();
+        if on_line(cursor, n - 1, pc, pd) || snaps(pts[n - 1], cursor, n - 1, pc, pd) {
+            let last = segs.len() - 1;
+            if matches!(segs[last], Segment::Line { .. }) {
+                set_end(&mut segs[last], pts[n - 1]);
+            } else {
+                segs.push(Segment::Line { p0: pe, p1: pts[n - 1] });
+            }
+        } else {
+            match gap(cursor, n - 1, Some(pd), t_end) {
+                Some(mut after) if !after.is_empty() => {
+                    set_start(&mut after[0], pe);
+                    let k = after.len() - 1;
+                    set_end(&mut after[k], pts[n - 1]);
+                    segs.extend(after);
+                }
+                _ => segs.push(Segment::Line { p0: pe, p1: pts[n - 1] }),
+            }
+        }
+    }
+    let first = seg_start(&segs[0]);
+    if dist(first, pts[0]) > 1e-9 {
+        if matches!(segs[0], Segment::Line { .. }) && dist(first, pts[0]) <= 3.0 {
+            set_start(&mut segs[0], pts[0]);
+        } else {
+            segs.insert(0, Segment::Line { p0: pts[0], p1: first });
+        }
+    }
+    Some(merge_lines(segs))
+}
+
+/// Fold a stub shorter than GAP_MIN, or a line within MERGE_DEG of the line
+/// before it, into that line. See the Python.
+pub fn merge_lines(mut segs: Vec<Segment>) -> Vec<Segment> {
+    // See the Python `merge_lines`.
+    let mut out: Vec<Segment> = Vec::new();
+    let mut k = 0usize;
+    while k < segs.len() {
+        let seg = segs[k].clone();
+        if let (Some(Segment::Line { p0: q0, p1: q1 }), Segment::Line { p0, p1 }) = (out.last().cloned(), &seg) {
+            let a = [q1[0] - q0[0], q1[1] - q0[1]];
+            let b = [p1[0] - p0[0], p1[1] - p0[1]];
+            let la = a[0].hypot(a[1]);
+            let lb = b[0].hypot(b[1]);
+            if la > 0.0 && lb > 0.0 {
+                let da = [a[0] / la, a[1] / la];
+                let db = [b[0] / lb, b[1] / lb];
+                let off_end = ((p1[0] - q0[0]) * (-da[1]) + (p1[1] - q0[1]) * da[0]).abs();
+                let joined = [p1[0] - q0[0], p1[1] - q0[1]];
+                let lj = joined[0].hypot(joined[1]);
+                let joint_off = if lj > 0.0 { ((p0[0] - q0[0]) * (-joined[1]) + (p0[1] - q0[1]) * joined[0]).abs() / lj } else { 0.0 };
+                if (turn_deg(da, db) <= MERGE_DEG && joint_off <= LINE_END) || (lb < GAP_MIN && off_end <= LINE_END) {
+                    let last = out.len() - 1;
+                    out[last] = Segment::Line { p0: q0, p1: *p1 };
+                    k += 1;
+                    continue;
+                }
+                if lb < GAP_MIN && k + 1 < segs.len() {
+                    if let Segment::Line { p0: n0, p1: n1 } = segs[k + 1].clone() {
+                        let c = [n1[0] - n0[0], n1[1] - n0[1]];
+                        let lc = c[0].hypot(c[1]);
+                        if lc > 0.0 {
+                            if let Some(x) = intersect(q0, da, n0, [c[0] / lc, c[1] / lc]) {
+                                if dist(x, *p0) <= 3.0 {
+                                    let last = out.len() - 1;
+                                    out[last] = Segment::Line { p0: q0, p1: x };
+                                    segs[k + 1] = Segment::Line { p0: x, p1: n1 };
+                                    k += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out.push(seg);
+        k += 1;
+    }
+    out
+}
+
+fn cost(segs: &[Segment]) -> f64 {
+    segs.iter().map(|s| if matches!(s, Segment::Line { .. }) { LINE_COST } else { 1.0 }).sum()
+}
+
+/// Move each corner shared by two pieces to where their adjacent line runs
+/// cross. See the Python `corners_from_runs`.
+pub fn corners_from_runs(pieces: &mut [Vec<P>], closed: bool) {
+    let n = pieces.len();
+    if n < 2 {
+        return;
+    }
+    let runs: Vec<Vec<Run>> = pieces.iter().map(|p| line_runs(p)).collect();
+    let range: Vec<usize> = if closed { (0..n).collect() } else { (1..n).collect() };
+    for idx in range {
+        let prev_idx = (idx + n - 1) % n;
+        let (rp, rn) = (&runs[prev_idx], &runs[idx]);
+        if rp.is_empty() || rn.is_empty() {
+            continue;
+        }
+        let last = &rp[rp.len() - 1];
+        let first = &rn[0];
+        let prev = &pieces[prev_idx];
+        let nxt = &pieces[idx];
+        let tail: f64 = prev[last.j..].windows(2).map(|w| dist(w[0], w[1])).sum();
+        let head: f64 = nxt[..=first.i].windows(2).map(|w| dist(w[0], w[1])).sum();
+        if tail > CORNER_REACH || head > CORNER_REACH {
+            continue;
+        }
+        let Some(x) = intersect(last.c, last.d, first.c, first.d) else { continue };
+        if dist(x, prev[prev.len() - 1]) > 1.5 {
+            continue;
+        }
+        let lp = pieces[prev_idx].len() - 1;
+        pieces[prev_idx][lp] = x;
+        pieces[idx][0] = x;
+    }
+}
+
+/// One run between two breaks, as lines first or as a curve. See the Python `fit_stretch`.
+pub fn fit_stretch(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) -> Vec<Segment> {
+    if pts.len() < 2 {
         return Vec::new();
     }
-    let mut out: Vec<usize> = Vec::new();
-    for k in 0..n - 1 {
-        if flat[k + 1] != flat[k] {
-            out.push(if flat[k + 1] { k + 1 } else { k });
-        }
+    let curve = if t_start.is_none() && t_end.is_none() {
+        fit_open(pts, tol, None, None)
+    } else {
+        let t1 = t_start.unwrap_or_else(|| end_tangent(pts, true));
+        let t2 = t_end.unwrap_or_else(|| end_tangent(pts, false));
+        fit_cubics(pts, t1, t2, tol, 0)
+    };
+    match lines_first(pts, tol, t_start, t_end) {
+        Some(lines) if cost(&lines) <= cost(&curve) => lines,
+        _ => curve,
     }
-    out.sort_unstable();
-    out.dedup();
-    out
 }
 
 /// Indices of vertices where the contour turns by more than `threshold_deg` at
@@ -1235,7 +1687,7 @@ pub fn line_through(points: &[P]) -> (P, P) {
     ([cx, cy], d)
 }
 
-fn intersect(p: P, d: P, q: P, e: P) -> Option<P> {
+pub fn intersect(p: P, d: P, q: P, e: P) -> Option<P> {
     let den = d[0] * e[1] - d[1] * e[0];
     if den.abs() < 1e-9 {
         return None;
@@ -1326,29 +1778,66 @@ pub fn split_pieces(poly: &[P], corners: &[usize]) -> Vec<Vec<P>> {
 }
 
 pub fn fit_contour_segments(poly: &[P], params: &CurveParams) -> Vec<Segment> {
-    let mut corners = find_corners(poly, params.corner_threshold);
-    let mut flats: Vec<usize> = straight_runs(poly).into_iter().filter(|k| !corners.contains(k)).collect();
-    if corners.is_empty() && flats.is_empty() {
-        return fit_closed_smooth(poly, params.tol);
-    }
+    let corners = find_corners(poly, params.corner_threshold);
     if corners.is_empty() {
-        // No corner, but flat runs to hold: cut at those instead, which keeps a
-        // rounded square's sides straight rather than rolling the whole outline
-        // into one smooth loop. See the Python.
-        corners = flats;
-        flats = Vec::new();
+        return fit_closed(poly, params.tol);
     }
-    let mut cuts: Vec<usize> = corners.iter().copied().chain(flats).collect();
-    cuts.sort_unstable();
-    cuts.dedup();
+    let mut pieces: Vec<Vec<P>> = split_pieces(poly, &corners).into_iter().filter(|p| p.len() >= 2).collect();
+    corners_from_runs(&mut pieces, true);
     let mut segments = Vec::new();
-    for piece in split_pieces(poly, &cuts) {
-        if piece.len() < 2 {
-            continue;
-        }
-        segments.extend(fit_open(&piece, params.tol, None, None));
+    for piece in &pieces {
+        segments.extend(fit_stretch(piece, params.tol, None, None));
     }
     snap_axis_lines(segments, params.snap_axis_deg)
+}
+
+/// Closed contour without corners: lines first where it has straight runs,
+/// else the smooth closed fit. See the Python `fit_closed`.
+pub fn fit_closed(poly: &[P], tol: f64) -> Vec<Segment> {
+    let smooth = fit_closed_smooth(poly, tol);
+    let n = poly.len();
+    if n < 4 {
+        return smooth;
+    }
+    let mut closed: Vec<P> = poly.to_vec();
+    closed.push(poly[0]);
+    let runs = line_runs(&closed);
+    if runs.is_empty() {
+        return smooth;
+    }
+    // open the loop in the middle of the longest run: see the Python
+    // the first of the longest runs, as Python's max() picks on a tie
+    let mut longest = &runs[0];
+    for r in &runs {
+        if r.j - r.i > longest.j - longest.i {
+            longest = r;
+        }
+    }
+    let start = ((longest.i + longest.j) / 2) % n;
+    let mut rolled: Vec<P> = poly[start..].to_vec();
+    rolled.extend_from_slice(&poly[..start]);
+    rolled.push(poly[start]);
+    let Some(mut lines) = lines_first(&rolled, tol, None, None) else {
+        return smooth;
+    };
+    if lines.len() > 1 {
+        let last = lines.len() - 1;
+        if let (Segment::Line { p0: a0, p1: a1 }, Segment::Line { p0: b0, p1: b1 }) = (lines[0].clone(), lines[last].clone()) {
+            let a = [a1[0] - a0[0], a1[1] - a0[1]];
+            let b = [b1[0] - b0[0], b1[1] - b0[1]];
+            let la = a[0].hypot(a[1]);
+            let lb = b[0].hypot(b[1]);
+            if la > 0.0 && lb > 0.0 && turn_deg([a[0] / la, a[1] / la], [b[0] / lb, b[1] / lb]) <= MERGE_DEG {
+                lines[last] = Segment::Line { p0: b0, p1: a1 };
+                lines.remove(0);
+            }
+        }
+    }
+    if cost(&lines) <= cost(&smooth) {
+        lines
+    } else {
+        smooth
+    }
 }
 
 /// Fit a region's contours (outer first). Whole-shape primitives only for
@@ -1472,5 +1961,51 @@ pub fn shape_svg(shape: &Shape, attrs: &str, precision: usize) -> String {
             let rule = if contours.len() > 1 { " fill-rule=\"evenodd\"" } else { "" };
             format!("<path d=\"{}\" {}{}/>", path_d(contours, p), attrs, rule)
         }
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    fn kinds(segs: &[Segment]) -> String {
+        segs.iter().map(|s| if matches!(s, Segment::Line { .. }) { 'L' } else { 'C' }).collect()
+    }
+
+    #[test]
+    fn a_noisy_edge_with_bad_ends_is_one_line() {
+        // deterministic "noise": a small sawtooth, ends pushed off the line
+        let mut pts: Vec<P> = (0..143).map(|k| { let t = k as f64 / 142.0; [100.0 * t, 3.0 * t + 0.05 * ((k % 5) as f64 - 2.0) / 2.0] }).collect();
+        pts[0][1] += 0.35;
+        pts[142][1] -= 0.3;
+        let runs = line_runs(&pts);
+        assert_eq!(runs.len(), 1, "{:?}", runs.iter().map(|r| (r.i, r.j)).collect::<Vec<_>>());
+        let segs = fit_stretch(&pts, 0.4, None, None);
+        assert_eq!(kinds(&segs), "L");
+        assert_eq!(segs[0].start(), pts[0]);
+    }
+
+    #[test]
+    fn a_quarter_circle_stays_a_curve() {
+        for r in [30.0f64, 120.0, 300.0] {
+            let n = (2.0 * r) as usize;
+            let pts: Vec<P> = (0..n).map(|k| { let a = std::f64::consts::FRAC_PI_2 * k as f64 / (n - 1) as f64; [r * a.cos(), r * a.sin()] }).collect();
+            assert!(!kinds(&fit_stretch(&pts, 0.4, None, None)).contains('L'), "r={r}");
+        }
+    }
+
+    #[test]
+    fn a_rounded_corner_is_line_curve_line() {
+        let mut pts: Vec<P> = (0..60).map(|k| [40.0 * k as f64 / 59.0, 0.0]).collect();
+        let r = 10.0f64;
+        for k in 1..25 {
+            let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::FRAC_PI_2 * k as f64 / 24.0;
+            pts.push([40.0 + r * a.cos(), r + r * a.sin()]);
+        }
+        for k in 1..60 {
+            pts.push([40.0 + r, r + 40.0 * k as f64 / 59.0]);
+        }
+        let k = kinds(&fit_stretch(&pts, 0.4, None, None));
+        assert!(k.starts_with('L') && k.ends_with('L') && k.contains('C') && k.matches('L').count() == 2, "{k}");
     }
 }

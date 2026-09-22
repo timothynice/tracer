@@ -42,8 +42,14 @@ Filled in as tasks land; every row quotes `bench compare` output.
 
 | after task | outline_px logo | junction_px logo | line_debt_px logo | score logo | seam_ppm logo | wordmark bytes |
 |---|---|---|---|---|---|---|
-| baseline (Task 2, pre-change engine) | 0.694 | 0.744 | 769 | 0.9547 | 14839 | 10762 |
-| Tasks 3-5 | 0.384 | 0.739 | 681 | 0.9544 | 19665 | 9286 |
+| baseline (pre-change engine, per-pixel seam) | 0.695 | 0.744 | 771 | 0.9548 | 14125 | 10762 |
+| Tasks 3-6 | 0.264 | 0.721 | 338 | 0.9555 | 20424 | 7326 |
+
+The Tasks 3-5 row was measured under the old seam metric (outline 0.384, seam 19665) and is superseded.
+`seam_ppm` on logo is up because two sub-pixel-scale items dominate it: `thin-mark-128` (Rust does not recover its
+ring as a stroke where Python does, a pre-existing parity gap in the stroke stage that diffcheck does not cover) and
+`studi0mail-logo-dark` (38 px tall; one cubic now spans a stem side within `curve_tolerance` where the old engine spent
+six, and the metric's 0.1 px slack counts the 0.2 px it sits inside). Excluding thin-mark, logo seam moved 7290 -> 7466 ppm.
 
 ---
 
@@ -621,7 +627,17 @@ In `_junctions`, replace `if not tangents and best is not None and best[0] <= co
   - `curves.fit_pieces(pts, tol, corners: list[int], t_start, t_end, node_ends: tuple[bool, bool]) -> list[Segment]` — emits each line run as one `Line` (endpoints = projections of the run's first/last vertex onto the TLS line; an arc end that falls inside a run is kept exactly at the node); consecutive lines meeting at > `MERGE_DEG = 2.0` degrees are joined at their intersection, otherwise merged into one line; a curve gap shorter than `GAP_MIN = 1.5` px between two lines is dropped and the lines intersected; every other gap is fitted with `fit_cubics` with tangents pinned to the adjoining line directions (or the node tangents at arc ends).
 - Consumes: `fit_cubics`, `_line_through`, `_intersect`, `find_corners`, `_open_corners`.
 
-- [ ] **Step 1: Write the failing tests**
+**As built (2026-09-22):** `line_runs` (TLS residual RMS <= 0.10, p98 <= 0.30, min 8.1 px, plus a
+parabola-fit sag test <= 0.10 px and shedding of end vertices off the line), `lines_first` (runs as
+lines, gaps as cubics, chords of a curve demoted when they turn <= 20 degrees against a neighbour
+within 12 px, corner gaps intersected, jogs kept unless within 0.5 px of the line), `fit_stretch`
+(lines-first kept when its cost, lines at 0.5, is no higher than the curve fit), `fit_closed` (loop
+opened mid-run), `corners_from_runs` (corners placed at the crossing of the adjacent runs),
+`merge_lines`. Interior arc corners are sharpened from their approach lines. Every threshold on a
+distance between placed vertices sits off a multiple of a half, because lattice-placed vertices are
+exact multiples apart and a tie is decided differently by numpy and Rust. Node lines are weighted
+by their real uncertainty. Task 8's plan for collinear merging is folded in here.
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_line_runs_finds_a_straight_edge_despite_end_noise():
@@ -645,9 +661,9 @@ def test_a_circle_is_not_chopped_into_lines():                        # keep fro
     assert line_runs(circle_poly(64, 64, 30)) == []
 ```
 
-- [ ] **Step 2: Run to verify they fail.**
+- [x] **Step 2: Run to verify they fail.**
 
-- [ ] **Step 3: Implement `line_runs` and `fit_pieces`**
+- [x] **Step 3: Implement `line_runs` and `fit_pieces`**
 
 ```python
 LINE_RMS = 0.08
@@ -687,9 +703,9 @@ The `_tls` in a growing loop is O(n²) on long arcs; cache prefix sums of x, y, 
 
 `fit_pieces` walks the arc: breaks = sorted set of `{0, n-1}` ∪ corners ∪ run boundaries. For each line run emit `Line(project(pts[i]), project(pts[j]))`; at arc ends inside a run use the node vertex itself. Between two lines: if the angle between directions ≤ `MERGE_DEG`, merge (one line from the first start to the second end, re-projected on the joint TLS line); else if the gap chord < `GAP_MIN`, set both lines' shared endpoint to `_intersect`; else fit the gap with `fit_cubics(gap, t1=line_a.direction, t2=-line_b.direction, tol)`. Corners from `_open_corners`/`find_corners` inside a curve gap keep their old sharpening (`split_pieces` logic). `fit_contour_segments` (closed contours) calls `fit_pieces` with the polyline rolled to start at a run boundary or corner. Delete `straight_runs`, `MIN_LINE`, `STRAIGHT_SAG` and their Rust twins; update `test_a_rounded_square_keeps_its_sides_straight` to assert on emitted `L` count instead.
 
-- [ ] **Step 4: Port to Rust** (`line_runs` with the same prefix sums, `fit_pieces`, `fit_arc`, `fit_contour_segments`). `cargo test` gets the 3° edge and circle tests.
+- [x] **Step 4: Port to Rust** (`line_runs` with the same prefix sums, `fit_pieces`, `fit_arc`, `fit_contour_segments`). `cargo test` gets the 3° edge and circle tests.
 
-- [ ] **Step 5: Verify** as Task 3 Step 5 with `--metric line_debt_px` (expect ≈ 0 on `logo`), `outline_px`, `score`, `seam_ppm`, and byte count (expect down). Commit `feat(vexel): lines first - straightness from residuals, corners from the lines`.
+- [x] **Step 5: Verify** as Task 3 Step 5 with `--metric line_debt_px` (expect ≈ 0 on `logo`), `outline_px`, `score`, `seam_ppm`, and byte count (expect down). Commit `feat(vexel): lines first - straightness from residuals, corners from the lines`.
 
 ---
 

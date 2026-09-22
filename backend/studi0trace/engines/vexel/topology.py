@@ -46,8 +46,9 @@ from studi0trace.engines.vexel.curves import (
     CurveParams,
     Line,
     Segment,
-    straight_runs,
-    _end_tangent,
+    corners_from_runs,
+    fit_stretch,
+    _intersect,
     fit_contour_segments,
     fit_cubics,
     _line_through,
@@ -107,6 +108,12 @@ REACH = 0.75
 # junction the direction is what places the node.
 APPROACH_MAX = 12.0
 APPROACH_RMS = 0.08
+FALLBACK_RMS = 0.5  # the residual a line fitted to whatever vertices were left is reported with
+# An approach line starts this far from the node. Not 1.5: vertices placed at
+# lattice midpoints sit at distances that are exact multiples of a half, and a
+# threshold landing on one is decided by the last bit, differently in Python
+# and Rust.
+APPROACH_TRIM = 1.6
 # Where the incident lines cross is trusted when the placement noise of a
 # vertex, PLACEMENT_SIGMA px, projects to no more than NODE_UNCERTAINTY px
 # along the weakest direction of the crossing. Two accurate lines meeting at
@@ -121,19 +128,22 @@ TIP_LIMIT = 4.0
 # whatever the third fill is doing; the fit then followed that bias faithfully,
 # which is the bulge seen where an outline meets another shape. A wedge tip's
 # sliver is worse still, and gets the longer trim.
-NODE_TRIM = 1.5
-TIP_TRIM = 4.0
+# Thresholds on distances between placed vertices sit off multiples of a half:
+# vertices placed at lattice midpoints are exact multiples apart, and a tie is
+# decided by the last bit, differently in Python and Rust.
+NODE_TRIM = 1.6
+TIP_TRIM = 4.1
 # ...but never more than this share of the arc's own length from either end.
 TRIM_SHARE = 0.3
 # An arc shorter than this has no direction worth reading: a corner pixel of a
 # tilted square puts two nodes a pixel apart with a one-pixel arc between them,
 # and that arc's "line" is the lattice edge it happens to sit on. The nodes are
 # placed from the long arcs alone, and then coincide.
-SHORT_ARC = 2.0
+SHORT_ARC = 2.1
 # Two arcs leaving a node are one smooth curve only if one line or one cubic
 # fits SMOOTH_SPAN px of each, node in the middle, within a fraction of the
 # tolerance. Pairs turning more than SMOOTH_MAX_TURN are not even tried.
-SMOOTH_SPAN = 10.0
+SMOOTH_SPAN = 10.1
 SMOOTH_TOL = 0.75
 SMOOTH_MAX_TURN = 90.0
 
@@ -574,7 +584,16 @@ def _approach(pts: np.ndarray, from_start: bool, reach: float, trim: float,
             rms = float(np.sqrt(float(np.sum(off * off)) / len(off)))
             if best is not None and rms > APPROACH_RMS:
                 break
-            best = (centre, direction, rms)
+            # What the node solve is told is not the residual alone: a line
+            # through two vertices a pixel apart has no residual and no
+            # authority. Its direction is off by about sigma*sqrt(12/n)/span,
+            # and at `reach` from its centre that is a position error the
+            # solve must weigh. One misplaced vertex on a short arc otherwise
+            # swings the node by pixels.
+            n_used = float(int(sel.sum()))
+            span = max(float(np.max(d[sel]) - np.min(d[sel])), 0.5)
+            lean = PLACEMENT_SIGMA * math.sqrt(12.0 / n_used) * (reach / span)
+            best = (centre, direction, math.sqrt(rms * rms + lean * lean))
         far += 2.0
     if best is None:
         sel = (d > 0) & (d <= 2.0 * reach) & ok
@@ -583,7 +602,8 @@ def _approach(pts: np.ndarray, from_start: bool, reach: float, trim: float,
         if int(sel.sum()) < 2:
             return None
         centre, direction = _line_through(q[sel])
-        best = (centre, direction, 0.0)
+        # the wide fallback is the least reliable line there is, and says so
+        best = (centre, direction, FALLBACK_RMS)
     return best
 
 
@@ -602,7 +622,7 @@ def _smooth_through(pa: np.ndarray, pb: np.ndarray, node: np.ndarray, tol: float
     """
     def head(p: np.ndarray, exclude: np.ndarray | None) -> np.ndarray:
         cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))])
-        keep = (cum >= NODE_TRIM) & (cum <= SMOOTH_SPAN)
+        keep = (cum >= APPROACH_TRIM) & (cum <= SMOOTH_SPAN)
         if exclude is not None:
             keep &= ~exclude
         return p[keep]
@@ -614,7 +634,7 @@ def _smooth_through(pa: np.ndarray, pb: np.ndarray, node: np.ndarray, tol: float
     return len(fit_open(joined, SMOOTH_TOL * tol)) == 1
 
 
-def _on_border(target: np.ndarray, incident: list[tuple[Arc, int]], reach: float = 6.0) -> np.ndarray:
+def _on_border(target: np.ndarray, incident: list[tuple[Arc, int]], reach: float = 6.1) -> np.ndarray:
     """A node on the canvas edge stays on it. An arc that parts a region from the
     outside runs along the border at a constant x or y; a node it meets is on
     that line, whatever the interior arcs' lines say. Off it by a third of a
@@ -652,10 +672,19 @@ def _node_estimate(lines: list[tuple[np.ndarray, np.ndarray, float] | None], mea
         return mean
     acc = np.zeros((2, 2))
     rhs = np.zeros(2)
-    for point, direction, _rms in usable:
+    weighted = np.zeros((2, 2))
+    wrhs = np.zeros(2)
+    for point, direction, rms in usable:
         normal = np.eye(2) - np.outer(direction, direction)
         acc += normal
         rhs += normal @ point
+        # A line read off a straight run pins the node hard; one read off a bend
+        # (a curved arc's approach, a sliver) says little about where the node
+        # is across it. Weighted by the inverse residual variance, a node where
+        # a curve meets a long straight edge lands on the edge.
+        w = 1.0 / (rms * rms + PLACEMENT_SIGMA * PLACEMENT_SIGMA)
+        weighted += w * normal
+        wrhs += w * (normal @ point)
     half = (acc[0, 0] + acc[1, 1]) / 2.0
     spread = np.hypot((acc[0, 0] - acc[1, 1]) / 2.0, acc[0, 1])
     lam_min = half - spread
@@ -663,7 +692,9 @@ def _node_estimate(lines: list[tuple[np.ndarray, np.ndarray, float] | None], mea
         return mean
     if PLACEMENT_SIGMA / math.sqrt(lam_min) > NODE_UNCERTAINTY:
         return mean
-    guess = np.linalg.solve(acc, rhs)
+    if abs(float(np.linalg.det(weighted))) <= 1e-300:
+        return mean
+    guess = np.linalg.solve(weighted, wrhs)
     move = guess - mean
     away = float(np.linalg.norm(move))
     if away > limit:
@@ -934,8 +965,8 @@ def _junctions(
     padded: np.ndarray,
     corner_threshold: float,
     tol: float = 0.4,
-    reach: float = 4.0,
-    trim: float = 0.8,
+    reach: float = 4.1,
+    trim: float = APPROACH_TRIM,
     limit: float = 2.0,
 ) -> None:
     """Place each node, and give arcs that run through it a shared tangent.
@@ -998,7 +1029,14 @@ def _junctions(
             lines = [None if i in short else _approach(arcs[i].pts, k == 0, reach, trim, exclude=arcs[i].sliver) for i, k in incident]
             mean = np.mean([arcs[i].pts[k] for i, k in incident], axis=0)
             target = _node_estimate(lines, mean, limit)
-            if max(float(np.linalg.norm(arcs[i].pts[k] - target)) for i, k in incident) > SHORT_ARC:
+            # The two sides of a stroke a pixel or two wide are joined by a
+            # short arc as well, and their lines run parallel: the solve
+            # declines to cross them and hands back the mean, which sits within
+            # reach of both ends. Merging those would take the stroke's width
+            # away at every junction. A corner's nodes are one point only where
+            # the long arcs actually cross.
+            crossed = bool(np.any(target != mean))
+            if not crossed or max(float(np.linalg.norm(arcs[i].pts[k] - target)) for i, k in incident) > SHORT_ARC:
                 resolved.extend(ends[node] for node in members)
                 continue
         resolved.append(incident)
@@ -1334,22 +1372,29 @@ def _fit_arc(arc: Arc, params: CurveParams) -> list[Segment]:
         # nodes of a corner pixel, collapsed. The ring runs straight through.
         return []
     corners = _open_corners(pts, params.corner_threshold)
-    # Flat runs are cut out as well as corners: a cubic drawn through points that
-    # wander a few hundredths of a pixel bows, so a long straight edge fitted as
-    # one comes out barrelled. `fit_open` prefers a line where one fits.
-    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
-    # A cut inside a node's trim window would leave a piece too short to trim.
-    flats = [k for k in straight_runs(pts) if 0 < k < len(pts) - 1 and cum[k] > arc.trim0 and cum[-1] - cum[k] > arc.trim1]
-    bounds = sorted({0, len(pts) - 1, *corners, *flats})
-    segments: list[Segment] = []
+    sharp = {k: _sharp_corner(pts, k) for k in corners}
+    bounds = sorted({0, len(pts) - 1, *corners})
+    pieces: list[tuple[np.ndarray, int, int]] = []
     for k in range(len(bounds) - 1):
         lo, hi = bounds[k], bounds[k + 1]
         piece = _sharpen_piece(pts, lo, hi, corners, (arc.trim0, arc.trim1), sliver=arc.sliver)
         if len(piece) < 2:
             continue
+        if lo in sharp:
+            piece[0] = sharp[lo]
+        if hi in sharp:
+            piece[-1] = sharp[hi]
+        pieces.append((piece, lo, hi))
+    # Interior corners move to where the neighbouring line runs cross; the arc's
+    # ends are nodes and stay where every arc at them agreed.
+    corners_from_runs([piece for piece, _, _ in pieces], closed=False)
+    segments: list[Segment] = []
+    for piece, lo, hi in pieces:
         t_start = arc.t0 if lo == 0 else None
         t_end = arc.t1 if hi == len(pts) - 1 else None
-        segments.extend(_fit_piece(piece, params.tol, t_start, t_end))
+        # Lines first: a straight run comes out as one line whatever the
+        # pinned tangent says, and the curves between runs honour it.
+        segments.extend(fit_stretch(piece, params.tol, t_start, t_end))
     return _snap_axis(segments, params.snap_axis_deg)
 
 
@@ -1379,33 +1424,28 @@ def _snap_axis(segments: list[Segment], snap_deg: float) -> list[Segment]:
     return segments
 
 
-def _fit_piece(points: np.ndarray, tol: float, t_start: np.ndarray | None, t_end: np.ndarray | None) -> list[Segment]:
-    """`curves.fit_open`, except that a pinned tangent is not thrown away when the
-    run happens to be nearly straight.
+def _sharp_corner(pts: np.ndarray, k: int, reach: float = 3.1, trim: float = 0.8) -> np.ndarray:
+    """Where an arc's interior corner really is: the crossing of lines fitted to
+    the run-up on either side, skipping the half-pixel chamfer the lattice puts
+    at the corner vertex itself. Falls back to the vertex when the lines do not
+    cross within 1.5 px of it. This is what `curves.split_pieces` does for a
+    closed contour; an arc's interior corners were left on the chamfer, and a
+    line ending on a chamfer vertex leans half a pixel across a canvas border."""
+    def near(q: np.ndarray) -> np.ndarray:
+        d = np.linalg.norm(q - q[0], axis=1)
+        sel = (d >= trim) & (d <= reach)
+        if int(sel.sum()) < 2:
+            sel = (d > 0) & (d <= 2.0 * reach)
+        return q[sel]
 
-    A straight line is the cheapest possible fit and `fit_open` reaches for it
-    first, which is right everywhere else — but a tangent is only ever pinned to
-    make a join smooth, and a line leaves that join at whatever angle its two
-    ends happen to sit at. That is how a wedge closing to a cusp came out as a
-    94 degree corner instead.
-    """
-    if len(points) < 2:
-        return []
-    if t_start is None and t_end is None:
-        return fit_open(points, tol)
-    chord = points[-1] - points[0]
-    span = float(np.linalg.norm(chord))
-    if span > 1e-9:
-        along = chord / span
-        drift = 0.0
-        for pinned, want in ((t_start, along), (t_end, -along)):
-            if pinned is not None:
-                drift = max(drift, float(np.degrees(np.arccos(np.clip(np.dot(pinned, want), -1.0, 1.0)))))
-        if drift <= 2.0:
-            return fit_open(points, tol, t_start=t_start, t_end=t_end)
-    t1 = t_start if t_start is not None else _end_tangent(points, True)
-    t2 = t_end if t_end is not None else _end_tangent(points, False)
-    return list(fit_cubics(points, t1, t2, tol))
+    a, b = near(pts[:k + 1][::-1]), near(pts[k:])
+    if len(a) >= 2 and len(b) >= 2:
+        p, d = _line_through(a)
+        q, e = _line_through(b)
+        x = _intersect(p, d, q, e)
+        if x is not None and float(np.linalg.norm(x - pts[k])) <= 1.5:
+            return x
+    return pts[k].copy()
 
 
 def _sharpen_piece(pts: np.ndarray, lo: int, hi: int, corners: list[int], trims: tuple[float, float] = (NODE_TRIM, NODE_TRIM),
@@ -1422,7 +1462,7 @@ def _sharpen_piece(pts: np.ndarray, lo: int, hi: int, corners: list[int], trims:
     """
     piece = pts[lo:hi + 1]
     if len(piece) < 4:
-        return piece
+        return piece.copy()  # a copy: the caller moves its ends, and the arc's own vertices must stay
     inner = piece[1:-1]
     keep = np.ones(len(inner), bool)
     start_trim = trims[0] if lo == 0 else (trim if lo in corners else 0.0)
