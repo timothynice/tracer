@@ -28,13 +28,19 @@ shadows. Instead of quantising colours and tracing bands, it:
 4. rescues thin features swallowed by a neighbour via per-region residuals,
    then joins gradient fragments that one real fill explains;
 5. orders shapes by enclosure (painter's algorithm, seamless stacking);
-6. places outlines at **sub-pixel** positions inferred from anti-aliasing
-   coverage, sharpens corners, fits circles/ellipses/rects as primitives and
-   otherwise G1 cubic Béziers;
-7. recovers thin lines as **stroked centreline paths** (`fill="none"`,
+6. builds the boundary **once, as a planar graph** — arcs between the junctions
+   where three or more regions meet — so the edge two regions share is placed,
+   fitted and emitted a single time and handed to both. Neighbours cannot
+   describe it differently, so there is no hairline between them for the
+   backdrop to show through, at any tolerance;
+7. places those arcs at **sub-pixel** positions inferred from anti-aliasing
+   coverage, sharpens corners and junctions, keeps the outline G1 where a
+   boundary runs on through a junction, fits circles/ellipses/rects as
+   primitives and otherwise G1 cubic Béziers;
+8. recovers thin lines as **stroked centreline paths** (`fill="none"`,
    measured `stroke-width`, cap style read from the source) instead of
    filled slivers;
-8. recognises **drop shadows, glows and inner shadows** as what they are — a
+9. recognises **drop shadows, glows and inner shadows** as what they are — a
    blurred, offset, scaled copy of a shape's own alpha — recovers
    `(dx, dy, σ, colour, opacity)` and emits the SVG `<filter>` that regenerates
    them, instead of slicing the falloff into bands with lumpy iso-contour
@@ -46,19 +52,26 @@ lower is better):
 | class | Potrace | VTracer | **Vexel** |
 |---|---|---|---|
 | logo | 11.4 | 1.20 | **0.36** |
-| flat | 20.4 | 0.97 | **0.64** |
-| gradient | 23.2 | 10.40 | **0.88** |
+| flat | 20.4 | 0.98 | **0.64** |
+| gradient | 23.2 | 10.40 | **0.91** |
 | shadow | 14.8 | 3.24 | **0.42** |
 
-Vexel has the lowest ΔE on **67 of 71** corpus items, and gets there with far
-less geometry: 9.8 paths and 9.5 KB per image on average against VTracer's 33.3
-paths and 17.8 KB.
+Vexel has the lowest ΔE on **68 of 72** corpus items, and gets there with far
+less geometry: 9.9 paths and 11.7 KB per image on average against VTracer's 34.0
+paths and 18.0 KB.
+
+`seam_ppm` is the other number to watch: parts per million of the artwork that
+the emitted shapes cover less than the source does. It is what the shared
+boundary is for, and it does not show up in ΔE — a hairline between two shapes
+is a handful of pixels in a frame, and sweeping `curve_tolerance` from 0.1 to
+2.0 used to take the sub-pixel hole count on a 512 px logo from 397 to 19502
+while moving `score` by 0.007.
 
 ### Vexel is Rust
 
 The pipeline lives in `backend/vexel-rs/` and is built as an extension module.
-It averages **0.18 s an image** against the Python implementation's 1.9 s —
-**10.3× over the corpus**, and 18.7× on the logo class, where the two 768 px
+It averages **0.21 s an image** against the Python implementation's 2.1 s —
+**10.4× over the corpus**, and 15.8× on the logo class, where the two 768 px
 real logos are. The Python pipeline is still in `engines/vexel/*.py`: it is the
 reference the Rust one was ported from, the fallback when the extension is not
 built, and the oracle `tools/diffcheck.py` compares every stage against.

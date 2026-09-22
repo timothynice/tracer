@@ -450,6 +450,13 @@ items:
   height: 768
   tags:
   - real
+- id: logo/vexel-wordmark-512
+  class: logo
+  png: real/logo/vexel-wordmark-512.png
+  width: 512
+  height: 512
+  tags:
+  - real
 - id: shadow/card-128
   class: shadow
   png: synthetic/shadow/card-128.png

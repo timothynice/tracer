@@ -97,11 +97,19 @@ fn undirected(i: i64, j: i64, d: u8, lat_cols: u64) -> u64 {
     }
 }
 
+/// A padded pixel, as (row, column).
+type Pixel = (usize, usize);
+/// One node of a junction: the arc it belongs to, and whether at its start.
+type ArcEnd = (usize, bool);
+/// A junction's decision, held back until every node has been worked out: the
+/// arc ends meeting there, where they all move to, and any pinned tangents.
+type Junction = (Vec<ArcEnd>, P, Vec<(usize, P)>);
+
 struct Edges {
     /// vertex -> the boundary edges meeting there
     incident: HashMap<u64, Vec<u64>>,
     /// edge -> the two padded pixels it parts
-    pixels: HashMap<u64, ((usize, usize), (usize, usize))>,
+    pixels: HashMap<u64, (Pixel, Pixel)>,
     /// edge -> its two lattice endpoints
     ends: HashMap<u64, (u64, u64)>,
 }
@@ -239,7 +247,7 @@ fn chains(padded: &Labels, e: &Edges) -> Vec<Chain> {
 fn coverage(
     rgb: &Image,
     alpha: &Grid<f64>,
-    pix: &[(usize, usize)],
+    pix: &[Pixel],
     lab: i32,
     other: i32,
     fill_at: FillAt,
@@ -290,8 +298,8 @@ fn crossing(
     padded: &Labels,
     rgb: &Image,
     alpha: &Grid<f64>,
-    p_in: &[(usize, usize)],
-    p_out: &[(usize, usize)],
+    p_in: &[Pixel],
+    p_out: &[Pixel],
     a: i32,
     b: i32,
     fill_at: FillAt,
@@ -304,7 +312,7 @@ fn crossing(
 
     // One step further out on each side, when that pixel still belongs to the
     // same region; otherwise fall back to the near sample.
-    let outward = |from: &[(usize, usize)], towards: &[(usize, usize)], want: i32, near: &[f64]| -> Vec<f64> {
+    let outward = |from: &[Pixel], towards: &[Pixel], want: i32, near: &[f64]| -> Vec<f64> {
         let mut pix = Vec::with_capacity(n);
         let mut valid = Vec::with_capacity(n);
         for k in 0..n {
@@ -326,15 +334,27 @@ fn crossing(
     (0..n)
         .map(|k| {
             let level = [before[k], here[k], there[k], after[k]];
+            // Of the crossings on offer, the one nearest the label edge wins.
+            // See the Python.
             let mut t = 0.5;
+            let mut best = f64::INFINITY;
+            let mut slope = 0.0;
             for s in 0..3 {
                 let (lo, hi) = (level[s], level[s + 1]);
                 if lo >= 0.5 && hi < 0.5 {
-                    t = at[s] + (lo - 0.5) / (lo - hi).max(1e-9);
-                    break;
+                    let cand = at[s] + (lo - 0.5) / (lo - hi).max(1e-9);
+                    if (cand - 0.5).abs() < best {
+                        best = (cand - 0.5).abs();
+                        slope = lo - hi;
+                        t = cand;
+                    }
                 }
             }
-            t.clamp(-REACH, 1.0 + REACH)
+            // Only a steep ramp may step outside the two pixels either side of
+            // the label edge: see the Python.
+            let trust = ((slope - 0.15) / 0.35).clamp(0.0, 1.0);
+            let over = t.clamp(0.0, 1.0);
+            (over + (t - over) * trust).clamp(-REACH, 1.0 + REACH)
         })
         .collect()
 }
@@ -422,7 +442,7 @@ fn junctions(arcs: &mut [Arc], corner_threshold: f64) {
     const TRIM: f64 = 0.8;
     const LIMIT: f64 = 2.0;
 
-    let mut ends: HashMap<u64, Vec<(usize, bool)>> = HashMap::new();
+    let mut ends: HashMap<u64, Vec<ArcEnd>> = HashMap::new();
     for (idx, arc) in arcs.iter().enumerate() {
         if arc.closed() || arc.pts.len() < 2 {
             continue;
@@ -433,6 +453,9 @@ fn junctions(arcs: &mut [Arc], corner_threshold: f64) {
     let mut keys: Vec<u64> = ends.keys().copied().collect();
     keys.sort_unstable();
 
+    // Every node is worked out from the arcs as they were placed, and only then
+    // are any of them moved: see the Python.
+    let mut moves: Vec<Junction> = Vec::new();
     for node in keys {
         let incident = ends[&node].clone();
         let lines: Vec<Option<(P, P)>> = incident
@@ -464,20 +487,23 @@ fn junctions(arcs: &mut [Arc], corner_threshold: f64) {
                 r0 += n[0] * point[0] + n[1] * point[1];
                 r1 += n[1] * point[0] + n[2] * point[1];
             }
+            // The smaller eigenvalue of `acc` says how well the incident lines
+            // pin a point down. Faded in across that range rather than switched
+            // on at a threshold, and clamped rather than refused, so the node is
+            // continuous in the fills underneath. See the Python.
+            let half = (m00 + m11) / 2.0;
+            let spread = (((m00 - m11) / 2.0).powi(2) + m01 * m01).sqrt();
+            let trust = ((half - spread - 0.15) / 0.2).clamp(0.0, 1.0);
             let det = m00 * m11 - m01 * m01;
-            if det.abs() > 1e-9 {
+            if trust > 0.0 && det.abs() > 1e-12 {
                 let guess = [(m11 * r0 - m01 * r1) / det, (m00 * r1 - m01 * r0) / det];
                 let off = ((guess[0] - mean[0]).powi(2) + (guess[1] - mean[1]).powi(2)).sqrt();
-                if off <= LIMIT {
-                    target = guess;
+                if off > 1e-12 {
+                    let k = trust * (LIMIT / off).min(1.0);
+                    target = [mean[0] + (guess[0] - mean[0]) * k, mean[1] + (guess[1] - mean[1]) * k];
                 }
             }
         }
-        for (i, at_start) in &incident {
-            let last = arcs[*i].pts.len() - 1;
-            arcs[*i].pts[if *at_start { 0 } else { last }] = target;
-        }
-
         // Which two arcs, if any, are one curve passing through?
         let away: Vec<P> = incident
             .iter()
@@ -512,21 +538,29 @@ fn junctions(arcs: &mut [Arc], corner_threshold: f64) {
                 }
             }
         }
-        let Some((turn, x, y)) = best else { continue };
-        if turn > corner_threshold {
-            continue;
+        let mut pinned: Vec<(usize, P)> = Vec::new();
+        if let Some((turn, x, y)) = best {
+            if turn <= corner_threshold {
+                let shared = normalize([away[x][0] - away[y][0], away[x][1] - away[y][1]]);
+                if shared[0] != 0.0 || shared[1] != 0.0 {
+                    pinned.push((x, shared));
+                    pinned.push((y, [-shared[0], -shared[1]]));
+                }
+            }
         }
-        let shared = normalize([away[x][0] - away[y][0], away[x][1] - away[y][1]]);
-        if shared[0] == 0.0 && shared[1] == 0.0 {
-            continue;
-        }
-        for (slot, sign) in [(x, 1.0), (y, -1.0)] {
-            let (i, at_start) = incident[slot];
-            let t = [shared[0] * sign, shared[1] * sign];
-            if at_start {
-                arcs[i].t0 = Some(t);
-            } else {
-                arcs[i].t1 = Some(t);
+        moves.push((incident, target, pinned));
+    }
+
+    for (incident, target, pinned) in moves {
+        for (slot, (i, at_start)) in incident.iter().enumerate() {
+            let last = arcs[*i].pts.len() - 1;
+            arcs[*i].pts[if *at_start { 0 } else { last }] = target;
+            if let Some((_, tan)) = pinned.iter().find(|(s, _)| *s == slot) {
+                if *at_start {
+                    arcs[*i].t0 = Some(*tan);
+                } else {
+                    arcs[*i].t1 = Some(*tan);
+                }
             }
         }
     }
@@ -763,6 +797,21 @@ pub fn build(
     params: &CurveParams,
     rank: Option<&HashMap<i32, usize>>,
 ) -> Boundary {
+    build_opt(labels, rgb, alpha, fill_at, params, rank, true)
+}
+
+/// `snap = false` stops after placement, for `tools/diffcheck.py` to compare the
+/// two stages apart.
+#[allow(clippy::too_many_arguments)]
+pub fn build_opt(
+    labels: &Labels,
+    rgb: &Image,
+    alpha: &Grid<f64>,
+    fill_at: FillAt,
+    params: &CurveParams,
+    rank: Option<&HashMap<i32, usize>>,
+    snap: bool,
+) -> Boundary {
     let mut padded = Grid::<i32>::new(labels.h + 2, labels.w + 2);
     for r in 0..labels.h {
         for c in 0..labels.w {
@@ -776,7 +825,7 @@ pub fn build(
 
     let mut arcs: Vec<Arc> = chain_list
         .iter()
-        .zip(placed.into_iter())
+        .zip(placed)
         .map(|(ch, (pts, normal))| Arc {
             pair: ch.pair,
             pts,
@@ -790,6 +839,16 @@ pub fn build(
         })
         .collect();
 
+    if !snap {
+        let mut edge_arc = HashMap::new();
+        for (idx, ch) in chain_list.iter().enumerate() {
+            for (pos, key) in ch.edges.iter().enumerate() {
+                edge_arc.insert(*key, (idx, pos));
+            }
+        }
+        let later = vec![false; arcs.len()];
+        return Boundary { arcs, padded, edge_arc, later_is_b: later };
+    }
     junctions(&mut arcs, params.corner_threshold);
     for arc in arcs.iter_mut() {
         arc.segments = fit_arc(&arc.pts, arc.closed(), arc.t0, arc.t1, params);
@@ -895,7 +954,10 @@ fn runs(seq: &[(usize, usize)]) -> Vec<(usize, bool)> {
         }
     }
     let Some(start) = start else {
-        return vec![(seq[0].0, seq[seq.len() - 1].1 < seq[0].1)];
+        // One arc, walked from somewhere along it and wrapping onto its own
+        // start: see the Python.
+        let step = if seq.len() > 1 { seq[1].1 as i64 - seq[0].1 as i64 } else { 1 };
+        return vec![(seq[0].0, step == -1 || step > 1)];
     };
     let rotated: Vec<(usize, usize)> = seq[start..].iter().chain(seq[..start].iter()).copied().collect();
 

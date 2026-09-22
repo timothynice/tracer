@@ -34,6 +34,11 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   `tests/test_api.py` are regression guards for real production incidents.
 - Any tracing quality change must be run through the bench and compared against
   `backend/bench/baselines/` before it is called an improvement.
+- Neighbouring shapes must tile. The boundary is a graph (`vexel/topology.py`):
+  an edge between two regions is one arc, placed and fitted once and given to
+  both. Never go back to tracing a region's outline on its own — that is what
+  left a hairline of backdrop between every pair of shapes. `bench`'s `seam_ppm`
+  measures it and `tests/test_vexel_topology.py` holds it at zero.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
   the fills to a colour level; where the two are allowed to differ, the

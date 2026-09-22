@@ -25,6 +25,14 @@ there say the junction is, rather than at the half-pixel chamfer each of them
 arrives at; and when two arcs run *through* a node — the silhouette of a mark
 carries on while a third region ends against it — they are fitted to one shared
 tangent, so the curve does not hitch where the colour changes.
+
+One shared curve is still not quite enough to close the seam, because a renderer
+anti-aliases each shape separately: two shapes abutting on the very same line
+each cover about half of the pixels along it, and a half over a half is three
+quarters, not one. So every arc also gets a copy bled a pixel towards whichever
+side paints *later*, and the earlier side uses that. The bleed only ever runs
+inside the shape that will cover it, never across the shape's own silhouette, so
+nothing visible moves — and underneath there is no seam left to show.
 """
 from __future__ import annotations
 
@@ -157,7 +165,11 @@ def _runs(seq: list[tuple[int, int]]) -> list[tuple[int, bool]]:
             start = k
             break
     else:
-        return [(seq[0][0], seq[-1][1] < seq[0][1])]
+        # One arc, walked from somewhere along it and wrapping onto its own
+        # start, so the last position is no guide to the direction — 2, 3, 0, 1
+        # runs forwards. The step to the second edge is.
+        step = seq[1][1] - seq[0][1] if len(seq) > 1 else 1
+        return [(seq[0][0], step == -1 or step > 1)]
     seq = seq[start:] + seq[:start]
 
     runs: list[tuple[int, bool]] = []
@@ -234,8 +246,11 @@ def _chains(padded: np.ndarray) -> list[dict]:
     used: set[int] = set()
     chains: list[dict] = []
 
+    # Both the node order and, within a node, the edge order are canonical, so
+    # the Rust port cuts the boundary into exactly the same arcs. Where a chain
+    # starts decides which way round its points run, and that reaches the fit.
     for v in sorted(nodes):
-        for first in inc[v]:
+        for first in sorted(inc[v]):
             if first in used:
                 continue
             chain = [first]
@@ -253,7 +268,7 @@ def _chains(padded: np.ndarray) -> list[dict]:
             chains.append({"edges": chain, "pair": pair[first], "n0": v, "n1": cur, "pixels": pixels})
 
     # What is left is a loop with no node on it: a region wholly inside one neighbour.
-    for key in pixels:
+    for key in sorted(pixels):
         if key in used:
             continue
         chain = [key]
@@ -324,20 +339,41 @@ def _crossing(
 
     level = np.stack([before, here, there, after], axis=1)
     at = np.array([-1.0, 0.0, 1.0, 2.0])
+    # Of the crossings on offer, the one nearest the label edge wins. Coverage
+    # read from colour is not guaranteed monotone across four samples, so more
+    # than one interval can hold a crossing; picking by a fixed order would let
+    # the answer jump a whole pixel as a distant sample drifted past a half, and
+    # the fills these are computed from agree between the two implementations
+    # only to about a colour level. The label boundary is the prior, so the
+    # crossing closest to it is the one to believe.
     t = np.full(len(p_in), 0.5)
-    filled = np.zeros(len(p_in), bool)
+    best = np.full(len(p_in), np.inf)
+    slope = np.zeros(len(p_in))
     for k in range(3):
         lo, hi = level[:, k], level[:, k + 1]
-        crosses = ~filled & (lo >= 0.5) & (hi < 0.5)
+        crosses = (lo >= 0.5) & (hi < 0.5)
         if not crosses.any():
             continue
-        span = np.where(crosses, lo - hi, 1.0)
-        t = np.where(crosses, at[k] + (lo - 0.5) / np.maximum(span, 1e-9), t)
-        filled |= crosses
-    return np.clip(t, -REACH, 1.0 + REACH)
+        here_t = at[k] + (lo - 0.5) / np.maximum(np.where(crosses, lo - hi, 1.0), 1e-9)
+        nearer = crosses & (np.abs(here_t - 0.5) < best)
+        best = np.where(nearer, np.abs(here_t - 0.5), best)
+        slope = np.where(nearer, lo - hi, slope)
+        t = np.where(nearer, here_t, t)
+
+    # Stepping outside the two pixels either side of the label edge is a claim
+    # that the labels are a pixel wrong, and only a steep ramp is entitled to
+    # make it. Across a soft edge — a glow, a shallow gradient — coverage barely
+    # moves from one pixel to the next, so where it happens to pass a half says
+    # more about the last bits of the fitted fills than about the artwork. There
+    # the labels are the better answer, and much the steadier one.
+    trust = np.clip((slope - 0.15) / 0.35, 0.0, 1.0)
+    over = np.clip(t, 0.0, 1.0)
+    return np.clip(over + (t - over) * trust, -REACH, 1.0 + REACH)
 
 
-def _place(chains: list[dict], padded: np.ndarray, rgb: np.ndarray, alpha: np.ndarray, fill_at: FillAt) -> list[np.ndarray]:
+def _place(
+    chains: list[dict], padded: np.ndarray, rgb: np.ndarray, alpha: np.ndarray, fill_at: FillAt
+) -> list[tuple[np.ndarray, np.ndarray]]:
     """Sub-pixel position for every lattice edge of every arc."""
     pad_rgba = np.concatenate(
         [np.pad(rgb, ((1, 1), (1, 1), (0, 0))), (np.pad(alpha, 1) * 255.0)[..., None]], axis=-1
@@ -378,7 +414,13 @@ def _approach(pts: np.ndarray, from_start: bool, reach: float, trim: float) -> t
     return _line_through(q[sel])
 
 
-def _junctions(arcs: list[Arc], corner_threshold: float, reach: float = 4.0, trim: float = 0.8, limit: float = 2.0) -> None:
+def _junctions(
+    arcs: list[Arc],
+    corner_threshold: float,
+    reach: float = 4.0,
+    trim: float = 0.8,
+    limit: float = 2.0,
+) -> None:
     """Place each node, and give arcs that run through it a shared tangent.
 
     Marching squares chamfers a junction the way it chamfers a corner, and each
@@ -390,6 +432,12 @@ def _junctions(arcs: list[Arc], corner_threshold: float, reach: float = 4.0, tri
     the silhouette of a mark, with the colour changing along it — two of the arcs
     are one smooth curve. Pinning both to a single tangent keeps it smooth, so
     the outline does not hitch where the fill changes.
+
+    Every node is worked out from the arcs as they were placed, and only then are
+    any of them moved. An arc two vertices long is most of its own approach line,
+    so moving one of its ends would change what the node at the other end is
+    told — and which node went first is not something either implementation
+    should be deciding.
     """
     ends: dict[int, list[tuple[int, int]]] = {}
     for idx, arc in enumerate(arcs):
@@ -398,6 +446,7 @@ def _junctions(arcs: list[Arc], corner_threshold: float, reach: float = 4.0, tri
         ends.setdefault(arc.n0, []).append((idx, 0))
         ends.setdefault(arc.n1, []).append((idx, -1))
 
+    moves: list[tuple[list[tuple[int, int]], np.ndarray, dict, dict]] = []
     for incident in ends.values():
         lines = {(i, k): _approach(arcs[i].pts, k == 0, reach, trim) for i, k in incident}
         mean = np.mean([arcs[i].pts[k] for i, k in incident], axis=0)
@@ -411,13 +460,26 @@ def _junctions(arcs: list[Arc], corner_threshold: float, reach: float = 4.0, tri
                 normal = np.eye(2) - np.outer(direction, direction)
                 acc += normal
                 rhs += normal @ point
-            if abs(np.linalg.det(acc)) > 1e-9:
+            # `acc` is a sum of projectors onto unit normals, so its smaller
+            # eigenvalue says how well the incident lines actually pin a point
+            # down: about one when they cross squarely, and towards zero when
+            # they are nearly parallel and meet nowhere in particular.
+            #
+            # The estimate is faded in across that range rather than switched on
+            # at a threshold, and the move it asks for is clamped rather than
+            # refused. Every step from the arcs to the node is then continuous in
+            # the fills underneath, which matters because the two implementations
+            # of those fills agree only to about a colour level: a threshold here
+            # let a single junction land two pixels apart between them, and the
+            # arcs are shared, so that is two shapes moving.
+            half = (acc[0, 0] + acc[1, 1]) / 2.0
+            spread = np.hypot((acc[0, 0] - acc[1, 1]) / 2.0, acc[0, 1])
+            trust = float(np.clip((half - spread - 0.15) / 0.2, 0.0, 1.0))
+            if trust > 0.0 and abs(np.linalg.det(acc)) > 1e-12:
                 guess = np.linalg.solve(acc, rhs)
-                if np.linalg.norm(guess - mean) <= limit:
-                    target = guess
-        for i, k in incident:
-            arcs[i].pts[k] = target
-
+                away_by = float(np.linalg.norm(guess - mean))
+                if away_by > 1e-12:
+                    target = mean + (guess - mean) * (trust * min(1.0, limit / away_by))
         # Which two arcs, if any, are one curve passing through?
         away: dict[tuple[int, int], np.ndarray] = {}
         for i, k in incident:
@@ -439,18 +501,25 @@ def _junctions(arcs: list[Arc], corner_threshold: float, reach: float = 4.0, tri
                 turn = np.degrees(np.arccos(np.clip(-float(np.dot(away[keys[x]], away[keys[y]])), -1.0, 1.0)))
                 if best is None or turn < best[0]:
                     best = (turn, keys[x], keys[y])
-        if best is None or best[0] > corner_threshold:
-            continue
-        _turn, ka, kb = best
-        shared = _normalize(away[ka] - away[kb])
-        if not np.any(shared):
-            continue
-        for key, sign in ((ka, 1.0), (kb, -1.0)):
-            i, k = key
+        tangents: dict[tuple[int, int], np.ndarray] = {}
+        if best is not None and best[0] <= corner_threshold:
+            _turn, ka, kb = best
+            shared = _normalize(away[ka] - away[kb])
+            if np.any(shared):
+                tangents[ka] = shared
+                tangents[kb] = -shared
+        moves.append((incident, target, tangents, {}))
+
+    for incident, target, tangents, _ in moves:
+        for i, k in incident:
+            arcs[i].pts[k] = target.copy()
+            pinned = tangents.get((i, k))
+            if pinned is None:
+                continue
             if k == 0:
-                arcs[i].t0 = shared * sign
+                arcs[i].t0 = pinned
             else:
-                arcs[i].t1 = shared * sign
+                arcs[i].t1 = pinned
 
 
 def build(

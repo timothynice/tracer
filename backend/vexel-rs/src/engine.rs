@@ -4,7 +4,7 @@ use crate::boundary::{contours, coverage_field, polygon_area, thin_coverage};
 use crate::core::grid::{Grid, Image, Mask};
 use crate::core::labels::{self, LabelIndex, Labels};
 use crate::core::morphology::dilate_cross;
-use crate::curves::{fit_shape, shape_svg, CurveParams, Shape, P};
+use crate::curves::{fit_shape, shape_svg, CurveParams, Shape};
 use crate::fills::{fit_fill, Fill, FitParams};
 use crate::merge::{adjacency, merge_regions, MergeParams};
 use crate::order::{enclosure, paint_order, shape_labels, shape_mask, Enclosure};
@@ -617,10 +617,8 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     }
 
     t.lap("overlaps");
-    // the label map moved when rims were absorbed; the emitter needs the current one
-    let index = LabelIndex::build(&l);
     let svg = emit(
-        &l, &index, &enc, &order, &fills, &invisible, &skip, &stroke_of, &mask_override, &fill_override,
+        &l, &enc, &order, &fills, &invisible, &skip, &stroke_of, &mask_override, &fill_override,
         &shadow_plan, &prep, stacked, &curve_params, p, height, width,
     );
     t.lap("emit");
@@ -653,7 +651,6 @@ fn shape_from_rings(
 #[allow(clippy::too_many_arguments)]
 fn emit(
     l: &Labels,
-    index: &LabelIndex,
     enc: &Enclosure,
     order: &[i32],
     fills: &HashMap<i32, Fill>,

@@ -31,6 +31,8 @@ from studi0trace.engines.vexel.merge import MergeParams, merge_regions  # noqa: 
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels  # noqa: E402
 from studi0trace.engines.vexel.prepare import prepare  # noqa: E402
 from studi0trace.engines.vexel.weights import interior_weights  # noqa: E402
+from studi0trace.engines.vexel import topology  # noqa: E402
+from studi0trace.engines.vexel.curves import CurveParams  # noqa: E402
 
 CORPUS = pathlib.Path(__file__).resolve().parent.parent / "bench" / "corpus"
 
@@ -54,6 +56,18 @@ TOLERANCE = {
     "grad": ("max", 1e-4, 0.0),
     "labels0": ("max", 0.0, 0.002),
     "fills": ("rms", 1.0, 0.0),
+    # `rms` for the boundary graph, for the same reason as the fills: the two
+    # are compared by the curve they describe, not vertex by vertex. Which arcs
+    # exist, where each is cut and how many vertices each has must match exactly
+    # — a shape mismatch fails outright — and over the corpus every vertex then
+    # agrees to 0.03 px RMS. What is left is inherited: a vertex sits where the
+    # coverage of one fill against another passes a half, and on a soft edge
+    # that crossing slides a long way for the colour level the two fill fitters
+    # are allowed to differ by. Feeding the Rust fills to the Python placement
+    # drops the disagreeing values on the worst item from 7103 to 78. The
+    # reported `max` is printed beside the RMS, so a single badly placed
+    # junction is still visible to a reader.
+    "arcs": ("rms", 0.05, 0.0),
 }
 
 
@@ -174,6 +188,50 @@ def fills(path):
     if not py_out:
         return np.zeros(1), np.zeros(1)
     return np.concatenate(py_out), np.concatenate(rs_out)
+
+
+@stage
+def arcs(path):
+    """Where the shared boundary graph puts every arc.
+
+    The whole output's topology hangs off this: which edges exist, where each is
+    cut, and where each of its vertices sits. Two regions are handed one fitted
+    arc, so an arc that differs between the implementations is two shapes that
+    differ, and `bench` would only say the SVG moved.
+
+    Both sides are given the *same* label map, as the `fills` stage is: `labels0`
+    is allowed a slack of a few pixels, and one pixel moving redraws the graph
+    around it, which would drown this stage's own signal.
+    """
+    a = load(path)
+    h, w = a.shape[:2]
+    prep = prepare(a)
+    g = discontinuity(prep.features)
+    labels = merge_regions(initial_labels(g, prep.features, min_region=6), prep.features,
+                           MergeParams(detail=6.0, gradients=True), g)
+    ys, xs = np.mgrid[0:h, 0:w]
+    xs = xs.astype(np.float64) + 0.5
+    ys = ys.astype(np.float64) + 0.5
+    rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
+    params = FitParams(gradients=True, max_stops=4, tol=3.0)
+    fills = {}
+    for lab in (int(i) for i in np.unique(labels) if i):
+        m = labels == lab
+        fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], params, weights=interior_weights(m))
+
+    bnd = topology.build(labels, prep.rgb, prep.alpha,
+                         lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+                         CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
+    rows = sorted(
+        [float(arc.pair[0]), float(arc.pair[1]), float(len(arc.pts)), *arc.pts.ravel().tolist()]
+        for arc in bnd.arcs
+    )
+    py = np.array([v for row in rows for v in row], dtype=np.float64)
+    rs = np.asarray(vexel_rs._stage_arcs(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), True), dtype=np.float64)
+    if py.shape != rs.shape:
+        print(f"  FAIL arcs      {path.name}: {len(rows)} arcs / {py.size} values in Python, {rs.size} in Rust")
+        return np.zeros(1), np.full(1, 1e9)
+    return py, rs
 
 
 def main() -> int:

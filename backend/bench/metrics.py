@@ -110,30 +110,42 @@ _ELEMENT = re.compile(r"<(path|circle|ellipse|rect|polygon|polyline|line|g|image
 _BODY = re.compile(r"(<svg\b[^>]*>)(.*)(</svg>)", re.DOTALL)
 
 
-def seam_index(svg: str, width: int, height: int, scale: int = 4) -> float:
-    """Parts per million of the frame that no shape paints.
+def seam_index(svg: str, src_rgba: np.ndarray, scale: int = 4, slack: float = 0.1) -> float:
+    """Parts per million of the artwork the output covers less than the source does.
 
     Every other metric here compares one flattened render against the source, and
     a hairline where two shapes fail to meet averages away to almost nothing at
     1x — a 49x worsening of it moves `score` by 0.007. It is nonetheless the most
-    obvious defect in the output: the backdrop showing through the artwork,
-    dark in a dark preview, white in an exported file.
+    obvious defect in the output: the backdrop showing through the artwork, dark
+    in a dark preview, white in an exported file.
 
-    So this measures it directly and structurally rather than by comparing
-    colours. Each painted element is rendered on its own at `scale`, and their
-    coverages are composited. Wherever the total stays below a half, the shapes
-    do not tile: neither of the two that share that edge covers it. Lower is
-    better and zero is correct; the outermost pixel is excluded, because a shape
-    is under no obligation to reach the edge of the canvas.
+    So this measures coverage structurally rather than by comparing colours. Each
+    painted element is rendered on its own at `scale` and the results are
+    composited the way the renderer stacks them, which is the point: two shapes
+    that abut on exactly the same line still each anti-alias their own half of
+    it, and a half over a half is three quarters, not one. Counting only the
+    places nothing at all paints would miss that entirely, so what is counted is
+    every pixel the output covers `slack` less than the source is covered there.
+    Comparing against the source's own alpha rather than against one keeps
+    genuinely translucent artwork out of it. Lower is better, zero is correct.
+    The outermost pixel is left out, because a shape is under no obligation to
+    reach the edge of the canvas.
     """
+    height, width = src_rgba.shape[:2]
     body = _BODY.search(svg)
     if not body:
         return 0.0
     head, inner, tail = body.group(1), body.group(2), body.group(3)
     defs = re.search(r"<defs\b.*?</defs>", inner, re.DOTALL)
     prelude = defs.group(0) if defs else ""
-    elements = [m.group(0) for m in _ELEMENT.finditer(inner[len(prelude):] if inner.startswith(prelude) else inner.replace(prelude, "", 1))]
+    elements = [m.group(0) for m in _ELEMENT.finditer(inner.replace(prelude, "", 1))]
     if len(elements) < 2:
+        return 0.0
+
+    want = np.repeat(np.repeat(src_rgba[..., 3].astype(np.float32) / 255.0, scale, axis=0), scale, axis=1)
+    want[:scale, :] = want[-scale:, :] = 0.0
+    want[:, :scale] = want[:, -scale:] = 0.0
+    if not (want > 0.5).any():
         return 0.0
 
     covered = np.zeros((height * scale, width * scale), np.float32)
@@ -141,8 +153,8 @@ def seam_index(svg: str, width: int, height: int, scale: int = 4) -> float:
         rendered = rasterize(head + prelude + element + tail, width * scale, height * scale)
         alpha = rendered[..., 3].astype(np.float32) / 255.0
         covered += alpha * (1.0 - covered)  # source-over, as the renderer stacks them
-    inside = covered[1:-1, 1:-1]
-    return 1e6 * float((inside < 0.5).mean())
+    ink = want > 0.5
+    return 1e6 * float((ink & (want - covered > slack)).sum()) / float(ink.sum())
 
 
 def all_metrics(
@@ -166,7 +178,7 @@ def all_metrics(
         "alpha_mae": alpha_mae(src_rgba, out_rgba),
         "banding_index": banding,
         "smooth_fraction": smooth_fraction,
-        "seam_ppm": seam_index(svg, src_rgba.shape[1], src_rgba.shape[0]),
+        "seam_ppm": seam_index(svg, src_rgba),
         **stats,
         "path_ratio": (stats["paths"] / truth_paths) if truth_paths else None,
         "elapsed_ms": elapsed_ms,

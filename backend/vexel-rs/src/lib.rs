@@ -158,6 +158,77 @@ mod python {
         partition::initial_labels(&grad, &prep.features, min_region, 1.5).data
     }
 
+    /// The boundary graph's arcs, for `tools/diffcheck.py`: every arc's label
+    /// pair and vertex count followed by its sub-pixel vertices, flattened,
+    /// with the arcs in a canonical order so the two implementations line up.
+    #[pyfunction]
+    fn _stage_arcs(rgba: Vec<u8>, h: usize, w: usize, labels: Vec<i32>, snap: bool) -> Vec<f64> {
+        use crate::core::grid::Grid;
+        use crate::core::labels::{mask_of, LabelIndex};
+        use crate::fills::{fit_fill, FitParams};
+        use crate::weights::interior_weights;
+        use std::collections::HashMap;
+
+        let prep = prepare::prepare(&rgba, h, w);
+        // The caller passes the label map, so this compares the boundary graph
+        // alone: `labels0` is allowed a slack of a few pixels, and one pixel
+        // moving redraws the graph.
+        let labels: Grid<i32> = Grid::from_vec(h, w, labels);
+
+        let rgba255: Vec<[f64; 4]> = (0..h * w)
+            .map(|i| {
+                let px = prep.rgb.px(i);
+                [px[0], px[1], px[2], prep.alpha.data[i] * 255.0]
+            })
+            .collect();
+        let xs: Vec<f64> = (0..h * w).map(|i| (i % w) as f64 + 0.5).collect();
+        let ys: Vec<f64> = (0..h * w).map(|i| (i / w) as f64 + 0.5).collect();
+
+        let params = FitParams { gradients: true, max_stops: 4, tol: 3.0 };
+        let index = LabelIndex::build(&labels);
+        let mut ids: Vec<i32> = labels.data.iter().copied().filter(|v| *v != 0).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut fills: HashMap<i32, crate::fills::Fill> = HashMap::new();
+        for lab in &ids {
+            let m = mask_of(&labels, *lab);
+            let wt = interior_weights(&m);
+            let px = index.pixels(*lab);
+            let x: Vec<f64> = px.iter().map(|i| xs[*i as usize]).collect();
+            let y: Vec<f64> = px.iter().map(|i| ys[*i as usize]).collect();
+            let c: Vec<[f64; 4]> = px.iter().map(|i| rgba255[*i as usize]).collect();
+            fills.insert(*lab, fit_fill(&x, &y, &c, &params, Some(&wt)));
+        }
+        let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+            match fills.get(&lab) {
+                Some(f) => f.evaluate(qx, qy),
+                None => vec![[0.0; 4]; qx.len()],
+            }
+        };
+        let cp = curves::CurveParams {
+            corner_threshold: 60.0,
+            tol: 0.4,
+            shape_fitting: true,
+            snap_axis_deg: 1.5,
+        };
+        let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, snap);
+
+        let mut rows: Vec<Vec<f64>> = bnd
+            .arcs
+            .iter()
+            .map(|a| {
+                let mut row = vec![a.pair.0 as f64, a.pair.1 as f64, a.pts.len() as f64];
+                for q in &a.pts {
+                    row.push(q[0]);
+                    row.push(q[1]);
+                }
+                row
+            })
+            .collect();
+        rows.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+        rows.concat()
+    }
+
     #[pyfunction]
     #[pyo3(signature = (rgba, width, height, params))]
     fn trace(py: Python<'_>, rgba: Vec<u8>, width: usize, height: usize, params: &Bound<'_, PyDict>) -> PyResult<String> {
@@ -201,6 +272,7 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_features, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_rgb, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_labels0, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;
         m.add_function(wrap_pyfunction!(_rng_choice, m)?)?;
         m.add_function(wrap_pyfunction!(_fit_fill, m)?)?;
