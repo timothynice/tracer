@@ -86,6 +86,63 @@ class CurveParams:
     snap_axis_deg: float = 1.5
 
 
+# A run of outline this long (px) that bends less than STRAIGHT_SAG across its
+# own chord is a straight edge, and is emitted as one. The sag bound is what
+# keeps a genuine curve out of it: a circle of radius R sags L²/8R over a chord
+# L, so at these numbers nothing under a radius of about four hundred pixels
+# qualifies, while a stroke of text or the side of a rounded square — which are
+# flat to within the placement's own noise, measured at 0.05 px — does.
+MIN_LINE = 18.0
+STRAIGHT_SAG = 0.10
+
+
+def straight_runs(poly: np.ndarray, closed: bool = False) -> list[int]:
+    """Where the outline stops being straight and starts bending, or the reverse.
+
+    Without this a long flat edge is fitted as a cubic like everything else, and
+    a cubic through points that wander a few hundredths of a pixel bows: the
+    sides of a square come out barrelled and a letter's stem comes out bent. The
+    boundaries returned are handed to the fitter as extra places to split, and
+    `fit_open` already prefers a straight line when one fits, so the flat parts
+    come out flat and only what is between them is a curve.
+
+    What is returned is where flat gives way to bending, not where one flat run
+    happens to end and the next begins — two straight runs meeting head on are a
+    corner, and `find_corners` is what says so.
+    """
+    n = len(poly)
+    if n < 3:
+        return []
+    seg = np.linalg.norm(np.diff(poly, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    flat = np.zeros(n, bool)
+    i = 0
+    while i < n - 1:
+        best = i
+        j = i + 1
+        while j < n:
+            run = poly[i : j + 1]
+            chord = run[-1] - run[0]
+            length = float(np.hypot(*chord))
+            if length < 1e-9:
+                j += 1
+                continue
+            normal = np.array([-chord[1], chord[0]]) / length
+            if float(np.abs((run - run[0]) @ normal).max()) > STRAIGHT_SAG:
+                break
+            best = j
+            j += 1
+        if cum[best] - cum[i] >= MIN_LINE:
+            flat[i : best + 1] = True
+            i = best
+        else:
+            i += 1
+    if not flat.any() or flat.all():
+        return []
+    change = np.nonzero(flat[1:] != flat[:-1])[0]
+    return sorted({int(k) + (1 if flat[k + 1] else 0) for k in change})
+
+
 # --- helpers ----------------------------------------------------------------------
 
 
@@ -492,10 +549,17 @@ def split_pieces(poly: np.ndarray, corners: list[int], reach: float = 3.0, trim:
 
 def fit_contour_segments(poly: np.ndarray, params: CurveParams) -> tuple[list[Segment], list[int]]:
     corners = find_corners(poly, params.corner_threshold)
-    if not corners:
+    flats = [k for k in straight_runs(poly, closed=True) if k not in corners]
+    if not corners and not flats:
         return fit_closed_smooth(poly, params.tol), corners
+    if not corners:
+        # No corner, but flat runs to hold: cut at those instead, which keeps a
+        # rounded square's sides straight rather than rolling the whole outline
+        # into one smooth loop.
+        corners = flats
+        flats = []
     segments: list[Segment] = []
-    for piece in split_pieces(poly, corners):
+    for piece in split_pieces(poly, sorted(set(corners) | set(flats))):
         if len(piece) < 2:
             continue
         segments.extend(fit_open(piece, params.tol))

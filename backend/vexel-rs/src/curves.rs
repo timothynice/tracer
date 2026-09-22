@@ -149,6 +149,76 @@ fn points_at_arcs(poly: &[P], cum: &[f64], s: f64) -> P {
     [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])]
 }
 
+/// A run of outline this long (px) that bends less than `STRAIGHT_SAG` across
+/// its own chord is a straight edge, and is emitted as one. See the Python.
+pub const MIN_LINE: f64 = 18.0;
+pub const STRAIGHT_SAG: f64 = 0.10;
+
+/// Where the outline stops being straight and starts bending, or the reverse.
+///
+/// Without this a long flat edge is fitted as a cubic like everything else, and
+/// a cubic through points that wander a few hundredths of a pixel bows: the
+/// sides of a square come out barrelled and a letter's stem comes out bent.
+/// What is returned is where flat gives way to bending, not where one flat run
+/// happens to end and the next begins — two straight runs meeting head on are a
+/// corner, and `find_corners` is what says so. See the Python.
+pub fn straight_runs(poly: &[P]) -> Vec<usize> {
+    let n = poly.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    let mut cum = vec![0.0f64; n];
+    for k in 1..n {
+        cum[k] = cum[k - 1]
+            + ((poly[k][0] - poly[k - 1][0]).powi(2) + (poly[k][1] - poly[k - 1][1]).powi(2)).sqrt();
+    }
+    let mut flat = vec![false; n];
+    let mut i = 0usize;
+    while i + 1 < n {
+        let mut best = i;
+        let mut j = i + 1;
+        while j < n {
+            let chord = [poly[j][0] - poly[i][0], poly[j][1] - poly[i][1]];
+            let length = (chord[0] * chord[0] + chord[1] * chord[1]).sqrt();
+            if length < 1e-9 {
+                j += 1;
+                continue;
+            }
+            let normal = [-chord[1] / length, chord[0] / length];
+            let mut worst = 0.0f64;
+            for q in &poly[i..=j] {
+                let off = (q[0] - poly[i][0]) * normal[0] + (q[1] - poly[i][1]) * normal[1];
+                worst = worst.max(off.abs());
+            }
+            if worst > STRAIGHT_SAG {
+                break;
+            }
+            best = j;
+            j += 1;
+        }
+        if cum[best] - cum[i] >= MIN_LINE {
+            for f in flat.iter_mut().take(best + 1).skip(i) {
+                *f = true;
+            }
+            i = best;
+        } else {
+            i += 1;
+        }
+    }
+    if !flat.iter().any(|v| *v) || flat.iter().all(|v| *v) {
+        return Vec::new();
+    }
+    let mut out: Vec<usize> = Vec::new();
+    for k in 0..n - 1 {
+        if flat[k + 1] != flat[k] {
+            out.push(if flat[k + 1] { k + 1 } else { k });
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Indices of vertices where the contour turns by more than `threshold_deg` at
 /// every chord scale (closed polyline).
 pub fn find_corners(poly: &[P], threshold_deg: f64) -> Vec<usize> {
@@ -860,12 +930,23 @@ pub fn split_pieces(poly: &[P], corners: &[usize]) -> Vec<Vec<P>> {
 }
 
 pub fn fit_contour_segments(poly: &[P], params: &CurveParams) -> Vec<Segment> {
-    let corners = find_corners(poly, params.corner_threshold);
-    if corners.is_empty() {
+    let mut corners = find_corners(poly, params.corner_threshold);
+    let mut flats: Vec<usize> = straight_runs(poly).into_iter().filter(|k| !corners.contains(k)).collect();
+    if corners.is_empty() && flats.is_empty() {
         return fit_closed_smooth(poly, params.tol);
     }
+    if corners.is_empty() {
+        // No corner, but flat runs to hold: cut at those instead, which keeps a
+        // rounded square's sides straight rather than rolling the whole outline
+        // into one smooth loop. See the Python.
+        corners = flats;
+        flats = Vec::new();
+    }
+    let mut cuts: Vec<usize> = corners.iter().copied().chain(flats).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
     let mut segments = Vec::new();
-    for piece in split_pieces(poly, &corners) {
+    for piece in split_pieces(poly, &cuts) {
         if piece.len() < 2 {
             continue;
         }

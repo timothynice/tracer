@@ -3,7 +3,8 @@ import math
 import numpy as np
 
 from studi0trace.engines.vexel.curves import (
-    Circle, Cubic, CurveParams, Ellipse, Line, PathShape, Rect, _bezier, find_corners, fit_open, fit_shape, path_d, shape_svg,
+    Circle, Cubic, CurveParams, Ellipse, Line, PathShape, Rect, _bezier, find_corners, fit_open,
+    fit_shape, path_d, shape_svg, straight_runs,
 )
 
 P = CurveParams(corner_threshold=60, tol=0.4, shape_fitting=True)
@@ -99,3 +100,41 @@ def test_rounded_shape_with_corners_mixes_lines_and_cubics():
     kinds = {type(s).__name__ for s in shape.contours[0]}
     assert kinds == {"Line", "Cubic"}
     assert len(shape.contours[0]) <= 5
+
+
+def test_a_rounded_square_keeps_its_sides_straight():
+    """The sides of a rounded square are straight and its corners are not, and
+    the trace has to say so. Fitted as one smooth loop — which is what happens
+    when no corner is sharp enough to split it — the sides come out barrelled
+    and the corners far rounder than they are."""
+    r = 6.0
+    pts = []
+    for cx, cy, a0 in ((44, 44, 0), (16, 44, 90), (16, 16, 180), (44, 16, 270)):
+        for t in np.linspace(a0, a0 + 90, 14):
+            pts.append([cx + r * np.cos(np.radians(t)), cy + r * np.sin(np.radians(t))])
+        nxt = {0: (16, 44), 90: (16, 16), 180: (44, 16), 270: (44, 44)}[a0]
+        here = pts[-1]
+        far = np.array(nxt) + r * np.array([np.cos(np.radians(a0 + 90)), np.sin(np.radians(a0 + 90))])
+        for f in np.linspace(0, 1, 26)[1:-1]:
+            pts.append(list(np.array(here) + f * (far - np.array(here))))
+    poly = np.array(pts)
+
+    cuts = straight_runs(poly)
+    assert len(cuts) >= 6, f"the flat sides were not found: {cuts}"
+
+    segs = fit_shape([poly], P).contours[0]
+    lines = [s for s in segs if isinstance(s, Line)]
+    assert len(lines) >= 3, f"a rounded square came out with {len(lines)} straight sides"
+    for s in lines:
+        length = float(np.hypot(*(s.p1 - s.p0)))
+        assert length > 10.0, "a side came out chopped into fragments"
+
+
+def test_a_circle_is_not_chopped_into_straight_runs():
+    """A curve must not be polygonised. The bound on how far a run may bend over
+    its own chord is what keeps it out: nothing under a radius of a few hundred
+    pixels can hold a straight run long enough to qualify."""
+    t = np.linspace(0, 2 * np.pi, 400, endpoint=False)
+    for radius in (20.0, 60.0, 150.0):
+        circle = np.column_stack([radius * np.cos(t), radius * np.sin(t)])
+        assert straight_runs(circle) == [], f"a circle of radius {radius} was cut into lines"

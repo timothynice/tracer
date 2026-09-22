@@ -45,6 +45,7 @@ from studi0trace.engines.vexel.curves import (
     CurveParams,
     Line,
     Segment,
+    straight_runs,
     _end_tangent,
     fit_contour_segments,
     fit_cubics,
@@ -1077,7 +1078,11 @@ def _fit_arc(arc: Arc, params: CurveParams) -> list[Segment]:
     if len(pts) < 2:
         return []
     corners = _open_corners(pts, params.corner_threshold)
-    bounds = [0, *corners, len(pts) - 1]
+    # Flat runs are cut out as well as corners: a cubic drawn through points that
+    # wander a few hundredths of a pixel bows, so a long straight edge fitted as
+    # one comes out barrelled. `fit_open` prefers a line where one fits.
+    flats = [k for k in straight_runs(pts) if 0 < k < len(pts) - 1]
+    bounds = sorted({0, len(pts) - 1, *corners, *flats})
     segments: list[Segment] = []
     for k in range(len(bounds) - 1):
         lo, hi = bounds[k], bounds[k + 1]

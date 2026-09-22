@@ -39,6 +39,12 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   both. Never go back to tracing a region's outline on its own — that is what
   left a hairline of backdrop between every pair of shapes. `bench`'s `seam_ppm`
   measures it and `tests/test_vexel_topology.py` holds it at zero.
+- A straight edge must come out straight. `curves.straight_runs` cuts the
+  outline where flat gives way to bending, because a cubic drawn through points
+  that wander a few hundredths of a pixel bows — that is what made a square's
+  sides barrel and a letter's stem bend. The sag bound is what keeps a genuine
+  curve out of it; do not raise it without checking a circle still comes out a
+  circle.
 - A hard label map cannot hold a sub-pixel sliver, so an acute wedge arrives at
   `topology` already truncated. `_extend_wedges` hands the sliver back from the
   three-way colour mix, and the tip is fitted as a cusp. Any chain it claims

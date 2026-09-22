@@ -41,7 +41,9 @@ shadows. Instead of quantising colours and tracing bands, it:
 7. places those arcs at **sub-pixel** positions inferred from anti-aliasing
    coverage, sharpens corners and junctions, keeps the outline G1 where a
    boundary runs on through a junction, fits circles/ellipses/rects as
-   primitives and otherwise G1 cubic Béziers;
+   primitives, cuts the outline where **flat gives way to bending** so a
+   straight edge is emitted straight rather than as a cubic that bows, and
+   otherwise G1 cubic Béziers;
 8. recovers thin lines as **stroked centreline paths** (`fill="none"`,
    measured `stroke-width`, cap style read from the source) instead of
    filled slivers;

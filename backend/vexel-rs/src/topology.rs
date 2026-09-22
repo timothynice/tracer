@@ -23,7 +23,7 @@ use crate::core::grid::{Grid, Image};
 use crate::core::labels::Labels;
 use crate::curves::{
     end_tangent, fit_contour_segments, fit_cubics, fit_open, line_through, normalize, reverse_segments,
-    CurveParams, Segment, P,
+    straight_runs, CurveParams, Segment, P,
 };
 
 /// How far a shape reaches under the shapes painted over it. One pixel covers an
@@ -1189,9 +1189,13 @@ fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, params: &Curve
         return Vec::new();
     }
     let corners = open_corners(pts, params.corner_threshold);
-    let mut bounds = vec![0usize];
+    // Flat runs are cut out as well as corners: a cubic drawn through points
+    // that wander a few hundredths of a pixel bows. See the Python.
+    let mut bounds = vec![0usize, pts.len() - 1];
     bounds.extend_from_slice(&corners);
-    bounds.push(pts.len() - 1);
+    bounds.extend(straight_runs(pts).into_iter().filter(|k| *k > 0 && *k + 1 < pts.len()));
+    bounds.sort_unstable();
+    bounds.dedup();
 
     let mut segments: Vec<Segment> = Vec::new();
     for k in 0..bounds.len() - 1 {
