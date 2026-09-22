@@ -42,6 +42,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from studi0trace.engines.vexel.boundary import FillAt
+from studi0trace.engines.vexel.regularity import regularize
 from studi0trace.engines.vexel.curves import (
     CurveParams,
     Line,
@@ -1191,6 +1192,9 @@ def build(
     _junctions(arcs, padded, params.corner_threshold, params.tol)
     for arc in arcs:
         arc.segments = _fit_arc(arc, params)
+    # Across the graph: lines meant to be parallel, perpendicular or on an axis
+    # are made exactly so. Nodes never move, so the ring still closes.
+    regularize([(arc.segments, arc.closed) for arc in arcs], params.snap_axis_deg)
 
     later_is_b: list[bool] = []
     for arc in arcs:

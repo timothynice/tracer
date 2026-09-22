@@ -49,6 +49,12 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   little against each other (`CHORD_TURN`) and that the curve is cheaper. Do
   not loosen `LINE_RMS`/`LINE_P98` or lower `LINE_MIN` without checking a
   circle still comes out a circle and a small round corner stays round.
+- After the fit, `vexel/regularity.py` clusters every straight segment's
+  direction across the boundary graph and snaps clusters carrying 40 px or more
+  to one direction (axis within `snap_axis_deg`, exactly perpendicular to a
+  heavier cluster within a degree). Lines turn about their node end or their
+  midpoint; nodes never move, so rings still close. A line with a node at both
+  ends is left alone.
 - Junction nodes are placed where the incident arcs' approach lines cross, at
   any angle, and held on the canvas edge; the vertices inside a node's approach
   window are never fitted (`NODE_TRIM`, `TIP_TRIM`, capped at `TRIM_SHARE` of

@@ -1710,6 +1710,18 @@ pub fn build_opt(
     for arc in arcs.iter_mut() {
         arc.segments = fit_arc(&arc.pts, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), params);
     }
+    // Across the graph: lines meant to be parallel, perpendicular or on an axis
+    // are made exactly so. Nodes never move, so the ring still closes.
+    {
+        let mut lists: Vec<(&mut Vec<Segment>, bool)> = arcs
+            .iter_mut()
+            .map(|a| {
+                let closed = a.closed();
+                (&mut a.segments, closed)
+            })
+            .collect();
+        crate::regularity::regularize(&mut lists, params.snap_axis_deg);
+    }
 
     let mut later_is_b = Vec::with_capacity(arcs.len());
     for arc in arcs.iter_mut() {

@@ -44,7 +44,9 @@ shadows. Instead of quantising colours and tracing bands, it:
    primitives, fits every run between breaks **lines first** — straight runs
    from the residuals about their own line, cubics between them, kept when
    that costs no more segments than a curve — so a straight edge is emitted
-   straight rather than as a cubic that bows, and
+   straight rather than as a cubic that bows, then makes lines that are meant
+   to be **parallel, perpendicular or on an axis exactly so** across the whole
+   boundary graph (`vexel/regularity.py`), and
    otherwise G1 cubic Béziers;
 8. recovers thin lines as **stroked centreline paths** (`fill="none"`,
    measured `stroke-width`, cap style read from the source) instead of

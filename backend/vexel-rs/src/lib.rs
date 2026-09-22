@@ -18,6 +18,7 @@ pub mod partition;
 pub mod posterize;
 pub mod prepare;
 pub mod refine;
+pub mod regularity;
 pub mod rescue;
 pub mod shadows;
 pub mod stats;

@@ -44,6 +44,8 @@ Filled in as tasks land; every row quotes `bench compare` output.
 |---|---|---|---|---|---|---|
 | baseline (pre-change engine, per-pixel seam) | 0.695 | 0.744 | 771 | 0.9548 | 14125 | 10762 |
 | Tasks 3-6 | 0.264 | 0.721 | 338 | 0.9555 | 20424 | 7326 |
+| Task 7 | 0.264 | 0.721 | 338 | 0.9555 | 20482 | 7326 |
+| Task 8 | 0.264 | 0.721 | 338 | 0.9554 | 20482 | 7326 |
 
 The Tasks 3-5 row was measured under the old seam metric (outline 0.384, seam 19665) and is superseded.
 `seam_ppm` on logo is up because two sub-pixel-scale items dominate it: `thin-mark-128` (Rust does not recover its
@@ -718,7 +720,7 @@ The `_tls` in a growing loop is O(n²) on long arcs; cache prefix sums of x, y, 
 **Interfaces:**
 - Produces: `fit_c2(points, t1, t2, tol) -> list[Cubic] | None` unchanged in signature; new constants `EQUALISE_ROUNDS = 4`, `BUMP_RATIO = 0.85`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_spline_error_is_spread_evenly_across_spans():
@@ -734,13 +736,23 @@ def test_no_span_has_a_bump():
         assert np.linalg.norm(c.c1 - c.p0) < BUMP_RATIO * chord and np.linalg.norm(c.c2 - c.p1) < BUMP_RATIO * chord
 ```
 
-- [ ] **Step 2: Run to verify they fail.**
+- [x] **Step 2: Run to verify they fail.**
 
-- [ ] **Step 3: Implement.** After `fit_c2` reaches a knot set within `tol`, run `EQUALISE_ROUNDS` of knot re-placement: compute each span's max error `e_k`; move each interior knot toward the neighbour span with the larger error by `0.25 * (e_right - e_left) / (e_right + e_left) * span_width`; refit; keep the knots only if all spans stay within `tol` and `max(e) - min(e)` shrank. Then check every span's control-arm ratio; if any exceeds `BUMP_RATIO`, insert a knot at that span's midpoint and refit once; if still bumpy return `None` (the split-and-recurse fitter answers). Port identically.
+- [x] **Step 3: Implement.** After `fit_c2` reaches a knot set within `tol`, run `EQUALISE_ROUNDS` of knot re-placement: compute each span's max error `e_k`; move each interior knot toward the neighbour span with the larger error by `0.25 * (e_right - e_left) / (e_right + e_left) * span_width`; refit; keep the knots only if all spans stay within `tol` and `max(e) - min(e)` shrank. Then check every span's control-arm ratio; if any exceeds `BUMP_RATIO`, insert a knot at that span's midpoint and refit once; if still bumpy return `None` (the split-and-recurse fitter answers). Port identically.
 
-- [ ] **Step 4: Verify** with `--metric nodes_per_100px`, `outline_px`, `score`. Commit `feat(vexel): spread the spline's error evenly and refuse bumpy spans`.
+- [x] **Step 4: Verify** with `--metric nodes_per_100px`, `outline_px`, `score`. Commit `feat(vexel): spread the spline's error evenly and refuse bumpy spans`.
 
 ---
+
+**As built.** `_finish_spline` runs after `fit_c2` finds a knot set inside `tol`: `EQUALISE_ROUNDS = 4` rounds of
+`_span_errors` → knot moves of `0.25·(e_right−e_left)/(e_right+e_left)·width` → `_solve_spans`, kept only while every
+span stays inside `tol` and the spread `max−min` shrinks. `_bumpy` flags a span whose control arm exceeds
+`BUMP_RATIO = 0.85` of its chord; it earns one knot at its middle, and a second bump declines the spline. Rust twin in
+`curves.rs` (`span_errors`, `solve_spans`, `bumpy`, `finish_spline`). Tests: spline error spread (max < 0.45, spread <
+0.16 over a noisy S-curve) and no-bump. Bench against the Task 6 baseline: score unchanged, outline_px unchanged on
+flat/logo/shadow, line_debt_px down on flat/gradient/shadow, nodes_per_100px down on flat, seam_ppm −12 on flat and
++0.3 % on logo (thin-mark-512, the stroke item). Parity: diffcheck arcs/wedges clean over 96 items; the wordmark differs
+in 2 of 868 numbers by 0.01 (accepted, last-decimal). Baseline moved to this engine (a319f8e).
 
 ### Task 8: Regularity on the graph
 
@@ -753,7 +765,7 @@ def test_no_span_has_a_bump():
 - Produces: `regularity.regularize(arcs: list[Arc], snap_axis_deg: float) -> None` (mutates `Arc.pts` end vertices and inserts `Arc.line: tuple[centre, direction] | None` for arcs that are one line run). Constants `CLUSTER_DEG = 1.0`, `CLUSTER_MIN_PX = 40.0`, `END_MOVE_MAX = 0.15`.
 - Consumes: `curves.line_runs`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_parallel_edges_of_one_logo_come_out_exactly_parallel():
@@ -763,13 +775,33 @@ def test_parallel_edges_of_one_logo_come_out_exactly_parallel():
     assert all(abs(((a - b) + 90) % 180 - 90) < 1e-6 for a, b in pairs), "parallel edges differ by a fraction of a degree"
 ```
 
-- [ ] **Step 2: Run to verify it fails** (today parallel edges differ by 0.1–0.5°).
+- [x] **Step 2: Run to verify it fails** (today parallel edges differ by 0.1–0.5°).
 
-- [ ] **Step 3: Implement.** For every open arc whose `line_runs` covers ≥ 95 % of its length record `(angle mod 180, length)`. Cluster angles within `CLUSTER_DEG`; for clusters with total length ≥ `CLUSTER_MIN_PX` set the target angle to the length-weighted mean, snapped to 0/90 when within `snap_axis_deg`, and to exactly `other ± 90` when another qualifying cluster sits within `CLUSTER_DEG` of perpendicular. For each member arc rotate the line about its midpoint to the target angle; the requested end moves are `|Δθ| · L / 2`; if either exceeds `END_MOVE_MAX` skip the arc. Otherwise set `Arc.line` and move the end vertices; every arc incident to a moved node takes the same new position (nodes are `n0`/`n1` indices, so collect moves per node, average them, and apply once). `fit_pieces` emits an arc with `Arc.line` as one `Line` between its ends. Port identically.
+- [x] **Step 3: Implement.** For every open arc whose `line_runs` covers ≥ 95 % of its length record `(angle mod 180, length)`. Cluster angles within `CLUSTER_DEG`; for clusters with total length ≥ `CLUSTER_MIN_PX` set the target angle to the length-weighted mean, snapped to 0/90 when within `snap_axis_deg`, and to exactly `other ± 90` when another qualifying cluster sits within `CLUSTER_DEG` of perpendicular. For each member arc rotate the line about its midpoint to the target angle; the requested end moves are `|Δθ| · L / 2`; if either exceeds `END_MOVE_MAX` skip the arc. Otherwise set `Arc.line` and move the end vertices; every arc incident to a moved node takes the same new position (nodes are `n0`/`n1` indices, so collect moves per node, average them, and apply once). `fit_pieces` emits an arc with `Arc.line` as one `Line` between its ends. Port identically.
 
-- [ ] **Step 4: Verify** (`seam_ppm` must not move; `outline_px` down on `tilted-squares`). Commit `feat(vexel): parallel, perpendicular and axis regularity across the boundary graph`.
+- [x] **Step 4: Verify** (`seam_ppm` must not move; `outline_px` down on `tilted-squares`). Commit `feat(vexel): parallel, perpendicular and axis regularity across the boundary graph`.
 
 ---
+
+**As built.** The stage runs on the *fitted segments* rather than on `Arc.pts` (the plan's `Arc.line` route): after
+every arc is fitted, `regularity.regularize([(arc.segments, arc.closed) …], snap_axis_deg)` clusters every `Line`'s
+direction (`CLUSTER_DEG = 0.5`), snaps clusters carrying `CLUSTER_MIN_PX = 40` to the length-weighted circular mean
+(exactly 0/90 within `snap_axis_deg`, exactly `other + 90` within `PERP_DEG = 0.5` of a heavier cluster), and turns
+each line about its node end or its midpoint — but only when neither end has to move more than `END_MOVE_MAX = 0.15`
+px, the placement's own uncertainty: a line that would have to move further is not really in the cluster and stays
+where its pixels are. Joints are re-made: two lines meet at their new crossing when that is within `END_MOVE_MAX` of
+the plain projection, otherwise the old joint projects onto the new line; a cubic neighbour's arm moves with its end
+so its tangent survives. A line with a node at both ends is left alone; nodes never move. A first cut with 1.0° /
+1.5 px cost 0.0009 score and +858 seam_ppm on logo (overlap-512-ds, silverpeak-badge, thin-mark); with the 0.15 px
+cap the bench is neutral on every gate (score, seam_ppm, junction_px, line_debt_px, nodes_per_100px all within
+noise; logo bytes +26) and the exactness shows only in geometry: raster metrics cannot see a 0.1° correction.
+Collinear merging had already landed in Task 6 (`merge_lines`). Rust twin `regularity.rs`, called from `build_opt`.
+Finding while testing: on a clean render the fit already had parallel edges exact to the SVG's two-decimal output, so
+the test uses JPEG'd tilted squares, where perpendicular pairs were 0.10° off at 5° and are now within one output
+rounding step (0.0048° over 120 px). Parity: tilted-squares byte-identical between backends; wordmark 3/868 and
+logomark 6/2203 numbers differ by 0.01 (last-decimal). wedge-fan-512 differs in structure between backends, but did so
+at Task 6 and Task 7 too (Rust 4298 bytes then, 4308 now; Python 4003) — a pre-existing upstream/fit parity gap,
+spawned as its own task.
 
 ### Task 9: Primitives: rounded rectangles and circular arcs
 
