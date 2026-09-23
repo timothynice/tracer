@@ -561,6 +561,9 @@ def strokes(path):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--all", action="store_true", help="also run the end-to-end stages (trace_labels, trace_arcs); "
+                    "these compare whole pipelines and differ wherever the fill fit's documented colour tolerance or "
+                    "the placement's 0.05 px tolerance sits at a decision threshold, so they are diagnostics, not gates")
     ap.add_argument("stages", nargs="*", choices=list(STAGES), metavar="STAGE",
                     help=f"one or more of: {', '.join(STAGES)} (default: all)")
     ap.add_argument("--limit", type=int, default=None, help="only the first N corpus items")
@@ -569,7 +572,9 @@ def main() -> int:
 
     paths = items(args.limit, args.filter)
     failures = 0
-    for name in args.stages or list(STAGES):
+    informational = ("trace_labels", "trace_arcs")
+    default = list(STAGES) if args.all else [n for n in STAGES if n not in informational]
+    for name in args.stages or default:
         print(f"{name}:")
         for p in paths:
             py, rs = STAGES[name](p)

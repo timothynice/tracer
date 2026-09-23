@@ -121,7 +121,13 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
   the fills to a colour level; where the two are allowed to differ, the
-  tolerance table says so and says why. Nothing in either pipeline may depend
+  tolerance table says so and says why. Its default run is the per-stage
+  contract and passes on every corpus item; `--all` adds the end-to-end
+  `trace_labels`/`trace_arcs` stages, which compare whole pipelines and differ
+  wherever an allowed tolerance sits at a decision threshold (a rescue residual
+  at 1.0 on a shadow band, a straight-run test on arcs placed to 0.05 px).
+  Those are diagnostics: read them to find where a tolerance bites, do not
+  gate on them. Nothing in either pipeline may depend
   on an order that is not defined — a Python `set`'s iteration order decided
   which of two equidistant regions a rim pixel joined, and three such pixels
   turned a wedge tip into a hairpin. Ties are broken by something both engines

@@ -20,7 +20,6 @@ import io
 from collections.abc import Callable
 
 import numpy as np
-import resvg_py
 from PIL import Image
 from scipy.spatial import cKDTree
 
@@ -34,6 +33,10 @@ SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
 
 
 def _render(doc: str, w: int, h: int) -> np.ndarray:
+    # imported here, not at module load: the engine must import without a
+    # renderer present, and refinement is the only stage that needs one
+    import resvg_py
+
     png = resvg_py.svg_to_bytes(svg_string=doc, width=w * SCALE, height=h * SCALE)
     img = np.asarray(Image.open(io.BytesIO(bytes(png))).convert("RGBA"), dtype=np.float32)
     return img.reshape(h, SCALE, w, SCALE, 4).mean(axis=(1, 3))

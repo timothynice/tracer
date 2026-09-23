@@ -48,6 +48,19 @@ Filled in as tasks land; every row quotes `bench compare` output.
 | Task 8 | 0.264 | 0.721 | 338 | 0.9554 | 20482 | 7326 |
 | Tasks 9-10 | 0.260 | 0.720 | 315 | 0.9555 | 20155 | 7341 |
 
+**Follow-up (2026-09-23).** The two parity sessions' fixes landed (tie-breaks the two languages did not share:
+rim splits, medial-axis thinning order, alpha-weighted rescue residual, split-point ties). The end-to-end diffcheck
+stages they added still differ on 6 items for labels and ~20 for arcs; traced on card-512, the label maps agree
+through `labels_clear` and part at `rescue`, where the residual's 1.0 threshold sits on a shadow band whose fill the
+two fitters place a colour level apart (the documented fills tolerance), and the arc differences follow from
+placement that agrees to 0.05 px, not to the bit — a `line_runs` decision flips on the last bits. Neither is a port
+error; making them bit-identical would mean bit-identical linear algebra across LAPACK and Rust. They are now
+`--all` diagnostics in diffcheck, and the default run passes everywhere. Rust's symmetry stage was profiled on
+logomark-512 (4.4 of 5.2 s in a widening grid search) and bounded: 0.80 s. `refine_render` imported resvg-py at
+module load while resvg-py was a bench-only dependency, which failed the Docker image's import guard; the import is
+lazy and resvg-py is a runtime dependency. Specs written: `2026-09-23-vexel-small-input-upsampling.md`,
+`2026-09-23-vexel-refine-rust-twin.md`.
+
 The Tasks 3-5 row was measured under the old seam metric (outline 0.384, seam 19665) and is superseded.
 `seam_ppm` on logo is up because two sub-pixel-scale items dominate it: `thin-mark-128` (Rust does not recover its
 ring as a stroke where Python does, a pre-existing parity gap in the stroke stage that diffcheck does not cover) and

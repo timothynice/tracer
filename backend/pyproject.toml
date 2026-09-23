@@ -18,11 +18,12 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.12",
     "scikit-image>=0.24",
+    # the renderer behind the opt-in `refine` stage (render-and-compare)
+    "resvg-py>=0.2",
 ]
 
 [project.optional-dependencies]
 bench = [
-    "resvg-py>=0.2",
     "pyyaml>=6",
 ]
 dev = [
