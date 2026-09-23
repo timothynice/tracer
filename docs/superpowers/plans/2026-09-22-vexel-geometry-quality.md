@@ -47,6 +47,7 @@ Filled in as tasks land; every row quotes `bench compare` output.
 | Task 7 | 0.264 | 0.721 | 338 | 0.9555 | 20482 | 7326 |
 | Task 8 | 0.264 | 0.721 | 338 | 0.9554 | 20482 | 7326 |
 | Tasks 9-10 | 0.260 | 0.720 | 315 | 0.9555 | 20155 | 7341 |
+| parity fixes + perf (2026-09-23) | 0.241 | 0.611 | 285 | 0.9573 | 17569 | 7341 |
 
 **Follow-up (2026-09-23).** The two parity sessions' fixes landed (tie-breaks the two languages did not share:
 rim splits, medial-axis thinning order, alpha-weighted rescue residual, split-point ties). The end-to-end diffcheck
