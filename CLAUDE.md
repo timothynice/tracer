@@ -81,16 +81,31 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   outlines agree to 0.1 px after translation) are written once into `<defs>`
   and painted as `<use href x y fill>` (`vexel/reuse.py`); anything that
   reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`.
+- `upsample` (default `auto`): an input of at most 192 px whose own direct
+  trace has a region thinner than 2.2 px (2·area/perimeter over the label map
+  handed to topology) is traced again at 2× through a Lanczos-3 upsample and
+  drawn back inside `<g transform="scale(0.5)">` under the original viewBox
+  (`vexel/upsample.py`, `vexel-rs/src/upsample.rs`; the tap weights are the
+  same literals in both and `tools/diffcheck.py upsample` holds the two images
+  to the byte). The rule needs no renderer. Do not apply the upsample blind:
+  on large sharp shapes it reads the resampler's ringing as edge position and
+  makes them worse (spec `2026-09-23-vexel-small-input-upsampling.md`).
+  Anything that reads path coordinates has to honour that root group
+  (`bench.geometry.root_scale`, the frontend's `svgdoc.ts`).
 - `refine=True` (off by default) runs `vexel/refine_render.py` after the fit:
   for each node and each interior control point, the two shapes on either
   side are rendered with resvg into an integer-aligned 16 px crop at 4×,
   averaged back to source pixels and compared with the source in a 2 px band
   along the arc; a 0.1 px nudge (a node with every arc that meets it, a
   control point along its normal) is kept when the band error falls by more
-  than 0.02 grey levels. Nodes on the frame and wedge tips never move. It needs a renderer,
-  so it runs in Python only: `VexelEngine.trace` routes `refine=True` to the
-  Python pipeline whatever `VEXEL_BACKEND` says. That is the one place the
-  engines differ on purpose.
+  than 0.02 grey levels. Nodes on the frame and wedge tips never move. Both
+  engines run it: Python renders the two shapes' markup with resvg, Rust draws
+  the same geometry with tiny-skia (`vexel-rs/src/refine_render.rs`, the
+  rasteriser resvg itself uses), coordinates rounded to the file's precision
+  in both; shapes under a blur filter are left out of the crop in both, since
+  tiny-skia has no filters. The two agree to a few thousandths of a pixel of
+  outline error, not to the bit (tests/test_vexel_refine.py holds them to
+  0.005 px on the heart).
 - After the fit, `vexel/regularity.py` clusters every straight segment's
   direction across the boundary graph and snaps clusters carrying 40 px or more
   to one direction (axis within `snap_axis_deg`, exactly perpendicular to a

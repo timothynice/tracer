@@ -171,19 +171,27 @@ def _bow(seg) -> float:
     return float(np.abs((q - p0) @ np.array([-d[1], d[0]]) / n).max())
 
 
+def root_scale(svg: str) -> float:
+    """The factor a trace drawn inside `<g transform="scale(s)">` applies to
+    its coordinates (Vexel's small-input upsampling writes 0.5); 1 otherwise."""
+    m = re.search(r'<g transform="scale\(([\d.]+)\)">', svg)
+    return float(m.group(1)) if m else 1.0
+
+
 def line_debt(svg: str) -> dict:
     """Chord length and count of cubics that should have been lines, and the
     segment density of the whole file. None for emitters using relative commands."""
     debt_px, debt_n, segs_n, length = 0.0, 0, 0, 0.0
+    scale = root_scale(svg)
     for d in re.findall(r'<path[^>]*\sd="([^"]*)"', svg):
         segs = _segments(d)
         if segs is None:
             return {"line_debt_px": None, "line_debt_segments": None, "nodes_per_100px": None}
         for s in segs:
-            chord = float(np.linalg.norm(s[-1] - s[1]))
+            chord = float(np.linalg.norm(s[-1] - s[1])) * scale
             segs_n += 1
             length += chord
-            if s[0] in ("C", "A") and chord >= LINE_MIN and _bow(s) <= LINE_BOW:
+            if s[0] in ("C", "A") and chord >= LINE_MIN and _bow(s) * scale <= LINE_BOW:
                 debt_px += chord
                 debt_n += 1
     return {

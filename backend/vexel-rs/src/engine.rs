@@ -35,6 +35,7 @@ pub struct VexelParams {
     pub curve_tolerance: f64,
     pub shape_fitting: bool,
     pub refine: bool,
+    pub upsample: String,
     pub strokes: bool,
     pub shadows: bool,
     pub stroke_tolerance: f64,
@@ -54,6 +55,7 @@ impl Default for VexelParams {
             curve_tolerance: 0.4,
             shape_fitting: true,
             refine: false,
+            upsample: "auto".to_string(),
             strokes: true,
             shadows: true,
             stroke_tolerance: 0.2,
@@ -671,9 +673,18 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     }
 
     t.lap("overlaps");
+    // A small input with thin features is traced again at twice its size; the
+    // viewBox carries the scale. See `upsample.rs` / the Python `upsample.py`.
+    if p.upsample == "always" || (p.upsample == "auto" && crate::upsample::wants_upsample(&l, height, width)) {
+        crate::dump::text("upsample", "2x\n");
+        let up = crate::upsample::upsample2x(rgba, height, width);
+        let mut q = p.clone();
+        q.upsample = "never".to_string();
+        return crate::upsample::halve(&trace_rgba(&up, 2 * height, 2 * width, &q), width, height);
+    }
     let svg = emit(
         &l, &enc, &order, &fills, &invisible, &skip, &stroke_of, &mask_override, &fill_override,
-        &shadow_plan, &prep, stacked, &curve_params, p, height, width,
+        &shadow_plan, &prep, stacked, &curve_params, p, height, width, rgba,
     );
     t.lap("emit");
     t.total("trace");
@@ -720,6 +731,7 @@ fn emit(
     p: &VexelParams,
     height: usize,
     width: usize,
+    src: &[u8],
 ) -> String {
     let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
         match fills.get(&lab) {
@@ -749,7 +761,7 @@ fn emit(
     // curve and cannot leave a hairline between them.
     let rank: HashMap<i32, usize> = order.iter().enumerate().map(|(i, lab)| (*lab, i)).collect();
     crate::dump::labels("labels_to_topology", l);
-    let bnd = topology::build(
+    let mut bnd = topology::build(
         l,
         &prep.rgb,
         &prep.alpha,
@@ -760,26 +772,30 @@ fn emit(
     crate::dump::arcs("arcs", &bnd);
 
     let mut defs: Vec<String> = Vec::new();
-    // Either a stroke's finished markup, or a shape with its paint attributes,
-    // in paint order; repeated shapes are written once and used (`reuse`).
-    let mut pending: Vec<Result<(Shape, String), String>> = Vec::new();
+    // Either a stroke's finished markup, or a record of a shape as it stands in
+    // the graph (fitted once; its path is made from the arcs when written), in
+    // paint order. Repeated shapes are written once and used (`reuse`).
+    let mut items: Vec<Result<crate::refine_render::Rec, String>> = Vec::new();
     for (i, lab) in order.iter().enumerate() {
         if invisible.contains(lab) {
             continue; // transparent canvas or hole: nothing to paint
         }
         if let Some(s) = stroke_of.get(lab) {
-            pending.push(Err(s.clone()));
+            items.push(Err(s.clone()));
         }
         if skip.contains(lab) {
             continue;
         }
         let fill = fill_override.get(lab).or_else(|| fills.get(lab)).unwrap();
         let mut extra = String::new();
+        let mut filtered = false;
         if let Some(shadow) = shadow_plan.shadows.get(lab) {
             defs.push(shadow_filter_svg(shadow, &format!("s{}", i + 1), p.path_precision));
             extra = format!(" filter=\"url(#s{})\"", i + 1);
+            filtered = true;
         }
-        let shape = match mask_override.get(lab) {
+        let (d, attrs) = fill.svg(&format!("g{}", i + 1), p.path_precision);
+        let rec = match mask_override.get(lab) {
             // An overlap-decomposed shape has a footprint of its own, which is
             // not a union of whole regions, so it is still traced on its own.
             Some(mask) => {
@@ -789,7 +805,7 @@ fn emit(
                     continue;
                 }
                 polys.sort_by(|a, b| polygon_area(b).total_cmp(&polygon_area(a)));
-                fit_shape(&polys, curve_params)
+                crate::refine_render::Rec { member: [*lab].into_iter().collect(), primitive: Some(fit_shape(&polys, curve_params)), rings: Vec::new(), fill: fill.clone(), attrs: format!("{}{}", attrs, extra), filtered }
             }
             None => {
                 let member = shape_labels(*lab, enc, stacked, invisible);
@@ -798,18 +814,36 @@ fn emit(
                 if rings.is_empty() {
                     continue;
                 }
-                rings.sort_by(|a, b| {
-                    polygon_area(&bnd.polyline(b)).total_cmp(&polygon_area(&bnd.polyline(a)))
-                });
-                shape_from_rings(&bnd, &rings, &member, curve_params)
+                rings.sort_by(|a, b| polygon_area(&bnd.polyline(b)).total_cmp(&polygon_area(&bnd.polyline(a))));
+                let mut primitive = None;
+                if rings.len() == 1 && curve_params.shape_fitting {
+                    let candidate = fit_shape(&[bnd.polyline(&rings[0])], curve_params);
+                    if !matches!(candidate, Shape::Path { .. }) {
+                        primitive = Some(candidate);
+                    }
+                }
+                crate::refine_render::Rec { member: member.clone(), primitive, rings, fill: fill.clone(), attrs: format!("{}{}", attrs, extra), filtered }
             }
         };
-        let (d, attrs) = fill.svg(&format!("g{}", i + 1), p.path_precision);
         if !d.is_empty() {
             defs.push(d);
         }
-        pending.push(Ok((shape, format!("{}{}", attrs, extra))));
+        items.push(Ok(rec));
     }
+    if p.refine {
+        // Ask the renderer: the two shapes on either side of each arc, drawn as
+        // they stand, against the source pixels along the arc.
+        let records: Vec<&crate::refine_render::Rec> = items.iter().filter_map(|it| it.as_ref().ok()).collect();
+        let owned: Vec<crate::refine_render::Rec> = records.iter().map(|r| crate::refine_render::Rec { member: r.member.clone(), primitive: r.primitive.clone(), rings: r.rings.clone(), fill: r.fill.clone(), attrs: r.attrs.clone(), filtered: r.filtered }).collect();
+        crate::refine_render::refine(&mut bnd, &owned, src, height, width, p.path_precision, 3, 0.1);
+    }
+    let pending: Vec<Result<(Shape, String), String>> = items
+        .iter()
+        .map(|it| match it {
+            Err(markup) => Err(markup.clone()),
+            Ok(rec) => Ok((crate::refine_render::shape_of(&bnd, rec), rec.attrs.clone())),
+        })
+        .collect();
     let shapes: Vec<(Shape, String)> = pending.iter().filter_map(|it| it.as_ref().ok().cloned()).collect();
     let mut timer = crate::timing::Timer::new();
     let (use_defs, use_elements) = crate::reuse::emit(&shapes, p.path_precision, 1);

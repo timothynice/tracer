@@ -46,3 +46,30 @@ def test_refinement_brings_a_curved_mark_closer_to_its_vector_truth():
     plain = outline_error(truth, trace(png), 512, 512)["outline_px"]
     refined = outline_error(truth, trace(png, refine=True), 512, 512)["outline_px"]
     assert refined <= 0.9 * plain, (plain, refined)
+
+
+def test_both_engines_refine_alike():
+    """Python renders the crop with resvg, Rust with tiny-skia; the moves are the
+    same and the two refined traces land within a few thousandths of a pixel of
+    each other against the truth."""
+    import os
+
+    import numpy as np
+
+    from studi0trace.engines.vexel.engine import VexelEngine, VexelParams, backend, trace_rgba
+    from studi0trace.imaging.intake import load_upload
+    from tests.test_vexel_topology import LIMITS
+
+    if backend() != "rust":
+        return  # the extension is what is under test here
+    truth = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="#fff"/>'
+             f'<path d="{HEART}" fill="#d62839"/></svg>')
+    img = load_upload(heart_png(), **LIMITS)
+    rust = VexelEngine().trace(img, VexelParams(refine=True)).svg
+    rgba = np.asarray(img.image.convert("RGBA"), dtype=np.uint8)
+    python = trace_rgba(rgba, VexelParams(refine=True))
+    plain = outline_error(truth, VexelEngine().trace(img, VexelParams()).svg, 512, 512)["outline_px"]
+    e_rust = outline_error(truth, rust, 512, 512)["outline_px"]
+    e_python = outline_error(truth, python, 512, 512)["outline_px"]
+    assert e_rust <= 0.9 * plain, (plain, e_rust)
+    assert abs(e_rust - e_python) <= 0.005, (e_rust, e_python)

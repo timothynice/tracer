@@ -265,21 +265,27 @@ export function parseSvg(markup: string): SvgDoc | null {
   const width = viewBox[2] || attrNum(root, "width", 0);
   const height = viewBox[3] || attrNum(root, "height", 0);
 
-  const elements: Element[] = [];
+  // A shape may sit in a group that carries a transform: Vexel draws a
+  // small input traced at twice its size inside <g transform="scale(0.5)">.
+  const elements: [Element, Matrix][] = [];
   for (const child of Array.from(root.children)) {
     if (child.tagName.toLowerCase() === "defs") continue;
-    if (child.tagName.toLowerCase() === "g") elements.push(...Array.from(child.children).filter((c) => SHAPE_TAGS.has(c.tagName.toLowerCase())));
-    else if (SHAPE_TAGS.has(child.tagName.toLowerCase())) elements.push(child);
+    if (child.tagName.toLowerCase() === "g") {
+      const gm = parseTransform(child.getAttribute("transform"));
+      for (const c of Array.from(child.children)) if (SHAPE_TAGS.has(c.tagName.toLowerCase())) elements.push([c, gm]);
+    } else if (SHAPE_TAGS.has(child.tagName.toLowerCase())) elements.push([child, IDENTITY]);
   }
 
-  const shapes: Shape[] = elements.map((el, index) => {
+  const shapes: Shape[] = elements.map(([el, parent], index) => {
     const raw = el.getAttribute("fill") ?? "#000000";
     const stroke = el.getAttribute("stroke");
     const painted = raw === "none" && stroke ? stroke : raw;
-    const matrix = parseTransform(el.getAttribute("transform"));
+    const matrix = multiply(parent, parseTransform(el.getAttribute("transform")));
     const anchors = anchorsOf(el).map((pt) => apply(matrix, pt));
     const bounds = boundsOf(anchors);
     const target = el.tagName.toLowerCase() === "use" ? useTarget(el) : null;
+    const own = outlineOf(el);
+    const pt = el.parentElement?.getAttribute("transform");
     return {
       index,
       tag: target ? target.tagName.toLowerCase() : el.tagName.toLowerCase(),
@@ -290,7 +296,7 @@ export function parseSvg(markup: string): SvgDoc | null {
       anchors,
       bounds,
       area: bounds[2] * bounds[3],
-      outline: outlineOf(el),
+      outline: pt && el.parentElement?.tagName.toLowerCase() === "g" ? `<g transform="${escapeAttr(pt)}">${own}</g>` : own,
     };
   });
 

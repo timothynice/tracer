@@ -62,6 +62,13 @@ module load while resvg-py was a bench-only dependency, which failed the Docker 
 lazy and resvg-py is a runtime dependency. Specs written: `2026-09-23-vexel-small-input-upsampling.md`,
 `2026-09-23-vexel-refine-rust-twin.md`.
 
+**Follow-up (2026-09-23, later).** Both specs built. Small-input upsampling (`upsample.py`/`upsample.rs`, default
+`auto`): selected by a region under 2.2 px wide in the direct trace's label map, Lanczos-3 2× with shared literal
+weights (byte-identical, `diffcheck upsample`), drawn back in `<g transform="scale(0.5)">`; thin-mark-128 outline
+2.24 → 0.26 px. Rust refiner (`refine_render.rs`, tiny-skia): same moves as the Python, filtered shapes left out of
+the crop in both, cross-engine parity held to 0.005 px of outline error on the heart by `tests/test_vexel_refine.py`;
+`trace` no longer routes `refine=True` to Python.
+
 The Tasks 3-5 row was measured under the old seam metric (outline 0.384, seam 19665) and is superseded.
 `seam_ppm` on logo is up because two sub-pixel-scale items dominate it: `thin-mark-128` (Rust does not recover its
 ring as a stroke where Python does, a pre-existing parity gap in the stroke stage that diffcheck does not cover) and

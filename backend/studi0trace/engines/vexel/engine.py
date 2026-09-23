@@ -33,6 +33,7 @@ from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.refine import refine_merge
 from studi0trace.engines.vexel.rescue import rescue_features
+from studi0trace.engines.vexel.upsample import halve, upsample2x, wants_upsample
 from studi0trace.engines.vexel.strokes import is_thin, stroke_fidelity, stroke_geometry, stroke_svg
 from studi0trace.engines.vexel.weights import interior_weights
 
@@ -60,6 +61,11 @@ def backend() -> str:
 class VexelParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    upsample: Literal["auto", "never", "always"] = Field(
+        "auto",
+        description="Trace a small input (≤ 192 px) at twice its size when its own trace shows a region thinner than 2.2 px",
+        json_schema_extra={"ui": {"control": "select", "group": "Regions", "label": "Small-input upsampling"}},
+    )
     detail: float = Field(
         6.0, ge=1.0, le=40.0, description="Colour difference (ΔE) below which neighbouring regions merge; lower keeps more regions",
         json_schema_extra={"ui": {"control": "slider", "step": 0.5, "group": "Regions"}},
@@ -264,9 +270,7 @@ class VexelEngine:
         p = params if isinstance(params, VexelParams) else VexelParams.model_validate(params)
         started = time.perf_counter()
         rgba = np.asarray(image.image.convert("RGBA"), dtype=np.uint8)
-        if backend() == "rust" and not p.refine:
-            # Render refinement asks a renderer (resvg) and lives in Python only;
-            # a deliberate divergence, documented in CLAUDE.md, not an accident.
+        if backend() == "rust":
             # The bytes are copied because the trace runs with the GIL released,
             # so it cannot hold a reference into a Python buffer. One copy of
             # 4·w·h against a couple of hundred milliseconds of tracing.
@@ -511,6 +515,12 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # fitted a single time, so the two regions that share it are handed the same
     # curve and cannot leave a hairline between them.
     dump.labels("labels_to_topology", labels)
+
+    # A small input with thin features is traced again at twice its size; the
+    # viewBox carries the scale. See `upsample.py` for the evidence.
+    if p.upsample == "always" or (p.upsample == "auto" and wants_upsample(labels, height, width)):
+        dump.text("upsample", "2x\n")
+        return halve(trace_rgba(upsample2x(rgba), p.model_copy(update={"upsample": "never"})), width, height)
     bnd = topology.build(
         labels, prep.rgb, prep.alpha, fill_at, curve_params,
         rank={lab: i for i, lab in enumerate(order)} if stacked else None,
@@ -573,9 +583,11 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         all_defs = "".join(defs)
 
         def neighbours(labels: tuple[int, ...]) -> tuple[str, list[str]]:
+            # a blurred shape is left out of the crop: the Rust twin's
+            # rasteriser has no filters, and the two must decide alike
             return all_defs, [
                 refine_render.element_markup(shape_of(rec), rec.attrs, p.path_precision)
-                for rec in records if not isinstance(rec, str) and (rec.member & set(labels))
+                for rec in records if not isinstance(rec, str) and (rec.member & set(labels)) and "filter=" not in rec.attrs
             ]
 
         refine_render.refine(bnd.arcs, neighbours, rgba)

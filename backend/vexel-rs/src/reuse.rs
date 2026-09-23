@@ -6,7 +6,7 @@ use crate::symmetry::Grid;
 pub const USE_TOL: f64 = 0.10;
 pub const USE_MIN_POINTS: usize = 8;
 
-fn arc_centre(p0: P, p1: P, r: f64, large: bool, sweep: bool) -> P {
+pub(crate) fn arc_centre(p0: P, p1: P, r: f64, large: bool, sweep: bool) -> P {
     let mid = [0.5 * (p0[0] + p1[0]), 0.5 * (p0[1] + p1[1])];
     let d = [p1[0] - p0[0], p1[1] - p0[1]];
     let half = 0.5 * (d[0] * d[0] + d[1] * d[1]).sqrt();

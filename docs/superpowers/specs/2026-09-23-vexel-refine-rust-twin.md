@@ -1,7 +1,11 @@
 # Vexel: a Rust twin for render-and-compare refinement
 
-**Status:** spec. Not yet planned. Today `refine=True` runs in Python only (`VexelEngine.trace` routes it there
-whatever backend is selected) — the one deliberate divergence between the engines, named in CLAUDE.md.
+**Status:** built 2026-09-23 (`vexel-rs/src/refine_render.rs`, dependency `tiny-skia 0.11`). `VexelEngine.trace`
+no longer routes `refine=True` to Python. Departures from the design below: shapes under a blur filter are left out
+of the crop in *both* engines (tiny-skia has no filters) instead of skipping their arcs; parity is held by an
+end-to-end test (Rust and Python refined traces within 0.005 px of outline error on the heart) rather than a
+`refined` diffcheck stage, because the two rasterisers differ in the last grey level and a control-point tolerance
+would have to be loose enough to be meaningless.
 
 ## Why
 

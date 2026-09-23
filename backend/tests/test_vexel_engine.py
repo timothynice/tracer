@@ -76,7 +76,9 @@ def test_linear_gradient_disc_is_a_gradient_circle():
     # without gradients the disc becomes several flat bands
     banded = trace_rgba(img, VexelParams(gradients=False))
     assert "linearGradient" not in banded
-    assert ET.fromstring(banded).__len__() > 3
+    # bands this thin send a small input through the 2x pass, whose drawing
+    # sits in one <g>: count the paths wherever they are
+    assert len(list(ET.fromstring(banded).iter("{http://www.w3.org/2000/svg}path"))) > 3
 
 
 def test_jpeg_input_survives():

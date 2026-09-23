@@ -19,6 +19,7 @@ pub mod partition;
 pub mod posterize;
 pub mod prepare;
 pub mod refine;
+pub mod refine_render;
 pub mod regularity;
 pub mod rescue;
 pub mod reuse;
@@ -28,6 +29,7 @@ pub mod topology;
 pub mod timing;
 pub mod strokes;
 pub mod symmetry;
+pub mod upsample;
 pub mod weights;
 
 
@@ -248,6 +250,11 @@ mod python {
     }
 
     #[pyfunction]
+    fn _stage_upsample(rgba: Vec<u8>, h: usize, w: usize) -> Vec<u8> {
+        crate::upsample::upsample2x(&rgba, h, w)
+    }
+
+    #[pyfunction]
     fn _stage_labels0(rgba: Vec<u8>, h: usize, w: usize, min_region: usize) -> Vec<i32> {
         let prep = prepare::prepare(&rgba, h, w);
         let grad = partition::discontinuity(&prep.features, 0.7);
@@ -377,6 +384,7 @@ mod python {
         get!("curve_tolerance", curve_tolerance, f64);
         get!("shape_fitting", shape_fitting, bool);
         get!("refine", refine, bool);
+        get!("upsample", upsample, String);
         get!("strokes", strokes, bool);
         get!("shadows", shadows, bool);
         get!("stroke_tolerance", stroke_tolerance, f64);
@@ -401,6 +409,7 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_features, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_rgb, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_labels0, m)?)?;
+    m.add_function(wrap_pyfunction!(_stage_upsample, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_wedges, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;

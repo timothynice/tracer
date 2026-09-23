@@ -73,6 +73,7 @@ TOLERANCE = {
     # reported `max` is printed beside the RMS, so a single badly placed
     # junction is still visible to a reader.
     "arcs": ("rms", 0.05, 0.0),
+    "upsample": ("max", 0.0, 0.0),
     # The wedge extension hands whole pixels back to a region that the partition
     # cut off, on a threshold over a three-way colour mix — and that mix is read
     # from the fitted fills, which the two implementations agree on only to about
@@ -175,6 +176,18 @@ def grad(path):
     h, w = a.shape[:2]
     py = discontinuity(prepare(a).features).astype(np.float64)
     return py, np.asarray(vexel_rs._stage_grad(a.tobytes(), h, w)).reshape(h, w)
+
+
+@stage
+def upsample(path):
+    """The 2x Lanczos upsample both engines trace small inputs through, to the byte."""
+    from studi0trace.engines.vexel.upsample import upsample2x
+
+    a = load(path)
+    h, w = a.shape[:2]
+    py = upsample2x(a).astype(np.int32)
+    rs = np.asarray(vexel_rs._stage_upsample(a.tobytes(), h, w), dtype=np.int32).reshape(2 * h, 2 * w, 4)
+    return py, rs
 
 
 @stage

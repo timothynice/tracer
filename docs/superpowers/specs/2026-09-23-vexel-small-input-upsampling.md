@@ -1,6 +1,28 @@
 # Vexel: upsampling small inputs before tracing (selection rule)
 
-**Status:** spec, from spike 1 in `2026-09-22-vexel-spikes.md`. Not yet planned.
+**Status:** built 2026-09-23 (`vexel/upsample.py`, `vexel-rs/src/upsample.rs`, `tests/test_vexel_upsample.py`).
+
+**As built, where it departs from the design below.** Calibration over the 128 px corpus items showed that the
+selection signal is *thin structure*, not softness: every item that gained had a region under 2.4 px wide
+(2·area/perimeter on the direct trace's label map) and every item that lost had none under 7.6 px; boundary
+density and transparency did not separate them (venn has semi-transparent regions and lost). So the rule is
+`max(h, w) ≤ 192` and `thinnest_region < 2.2`, computed from the direct trace's own labels — renderer-free, so
+both engines apply it identically, and the render-based guard in step 5 is not needed. Stripes-128 and
+alpha-fade-128 gained in the spike without thin regions and are not selected. The upsample is a fixed-weight
+Lanczos-3 at exactly 2× (two literal tap sets shared by both engines, byte-identical by `diffcheck upsample`). The
+result keeps the original viewBox with the drawing in `<g transform="scale(0.5)">`, because `finish` normalises the
+root viewBox to the image; gradients, filters and stroke widths follow the element's user space, and
+`bench.geometry.root_scale` / the frontend parser honour the group.
+
+**Measured (bench, never → auto, 128 px items the rule selects):** thin-mark outline 2.24 → 0.26 px and score
+0.894 → 0.934; blobs 0.130 → 0.075 (score −0.003); overlap 0.117 → 0.060 (score +0.000); wedge-fan 0.208 → 0.181
+(score −0.008); disc 0.281 → 0.109 (score −0.003). Files grow 2–3× and traces take 3–5× longer on those five
+items only. Two variants were rejected by the same A/B: a 3.5 px threshold also selected sticker-128, whose gradient
+splits into bands at 2× (banding 0.05 → 0.94, score −0.031) although its direct trace no longer needs help (0.147
+px), and scaling `min_region`/`curve_tolerance` to source pixels for the inner pass cured neither the banding nor kept
+the outline gain (blobs back to 0.119). The composite score is not the right gate for this rule — it moves a few
+thousandths on fill statistics while the geometry improves by tenths of a pixel — so the gate is `outline_px` on the
+selected items with `score` watched per item.
 
 ## Problem
 

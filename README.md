@@ -47,7 +47,9 @@ shadows. Instead of quantising colours and tracing bands, it:
    that costs no more segments than a curve — so a straight edge is emitted
    straight rather than as a cubic that bows, then makes lines that are meant
    to be **parallel, perpendicular or on an axis exactly so** across the whole
-   boundary graph (`vexel/regularity.py`), makes a **mirror- or rotationally
+   boundary graph (`vexel/regularity.py`), traces a **small input with thin
+   features at twice its size** and scales the drawing back (`vexel/upsample.py`),
+   makes a **mirror- or rotationally
    symmetric** mark exactly so (`vexel/symmetry.py`), writes a **repeated shape
    once** and paints its copies with `<use>` (`vexel/reuse.py`), and
    otherwise G1 cubic Béziers — and, with **Render refinement** on, renders each

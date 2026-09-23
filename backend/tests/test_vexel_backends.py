@@ -177,7 +177,9 @@ def test_both_backends_stroke_the_thin_ring_of_thin_mark_128():
 
     png = Path(__file__).resolve().parent.parent / "bench" / "corpus" / "synthetic" / "logo" / "thin-mark-128.png"
     rgba = np.asarray(Image.open(png).convert("RGBA"), dtype=np.uint8)
-    params = VexelParams()
+    # the stroke stage is what is under test: at 128 px this item would be
+    # traced at 2x (its ring is under 2.2 px wide), where the ring is a fill
+    params = VexelParams(upsample="never")
     py, rs = trace_rgba(rgba, params), _rust(rgba, params)
     ring = re.compile(r'<path[^>]*fill="none"[^>]*stroke="#ef476f"[^>]*stroke-width="([^"]+)"')
     py_ring, rs_ring = ring.search(py), ring.search(rs)

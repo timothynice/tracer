@@ -109,3 +109,15 @@ test("a <use> of a defined shape is that shape, moved, with its own paint", () =
   expect(hidden).toContain('id="u1"');
   expect(hidden.match(/<use/g)?.length).toBe(1);
 });
+
+
+test("a shape inside a scaled group is measured in canvas units", () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<g transform="scale(0.5)"><rect x="0" y="0" width="256" height="256" fill="#eeeeee"/><path d="M40 40L120 40L120 120Z" fill="#ff0000"/></g></svg>`;
+  const doc = parseSvg(svg)!;
+  expect([doc.width, doc.height]).toEqual([128, 128]);
+  expect(doc.shapes[0].bounds).toEqual([0, 0, 128, 128]);
+  expect(doc.shapes[1].bounds).toEqual([20, 20, 40, 40]);
+  expect(doc.shapes[1].outline).toContain('transform="scale(0.5)"');
+  expect(doc.render(new Set([1])).match(/<path/g)).toBeNull();
+});
