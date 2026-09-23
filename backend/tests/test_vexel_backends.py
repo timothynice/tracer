@@ -163,3 +163,25 @@ def test_parameters_reach_the_rust_backend():
     assert "<circle" in _rust(rgba, VexelParams())
     assert "<circle" not in _rust(rgba, VexelParams(shape_fitting=False))
     assert "Gradient" not in _rust(rgba, VexelParams(gradients=False))
+
+
+def test_both_backends_stroke_the_thin_ring_of_thin_mark_128():
+    """The red ring of `logo/thin-mark-128` is a 1.5 px line. Stroke recovery
+    turns it into one stroked path only when the centreline's fidelity clears
+    `stroke_tolerance`, and the centreline is the medial axis — so the two
+    implementations have to thin in the same order, or one strokes the ring
+    and the other paints it as four filled fragments."""
+    from pathlib import Path
+
+    from PIL import Image
+
+    png = Path(__file__).resolve().parent.parent / "bench" / "corpus" / "synthetic" / "logo" / "thin-mark-128.png"
+    rgba = np.asarray(Image.open(png).convert("RGBA"), dtype=np.uint8)
+    params = VexelParams()
+    py, rs = trace_rgba(rgba, params), _rust(rgba, params)
+    ring = re.compile(r'<path[^>]*fill="none"[^>]*stroke="#ef476f"[^>]*stroke-width="([^"]+)"')
+    py_ring, rs_ring = ring.search(py), ring.search(rs)
+    assert py_ring is not None, "the Python engine should stroke the ring"
+    assert rs_ring is not None, "the Rust engine should stroke the ring"
+    assert py_ring.group(1) == rs_ring.group(1)
+    assert _elements(py) == _elements(rs)

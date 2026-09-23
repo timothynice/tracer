@@ -109,6 +109,15 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   four-connected way, so an eight-connected chain comes back as one-pixel
   islands. `tools/diffcheck.py`'s `wedges` stage compares the extended labels
   and `arcs` is then given one map, so each is tested on the other's output.
+- Thin regions are stroked along their medial axis (`vexel/strokes.py`,
+  `vexel-rs/src/strokes.rs`). skimage's `medial_axis` thins in an order it
+  breaks ties in at random, so the Python runs skimage's algorithm itself
+  (`strokes.medial_axis`) with a hash of each pixel's raster index as the
+  tiebreaker; `core/skeleton.rs` sorts by the same key. Never break the
+  tie by raster index: on a two-pixel line that thins the same side first
+  everywhere and puts the centreline half a pixel off, enough for
+  `stroke_fidelity` to fail a ring the random order passes. `tools/diffcheck.py
+  strokes` compares the two per thin group.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
   the fills to a colour level; where the two are allowed to differ, the
@@ -118,9 +127,9 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   turned a wedge tip into a hairpin. Ties are broken by something both engines
   compute (`engine.split_rim`: distance, then the pixel's own colour, then the
   lower label). The stroke stage's skeleton is `strokes.medial_axis`, skimage's
-  algorithm with a raster-index tiebreak instead of skimage's OS-seeded one,
-  so a trace is reproducible and the two engines thin identically (`diffcheck
-  skeleton`). The rescue residual weights a pixel's colour by its alpha: the
+  algorithm with a hashed-pixel tiebreak instead of skimage's OS-seeded one
+  (see the stroke bullet above), so a trace is reproducible and the two
+  engines thin identically (`diffcheck skeleton`). The rescue residual weights a pixel's colour by its alpha: the
   colour under a transparent pixel is inpainted and means nothing, and scoring
   it left whole transparent fields at the rescue threshold. Where two
   candidates tie to the last bit — a staircase puts two vertices at the same

@@ -35,6 +35,9 @@ from studi0trace.engines.vexel import topology  # noqa: E402
 from studi0trace.engines.vexel.curves import CurveParams  # noqa: E402
 from studi0trace.engines.vexel.engine import VexelParams, trace_rgba  # noqa: E402
 from studi0trace.engines.vexel.strokes import is_thin, medial_axis  # noqa: E402
+from studi0trace.engines.vexel.boundary import thin_coverage  # noqa: E402
+from studi0trace.engines.vexel.engine import _group_thin  # noqa: E402
+from studi0trace.engines.vexel.strokes import Stroke, is_thin, stroke_fidelity, stroke_geometry  # noqa: E402
 
 CORPUS = pathlib.Path(__file__).resolve().parent.parent / "bench" / "corpus"
 
@@ -101,6 +104,17 @@ TOLERANCE = {
     "segments": ("rms", 1e-3, 0.0),
     "trace_labels": ("max", 0.0, 0.002),
     "trace_arcs": ("rms", 0.05, 0.0),
+    # Stroke recovery, per thin group: which regions are thin, how they group,
+    # the centreline's vertices and width, and the fidelity that decides whether
+    # the group is stroked at all. Both sides are handed the Python's label map
+    # and coverage field, so what is compared is `strokes.py` against
+    # `strokes.rs`. The centreline is the medial axis, and both thin in the same
+    # order (`core/skeleton.rs`, `strokes.medial_axis`), so the skeletons are
+    # one skeleton and everything after it is arithmetic: over the corpus the
+    # vertices, widths and fidelities agree to 1e-7. A group that is stroked on
+    # one side and not the other, or whose polylines differ in length, fails
+    # outright.
+    "strokes": ("max", 1e-6, 0.0),
 }
 
 
@@ -463,6 +477,86 @@ def trace_arcs(path):
             return np.zeros(1), np.full(1, 1e9)
     flat = lambda arcs: np.array([v for a in arcs for v in (*a[2], *a[4])], dtype=np.float64)  # noqa: E731
     return flat(py), flat(rs)
+def _stroke_rows(stroke: Stroke | None, fidelity: float | None) -> list[list[float]]:
+    """A stroke as rows the two sides can be lined up on: one header row with
+    the width, the fidelity and the polyline count, then one row per polyline
+    (closed flag, cap, vertex count, vertices)."""
+    if stroke is None:
+        return [[-1.0]]
+    rows = [[float(stroke.width), float(fidelity), float(len(stroke.polylines))]]
+    caps = stroke.caps or ["round"] * len(stroke.polylines)
+    for xy, c, cap in zip(stroke.polylines, stroke.closed, caps):
+        rows.append([float(c), 1.0 if cap == "butt" else 0.0, float(len(xy)), *np.asarray(xy, dtype=float).ravel().tolist()])
+    return rows
+
+
+@stage
+def strokes(path):
+    """Stroke recovery, thin group by thin group.
+
+    For every region of the merged map: the `is_thin` decision. For the thin
+    ones, grouped by the Python's `_group_thin` and by the Rust's `group_thin`
+    (the groups must be the same sets): the centreline polylines and width
+    `stroke_geometry` finds, and the `stroke_fidelity` of that centreline
+    against the coverage. Every group is a block of rows the two sides are
+    compared on; a group stroked by one implementation and not the other is a
+    shape mismatch and fails outright.
+    """
+    a, prep, labels, fills = _prepared(path)
+    h, w = a.shape[:2]
+    fill_at = lambda lab, qx, qy: fills[lab].evaluate(qx, qy)  # noqa: E731
+    ids = [int(i) for i in np.unique(labels) if i]
+    py_thin = [lab for lab in ids if is_thin(labels == lab)]
+    rs_thin = [lab for lab in ids if vexel_rs._is_thin((labels == lab).astype(np.uint8).ravel().tolist(), h, w)]
+    if py_thin != rs_thin:
+        print(f"  FAIL strokes   {path.name}: thin regions {py_thin} in Python, {rs_thin} in Rust")
+        return np.zeros(1), np.full(1, 1e9)
+    if not py_thin:
+        return np.zeros(1), np.zeros(1)
+    py_groups = _group_thin(py_thin, labels, prep.rgb, prep.alpha, fill_at)
+    rs_groups = vexel_rs._group_thin(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), py_thin)
+    if sorted(map(sorted, py_groups)) != sorted(map(sorted, rs_groups)):
+        print(f"  FAIL strokes   {path.name}: groups {py_groups} in Python, {rs_groups} in Rust")
+        return np.zeros(1), np.full(1, 1e9)
+    py_rows, rs_rows = [], []
+    mismatched = False
+    for members in sorted(map(sorted, py_groups)):
+        union = np.isin(labels, members)
+        # The engine grows the union one pixel into transparent surroundings
+        # before measuring coverage; the transparent set is the engine's, so the
+        # union itself stands in for it here — the field is the same on both
+        # sides either way, which is what this stage needs.
+        field = thin_coverage(union, labels, prep.rgb, prep.alpha, fill_at)
+        py_stroke = stroke_geometry(union, field)
+        py_fid = stroke_fidelity(py_stroke, field) if py_stroke is not None else None
+        rs = vexel_rs._stroke_geometry(union.astype(np.uint8).ravel().tolist(), field.astype(np.float64).ravel().tolist(), h, w)
+        rs_stroke = None
+        rs_fid = None
+        if rs is not None:
+            polys, closed, caps, width = rs
+            rs_stroke = Stroke(polylines=[np.asarray(p, dtype=float).reshape(-1, 2) for p in polys], closed=list(closed), caps=list(caps), width=float(width))
+            rs_fid = vexel_rs._stroke_fidelity(polys, list(closed), float(width), field.astype(np.float64).ravel().tolist(), h, w)
+        if (py_stroke is None) != (rs_stroke is None):
+            print(f"  FAIL strokes   {path.name}: group {members} is {'stroked' if py_stroke else 'filled'} in Python, {'stroked' if rs_stroke else 'filled'} in Rust")
+            mismatched = True
+            continue
+        prow, rrow = _stroke_rows(py_stroke, py_fid), _stroke_rows(rs_stroke, rs_fid)
+        if [len(r) for r in prow] != [len(r) for r in rrow]:
+            print(f"  FAIL strokes   {path.name}: group {members} has polylines of {[int(r[2]) for r in prow[1:]]} vertices in Python, {[int(r[2]) for r in rrow[1:]]} in Rust")
+            mismatched = True
+            continue
+        if py_stroke is not None:
+            dw, df = abs(prow[0][0] - rrow[0][0]), abs(prow[0][1] - rrow[0][1])
+            if dw > 1e-3 or df > 1e-3:
+                print(f"  FAIL strokes   {path.name}: group {members} width {prow[0][0]:.4f} / fidelity {prow[0][1]:.4f} in Python, {rrow[0][0]:.4f} / {rrow[0][1]:.4f} in Rust")
+                mismatched = True
+        py_rows += prow
+        rs_rows += rrow
+    if mismatched:
+        return np.zeros(1), np.full(1, 1e9)
+    py = np.array([v for row in py_rows for v in row], dtype=np.float64)
+    rs = np.array([v for row in rs_rows for v in row], dtype=np.float64)
+    return py, rs
 
 
 def main() -> int:

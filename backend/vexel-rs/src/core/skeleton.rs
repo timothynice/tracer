@@ -1,13 +1,17 @@
-//! `skimage.morphology.medial_axis`, with a deterministic processing order.
+//! `skimage.morphology.medial_axis`, with a fixed thinning order.
 //!
 //! skimage breaks ties in the processing order with `np.random.default_rng(None)`
-//! — seeded from the OS, so its skeletons (and therefore which thin regions
-//! become strokes) are **not reproducible between runs**. Here the tiebreak is
-//! the pixel's raster index, which is deterministic and otherwise plays exactly
-//! the same role: it only ever separates pixels that already tie on both
-//! distance and cornerness. The Python engine's `strokes.medial_axis` does the
-//! same, so the two produce one skeleton; `tools/diffcheck.py`'s `skeleton`
-//! stage holds them to it.
+//! — seeded from the OS, so out of the box its skeletons (and therefore which
+//! thin regions become strokes) are **not reproducible between runs**. Both
+//! engines break the tie the same way instead: by a hash of the pixel's raster
+//! index (`pixel_key`, the splitmix64 finaliser), which the Python side hands
+//! the same ordering (`strokes.medial_axis`). It separates only pixels
+//! that already tie on distance and cornerness, and it is as even-handed as the
+//! random draw. The raster index itself is not: it thins the same side of a
+//! line first every time, and the skeleton of a two-pixel ring then sits half a
+//! pixel off centre all the way round — far enough for the stroke fidelity gate
+//! to fail a ring the random draws pass. `tools/diffcheck.py`'s `skeleton` stage
+//! holds the two skeletons to pixel-for-pixel equality.
 
 use super::edt;
 use super::grid::{Grid, Mask};
@@ -68,6 +72,15 @@ fn build_table() -> [bool; 512] {
         *slot = components(&p) != components(&without) || n_true < 3;
     }
     t
+}
+
+/// A predictable pseudo-random key per raster index: the splitmix64 finaliser,
+/// a bijection on u64, so distinct pixels never tie. Mirrors `strokes._pixel_keys`.
+pub fn pixel_key(index: usize) -> u64 {
+    let mut z = (index as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 fn cornerness(index: usize) -> u8 {
@@ -131,13 +144,13 @@ pub fn medial_axis(image: &Mask) -> Mask {
         .collect();
 
     let mut order: Vec<usize> = (0..h * w).filter(|i| image.data[*i]).collect();
-    // ascending distance, then ascending cornerness, then raster index
+    // ascending distance, then ascending cornerness, then the pixel's hash key
     order.sort_by(|a, b| {
         dist.data[*a]
             .partial_cmp(&dist.data[*b])
             .unwrap()
             .then(corner[*a].cmp(&corner[*b]))
-            .then(a.cmp(b))
+            .then(pixel_key(*a).cmp(&pixel_key(*b)))
     });
 
     for i in order {
@@ -152,4 +165,38 @@ pub fn medial_axis(image: &Mask) -> Mask {
     }
 
     Grid { h, w, data: result.data.iter().map(|v| *v != 0).collect() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pixel_key_is_splitmix64s_finaliser() {
+        // the reference values `strokes._pixel_keys` produces for 0..4
+        assert_eq!(pixel_key(0), 0xe220_a839_7b1d_cdaf);
+        assert_eq!(pixel_key(1), 0x910a_2dec_8902_5cc1);
+        assert_eq!(pixel_key(2), 0x9758_35de_1c97_56ce);
+        assert_eq!(pixel_key(3), 0x1d0b_14e4_db01_8fed);
+    }
+
+    #[test]
+    fn a_two_pixel_bar_thins_from_both_sides() {
+        // Every pixel of a two-pixel bar ties with the one across from it on
+        // distance and cornerness. Thinning in raster order removes the top row
+        // everywhere and leaves the skeleton on the bottom row, half a pixel off
+        // centre; the hashed order takes from both rows.
+        let (h, w) = (7, 40);
+        let mut bar = Grid::filled(h, w, false);
+        for r in 3..5 {
+            for c in 2..38 {
+                bar.data[r * w + c] = true;
+            }
+        }
+        let skel = medial_axis(&bar);
+        let rows: std::collections::BTreeSet<usize> =
+            (0..h * w).filter(|i| skel.data[*i]).map(|i| i / w).collect();
+        assert_eq!(rows, [3usize, 4].into_iter().collect());
+        assert_eq!(skel.data.iter().filter(|b| **b).count(), 36);
+    }
 }

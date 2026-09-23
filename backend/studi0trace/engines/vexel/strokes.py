@@ -48,9 +48,13 @@ def medial_axis(image: np.ndarray) -> np.ndarray:
     cornerness, and breaks the remaining ties with a generator seeded from the
     OS — so two runs over one image give two skeletons, and whether a thin
     region is stroked or filled changes between runs. Here the last tiebreak is
-    the pixel's raster index, which plays exactly the same role (it only ever
-    separates pixels that already tie on both distance and cornerness) and is
-    what `vexel-rs/src/core/skeleton.rs` does, so the two engines agree.
+    a hash of the pixel's raster index (`_pixel_keys`), which
+    `vexel-rs/src/core/skeleton.rs` sorts by too, so the two engines agree. It
+    separates only pixels that already tie on distance and cornerness, and it is
+    as even-handed as the random draw. The raster index itself is not: it thins
+    the same side of a two-pixel line first everywhere, which puts the skeleton
+    of a two-pixel ring half a pixel off centre all the way round, and the
+    stroke fidelity of that centreline fails the gate the random draws pass.
     """
     mask = np.ascontiguousarray(image, dtype=bool)
     keep, cornerness = _skeleton_tables()
@@ -59,12 +63,22 @@ def medial_axis(image: np.ndarray) -> np.ndarray:
     rows, cols = np.nonzero(mask)  # raster order
     if rows.size == 0:
         return np.zeros_like(mask)
-    # lexsort is stable: pixels tying on distance and cornerness keep raster order
-    order = np.lexsort((corner[mask], distance[mask]))
+    keys = _pixel_keys(rows.astype(np.int64) * mask.shape[1] + cols)
+    order = np.lexsort((keys, corner[mask], distance[mask]))
     result = np.ascontiguousarray(mask, np.uint8)
     _skeletonize_loop(result, np.ascontiguousarray(rows, np.intp), np.ascontiguousarray(cols, np.intp),
                       np.ascontiguousarray(order, np.int32), keep)
     return result.astype(bool)
+
+
+def _pixel_keys(index: np.ndarray) -> np.ndarray:
+    """A predictable pseudo-random 64-bit key per raster index (the splitmix64
+    finaliser, a bijection, so distinct pixels get distinct keys)."""
+    with np.errstate(over="ignore"):
+        z = np.asarray(index, dtype=np.uint64) + np.uint64(0x9E3779B97F4A7C15)
+        z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        return z ^ (z >> np.uint64(31))
 
 
 @dataclass

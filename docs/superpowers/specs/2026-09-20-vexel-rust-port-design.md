@@ -110,8 +110,18 @@ colour level of 255.
 processing order with `np.random.default_rng(None)`, seeded from the OS. Twenty
 calls on the same mask gave up to twenty different skeletons. Which thin regions
 Vexel turns into strokes rides on that, so the Python engine's stroke geometry
-is not reproducible between runs. The Rust one breaks the same ties by raster
-index: deterministic, and inside the distribution skimage draws from.
+was not reproducible between runs. The port first broke the same ties by raster
+index. That turned out not to be inside the distribution skimage draws from: on
+a two-pixel ring every pixel ties with the one across from it, the raster order
+thins the same side first all the way round, and the skeleton sits half a pixel
+off centre — `logo/thin-mark-128`'s ring measured a stroke fidelity of 0.245
+that way against 0.187–0.195 over nine random draws, so the Rust engine filled
+a ring the Python one stroked (2026-09-22). Both now break the tie by a hash of
+the pixel's raster index (`skeleton::pixel_key`; `strokes.medial_axis` runs
+skimage's algorithm with the same order): deterministic, identical in both, and as
+even-handed as the random draw (0.198 on that ring). `tools/diffcheck.py
+strokes` compares the thin decision, the grouping, the centreline, the width
+and the fidelity per thin group.
 
 **Two of the corpus items were being scored on luck.** `logo/cutout-128` and
 `logo/thin-mark-128` were the port's two worst regressions, until the fit sample

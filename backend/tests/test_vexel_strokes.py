@@ -3,6 +3,7 @@ import math
 import re
 
 import numpy as np
+import pytest
 import resvg_py
 from PIL import Image
 
@@ -168,3 +169,29 @@ def test_medial_axis_agrees_with_the_rust_port():
         h, w = m.shape
         rs = np.asarray(vexel._vexel_rs._medial_axis(m.astype(np.uint8).ravel().tolist(), h, w), dtype=bool).reshape(h, w)
         assert (medial_axis(m) == rs).all()
+
+
+def _thin_ring(size: int = 64, radius: float = 22.0, width: float = 2.0) -> np.ndarray:
+    """A two-pixel ring: every pixel ties with its neighbour across the ring on
+    both distance and cornerness, so the thinning order alone decides which of
+    the two rows the skeleton keeps."""
+    ys, xs = np.mgrid[0:size, 0:size].astype(float) + 0.5
+    r = np.hypot(ys - size / 2, xs - size / 2)
+    return np.abs(r - radius) <= width / 2
+
+
+def test_medial_axis_is_deterministic_and_the_rust_port_finds_the_same_one():
+    """skimage breaks ties in the thinning order with an OS-seeded permutation;
+    the engine hands it a fixed order instead (a hash of each pixel's raster
+    index), and the Rust port sorts by the same key, so the two skeletons — and
+    everything downstream of them — are one skeleton."""
+    from studi0trace.engines.vexel.strokes import medial_axis
+
+    mask = _thin_ring()
+    first = medial_axis(mask)
+    assert first.any()
+    assert np.array_equal(first, medial_axis(mask))
+    vexel_rs = pytest.importorskip("vexel_rs")
+    h, w = mask.shape
+    rust = np.asarray(vexel_rs._medial_axis(mask.astype(np.uint8).ravel().tolist(), h, w), bool).reshape(h, w)
+    assert np.array_equal(first, rust)
