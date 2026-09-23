@@ -1895,7 +1895,9 @@ pub fn build_opt(
 
     let edges = boundary_edges(&padded);
     let chain_list = chains(&padded, &edges);
+    let mut timer = crate::timing::Timer::new();
     let placed = place(&chain_list, &edges, &padded, rgb, alpha, fill_at, &handed_back);
+    timer.lap("topology: chains + place");
 
     let mut arcs: Vec<Arc> = chain_list
         .iter()
@@ -1936,10 +1938,13 @@ pub fn build_opt(
         symmetrize_boundary(&mut early);
         arcs = early.arcs;
     }
+    timer.lap("topology: symmetry");
     junctions(&mut arcs, &padded, params.corner_threshold, params.tol);
+    timer.lap("topology: junctions");
     for arc in arcs.iter_mut() {
         arc.segments = fit_arc(&arc.pts, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), arc.mirror, params);
     }
+    timer.lap("topology: fit");
     // Across the graph: lines meant to be parallel, perpendicular or on an axis
     // are made exactly so. Nodes never move, so the ring still closes.
     {

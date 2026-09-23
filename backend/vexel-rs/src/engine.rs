@@ -811,7 +811,9 @@ fn emit(
         pending.push(Ok((shape, format!("{}{}", attrs, extra))));
     }
     let shapes: Vec<(Shape, String)> = pending.iter().filter_map(|it| it.as_ref().ok().cloned()).collect();
+    let mut timer = crate::timing::Timer::new();
     let (use_defs, use_elements) = crate::reuse::emit(&shapes, p.path_precision, 1);
+    timer.lap("emit: reuse");
     defs.extend(use_defs);
     let mut used = use_elements.into_iter();
     let elements: Vec<String> = pending

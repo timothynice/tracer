@@ -72,14 +72,32 @@ impl Grid {
     }
 
     pub(crate) fn nearest(&self, q: P) -> (f64, usize) {
+        self.nearest_within(q, f64::INFINITY)
+    }
+
+    /// The nearest vertex when it lies within `limit`, else (limit, 0) without
+    /// searching further: a caller that only needs "too far" does not pay for
+    /// the whole grid. Exact whenever the answer is within the limit.
+    pub(crate) fn nearest_within(&self, q: P, limit: f64) -> (f64, usize) {
         let cx = (((q[0] - self.x0) / self.cell).floor() as i64).clamp(0, self.nx - 1);
         let cy = (((q[1] - self.y0) / self.cell).floor() as i64).clamp(0, self.ny - 1);
+        // distance from the query to the grid's box: nothing can be nearer
+        let (x1, y1) = (self.x0 + self.nx as f64 * self.cell, self.y0 + self.ny as f64 * self.cell);
+        let ox = if q[0] < self.x0 { self.x0 - q[0] } else if q[0] > x1 { q[0] - x1 } else { 0.0 };
+        let oy = if q[1] < self.y0 { self.y0 - q[1] } else if q[1] > y1 { q[1] - y1 } else { 0.0 };
+        if ox.max(oy) >= limit {
+            return (limit, 0);
+        }
         let mut best = (f64::INFINITY, 0usize);
         let max_ring = self.nx.max(self.ny);
         for ring in 0..=max_ring {
             // a vertex in a cell `ring` away is at least (ring - 1) cells off
-            if ring > 0 && ((ring - 1) as f64) * self.cell > best.0 {
+            let floor = if ring > 0 { ((ring - 1) as f64) * self.cell } else { 0.0 };
+            if floor > best.0 {
                 break;
+            }
+            if best.0 > limit && floor.max(ox.max(oy)) >= limit {
+                return (limit, 0);
             }
             for dy in -ring..=ring {
                 for dx in -ring..=ring {
@@ -99,16 +117,30 @@ impl Grid {
                 }
             }
         }
+        if best.0 > limit {
+            return (limit, 0);
+        }
         best
     }
 }
 
 /// (mean, worst, index of nearest vertex) for every image; see the Python `_match`.
+///
+/// Once the distances summed so far already put the mean over SYM_MEAN the
+/// symmetry cannot fit, and the rest is not computed: the result is then
+/// (∞, ∞, empty), which `fits` rejects exactly as the full computation would.
+/// A fitting symmetry never trips this, so its numbers are the exact ones.
 fn matching(grid: &Grid, images: &[P]) -> (f64, f64, Vec<usize>) {
+    let budget = SYM_MEAN * images.len() as f64;
     let mut dist = Vec::with_capacity(images.len());
     let mut idx = Vec::with_capacity(images.len());
+    let mut sum = 0.0;
     for q in images {
-        let (d, i) = grid.nearest(*q);
+        let (d, i) = grid.nearest_within(*q, (budget - sum).max(0.0) + 1e-9);
+        sum += d;
+        if sum > budget {
+            return (f64::INFINITY, f64::INFINITY, Vec::new());
+        }
         dist.push(d);
         idx.push(i);
     }
