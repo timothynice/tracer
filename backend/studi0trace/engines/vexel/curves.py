@@ -1089,9 +1089,26 @@ def _generate_bezier(points: np.ndarray, u: np.ndarray, t1: np.ndarray, t2: np.n
     return Cubic(p0.copy(), p0 + t1 * alpha1, p3 + t2 * alpha2, p3.copy())
 
 
+SPLIT_TIE = 1e-9  # px: interior errors this close to the worst count as tied
+
+
 def _max_error(points: np.ndarray, c: Cubic, u: np.ndarray) -> tuple[float, int]:
+    """The worst distance from the curve, and the interior vertex to split at.
+
+    A staircase outline puts two vertices at the same error to the last bit,
+    and which of them an argmax lands on is then a matter of arithmetic order —
+    the Rust port evaluates the same bezier in a different order and split the
+    other side of it. Vertices within `SPLIT_TIE` of the worst are tied, and the
+    tie goes to the one nearest the middle of the run (the lower index if two
+    are equally near), which both implementations compute alike.
+    """
     d = np.linalg.norm(_bezier(c, u) - points, axis=1)
-    i = int(np.argmax(d[1:-1]) + 1) if len(d) > 2 else len(d) // 2
+    if len(d) <= 2:
+        return float(d.max()), len(d) // 2
+    inner = d[1:-1]
+    tied = np.nonzero(inner >= float(inner.max()) - SPLIT_TIE)[0] + 1
+    mid = (len(d) - 1) / 2.0
+    i = int(min(tied.tolist(), key=lambda k: (abs(k - mid), k)))
     return float(d.max()), i
 
 

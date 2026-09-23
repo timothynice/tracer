@@ -120,12 +120,36 @@ def test_both_backends_reconstruct_a_ramp_as_one_gradient():
         assert len(_elements(svg)) == 1
 
 
-def test_the_rust_backend_is_deterministic():
-    """skimage's `medial_axis` is seeded from the OS, so the Python pipeline's
-    stroke geometry is not reproducible between runs. The Rust one is."""
-    rgba = _disc(size=48, radius=16.0)
+def _ring(size: int = 64, r_out: float = 22.0, r_in: float = 20.0) -> np.ndarray:
+    """A two-pixel ring: a thin region whose skeleton has a tie at every pixel."""
+    ys, xs = np.mgrid[0:size, 0:size].astype(float)
+    cover = np.zeros((size, size))
+    for dy in (0.125, 0.375, 0.625, 0.875):
+        for dx in (0.125, 0.375, 0.625, 0.875):
+            rr = np.hypot(ys + dy - size / 2, xs + dx - size / 2)
+            cover += (rr <= r_out) & (rr >= r_in)
+    out = np.zeros((size, size, 4), np.uint8)
+    out[..., :3] = (0x20, 0x2B, 0x45)
+    out[..., 3] = np.round(cover / 16 * 255).astype(np.uint8)
+    return out
+
+
+def test_both_backends_are_deterministic():
+    """skimage's `medial_axis` breaks ties with an OS-seeded generator; the
+    stroke stage uses its own deterministic thinning order instead, so a trace
+    is reproducible in either engine."""
+    rgba = _ring()
     params = VexelParams()
     assert _rust(rgba, params) == _rust(rgba, params)
+    assert trace_rgba(rgba, params) == trace_rgba(rgba, params)
+
+
+def test_both_backends_stroke_a_thin_ring_the_same_way():
+    rgba = _ring()
+    params = VexelParams()
+    py, rs = trace_rgba(rgba, params), _rust(rgba, params)
+    assert ("stroke=" in py) == ("stroke=" in rs)
+    assert _elements(py) == _elements(rs)
 
 
 def test_the_rust_backend_rejects_a_mis_sized_buffer():

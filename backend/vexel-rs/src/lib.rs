@@ -9,6 +9,7 @@
 pub mod boundary;
 pub mod core;
 pub mod curves;
+pub mod dump;
 pub mod engine;
 pub mod fills;
 pub mod merge;
@@ -117,6 +118,98 @@ mod python {
         strokes::stroke_fidelity(&stroke, &crate::core::grid::Grid::from_vec(h, w, coverage))
     }
 
+
+    /// `strokes::is_thin` on a frame-sized mask, for the `strokes` stage.
+    #[pyfunction]
+    fn _is_thin(mask: Vec<u8>, h: usize, w: usize) -> bool {
+        let m = crate::core::grid::Grid::from_vec(h, w, mask.iter().map(|v| *v != 0).collect());
+        strokes::is_thin(&m)
+    }
+
+    /// `strokes::stroke_geometry` on a mask and its coverage field: the
+    /// polylines (flattened xy), which are closed, the cap per polyline and
+    /// the width, or `None` where the region is not stroked.
+    #[pyfunction]
+    #[allow(clippy::type_complexity)]
+    fn _stroke_geometry(
+        mask: Vec<u8>,
+        coverage: Vec<f64>,
+        h: usize,
+        w: usize,
+    ) -> Option<(Vec<Vec<f64>>, Vec<bool>, Vec<String>, f64)> {
+        let m = crate::core::grid::Grid::from_vec(h, w, mask.iter().map(|v| *v != 0).collect());
+        let cov = crate::core::grid::Grid::from_vec(h, w, coverage);
+        let st = strokes::stroke_geometry(&m, &cov)?;
+        Some((
+            st.polylines.iter().map(|p| p.iter().flat_map(|q| [q[0], q[1]]).collect()).collect(),
+            st.closed,
+            st.caps.iter().map(|c| c.to_string()).collect(),
+            st.width,
+        ))
+    }
+
+    /// `engine::group_thin` over a given label map and list of thin labels,
+    /// with the fills fitted the way the engine fits them.
+    #[pyfunction]
+    fn _group_thin(rgba: Vec<u8>, h: usize, w: usize, labels: Vec<i32>, thin_labels: Vec<i32>) -> Vec<Vec<i32>> {
+        use crate::core::grid::Grid;
+        let prep = prepare::prepare(&rgba, h, w);
+        let labels: Grid<i32> = Grid::from_vec(h, w, labels);
+        let fills = _fills_for(&prep, &labels, h, w);
+        let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+            match fills.get(&lab) {
+                Some(f) => f.evaluate(qx, qy),
+                None => vec![[0.0; 4]; qx.len()],
+            }
+        };
+        engine::group_thin(&thin_labels, &labels, &prep.rgb, &prep.alpha, &fill_at, 30.0)
+    }
+
+    /// `topology::fit_arc` on one placed arc, for `tools/diffcheck.py`'s
+    /// `segments` stage: the Python's arc state in, this side's fitted segments
+    /// out, each as its kind followed by its numbers (`L x0 y0 x1 y1`,
+    /// `C p0 c1 c2 p1`, `A p0 p1 r large sweep`).
+    #[pyfunction]
+    #[pyo3(signature = (pts, closed, t0, t1, trim0, trim1, sliver, mirror, corner_threshold, tol, snap_axis_deg))]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn _fit_arc(
+        pts: Vec<f64>,
+        closed: bool,
+        t0: Option<(f64, f64)>,
+        t1: Option<(f64, f64)>,
+        trim0: f64,
+        trim1: f64,
+        sliver: Option<Vec<bool>>,
+        mirror: Option<(f64, f64, f64, f64)>,
+        corner_threshold: f64,
+        tol: f64,
+        snap_axis_deg: f64,
+    ) -> Vec<(String, Vec<f64>)> {
+        let pts: Vec<[f64; 2]> = pts.chunks(2).map(|c| [c[0], c[1]]).collect();
+        let params = curves::CurveParams { corner_threshold, tol, shape_fitting: true, snap_axis_deg };
+        let segs = topology::fit_arc(
+            &pts,
+            closed,
+            t0.map(|t| [t.0, t.1]),
+            t1.map(|t| [t.0, t.1]),
+            (trim0, trim1),
+            sliver.as_deref(),
+            mirror.map(|m| ([m.0, m.1], [m.2, m.3])),
+            &params,
+        );
+        segs.iter()
+            .map(|s| match s {
+                curves::Segment::Line { p0, p1 } => ("L".to_string(), vec![p0[0], p0[1], p1[0], p1[1]]),
+                curves::Segment::Cubic { p0, c1, c2, p1 } => {
+                    ("C".to_string(), vec![p0[0], p0[1], c1[0], c1[1], c2[0], c2[1], p1[0], p1[1]])
+                }
+                curves::Segment::Arc { p0, p1, r, large, sweep } => {
+                    ("A".to_string(), vec![p0[0], p0[1], p1[0], p1[1], *r, *large as u8 as f64, *sweep as u8 as f64])
+                }
+            })
+            .collect()
+    }
+
     #[pyfunction]
     fn _lstsq(a: Vec<f64>, rows: usize, cols: usize, b: Vec<f64>, bcols: usize) -> Vec<f64> {
         use crate::core::linalg::Mat;
@@ -203,7 +296,6 @@ mod python {
     #[pyfunction]
     fn _stage_arcs(rgba: Vec<u8>, h: usize, w: usize, labels: Vec<i32>, snap: bool, extend: bool) -> Vec<f64> {
         use crate::core::grid::Grid;
-        use std::collections::HashMap;
 
         let prep = prepare::prepare(&rgba, h, w);
         // The caller passes the label map, so this compares the boundary graph
@@ -315,8 +407,12 @@ mod python {
         m.add_function(wrap_pyfunction!(_rng_choice, m)?)?;
         m.add_function(wrap_pyfunction!(_fit_fill, m)?)?;
         m.add_function(wrap_pyfunction!(_lstsq, m)?)?;
+        m.add_function(wrap_pyfunction!(_fit_arc, m)?)?;
         m.add_function(wrap_pyfunction!(_medial_axis, m)?)?;
         m.add_function(wrap_pyfunction!(_stroke_fidelity, m)?)?;
+        m.add_function(wrap_pyfunction!(_is_thin, m)?)?;
+        m.add_function(wrap_pyfunction!(_stroke_geometry, m)?)?;
+        m.add_function(wrap_pyfunction!(_group_thin, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_ridge, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_watershed, m)?)?;
         Ok(())

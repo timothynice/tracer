@@ -11,14 +11,60 @@ lines come out at their true width), fit the centreline with curves and emit
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import numpy as np
 from scipy import ndimage
-from skimage.morphology import medial_axis
+from skimage.morphology._skeletonize import _pattern_of, _table_lookup
+from skimage.morphology._skeletonize_various_cy import _skeletonize_loop
 
 from studi0trace.engines.vexel.curves import CurveParams, Segment, fit_closed_smooth, fit_open, path_d
 
 _OFFSETS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+_EIGHT = ndimage.generate_binary_structure(2, 2)
+
+
+@lru_cache(maxsize=1)
+def _skeleton_tables() -> tuple[np.ndarray, np.ndarray]:
+    """skimage's keep table (a foreground pixel stays when removing it would
+    change the local connectivity, or when it has fewer than three neighbours)
+    and its cornerness table (background cells in the 3x3 neighbourhood)."""
+    patterns = [_pattern_of(index) for index in range(512)]
+    centre = (np.arange(512) & 16).astype(bool)
+    splits = np.array([
+        ndimage.label(p, _EIGHT)[1] != ndimage.label(_pattern_of(index & ~16), _EIGHT)[1]
+        for index, p in enumerate(patterns)
+    ])
+    few = np.array([p.sum() < 3 for p in patterns])
+    keep = centre & (splits | few)
+    corner = np.array([9 - p.sum() for p in patterns])
+    return np.ascontiguousarray(keep, np.uint8), corner
+
+
+def medial_axis(image: np.ndarray) -> np.ndarray:
+    """`skimage.morphology.medial_axis`, with a deterministic processing order.
+
+    skimage thins pixels in order of distance to the background, then
+    cornerness, and breaks the remaining ties with a generator seeded from the
+    OS — so two runs over one image give two skeletons, and whether a thin
+    region is stroked or filled changes between runs. Here the last tiebreak is
+    the pixel's raster index, which plays exactly the same role (it only ever
+    separates pixels that already tie on both distance and cornerness) and is
+    what `vexel-rs/src/core/skeleton.rs` does, so the two engines agree.
+    """
+    mask = np.ascontiguousarray(image, dtype=bool)
+    keep, cornerness = _skeleton_tables()
+    distance = ndimage.distance_transform_edt(mask)
+    corner = _table_lookup(mask, cornerness)
+    rows, cols = np.nonzero(mask)  # raster order
+    if rows.size == 0:
+        return np.zeros_like(mask)
+    # lexsort is stable: pixels tying on distance and cornerness keep raster order
+    order = np.lexsort((corner[mask], distance[mask]))
+    result = np.ascontiguousarray(mask, np.uint8)
+    _skeletonize_loop(result, np.ascontiguousarray(rows, np.intp), np.ascontiguousarray(cols, np.intp),
+                      np.ascontiguousarray(order, np.int32), keep)
+    return result.astype(bool)
 
 
 @dataclass

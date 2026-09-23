@@ -88,3 +88,49 @@ def test_jpeg_input_survives():
     result = VexelEngine().trace(image, VexelParams())
     assert result.stats.paths + result.svg.count("<rect") >= 2
     assert result.elapsed_ms < 5000
+
+
+def _rim_scene():
+    """Two opaque regions, 1 and 2, with a one-pixel rim (label 3) between
+    them: every rim pixel is exactly one step from each, a distance tie."""
+    labels = np.ones((8, 9), np.int32)
+    labels[:, 4] = 3
+    labels[:, 5:] = 2
+    ys, xs = np.mgrid[0:8, 0:9]
+    xs = xs.astype(float) + 0.5
+    ys = ys.astype(float) + 0.5
+    rgba = np.zeros((8, 9, 4))
+    rgba[..., 3] = 255.0
+    rgba[:, :4, :3] = (250.0, 250.0, 250.0)
+    rgba[:, 5:, :3] = (30.0, 30.0, 30.0)
+    # the rim is an anti-aliased mixture: the top half mostly pale, the bottom mostly dark
+    rgba[:4, 4, :3] = 200.0
+    rgba[4:, 4, :3] = 80.0
+    fills = {1: np.array([250.0, 250.0, 250.0, 255.0]), 2: np.array([30.0, 30.0, 30.0, 255.0])}
+
+    def fill_at(lab, qx, qy):
+        return np.tile(fills[lab], (len(qx), 1))
+
+    return labels, xs, ys, rgba, fill_at
+
+
+def test_split_rim_breaks_a_distance_tie_by_the_pixels_own_colour():
+    from studi0trace.engines.vexel.engine import split_rim
+
+    labels, xs, ys, rgba, fill_at = _rim_scene()
+    out = split_rim(labels, labels == 3, [2, 1], xs, ys, rgba, fill_at)
+    assert (out[:4, 4] == 1).all(), "pale rim pixels join the pale region"
+    assert (out[4:, 4] == 2).all(), "dark rim pixels join the dark region"
+    assert (out[:, :4] == 1).all() and (out[:, 5:] == 2).all(), "nothing else moves"
+
+
+def test_split_rim_does_not_depend_on_candidate_order():
+    from studi0trace.engines.vexel.engine import split_rim
+
+    labels, xs, ys, rgba, fill_at = _rim_scene()
+    # the rim is a mid grey both fills are equally far from: the tie is total
+    rgba[:, 4, :3] = 140.0
+    a = split_rim(labels, labels == 3, [1, 2], xs, ys, rgba, fill_at)
+    b = split_rim(labels, labels == 3, [2, 1], xs, ys, rgba, fill_at)
+    assert (a == b).all()
+    assert (a[:, 4] == 1).all(), "a total tie goes to the lower label"

@@ -1532,7 +1532,7 @@ fn sharpen_piece(pts: &[P], lo: usize, hi: usize, corners: &[usize], trims: (f64
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f64, f64), sliver: Option<&[bool]>, mirror: Option<(P, P)>, params: &CurveParams) -> Vec<Segment> {
+pub fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f64, f64), sliver: Option<&[bool]>, mirror: Option<(P, P)>, params: &CurveParams) -> Vec<Segment> {
     if closed {
         if let Some(axis) = mirror {
             if pts.len() >= 3 {

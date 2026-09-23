@@ -20,7 +20,7 @@ from skimage.segmentation import relabel_sequential
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
 from studi0trace.engines.vexel.boundary import contours, coverage_field, thin_coverage
-from studi0trace.engines.vexel import refine_render, reuse
+from studi0trace.engines.vexel import dump, refine_render, reuse
 from studi0trace.engines.vexel.curves import CurveParams, PathShape, Shape, fit_shape, shape_svg
 from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import MergeParams, adjacency, merge_regions
@@ -179,6 +179,28 @@ def _group_thin(thin_labels: list[int], labels: np.ndarray, rgb: np.ndarray, alp
     return list(groups.values())
 
 
+def split_rim(labels: np.ndarray, rim: np.ndarray, cands: list[int], xs: np.ndarray, ys: np.ndarray,
+              rgba255: np.ndarray, fill_at) -> np.ndarray:
+    """Hand every pixel of `rim` to the nearest of `cands`.
+
+    A rim is a pixel or two wide, so exact distance ties are the rule, not the
+    exception: a pixel one step from each of two regions has to go somewhere,
+    and the ring downstream is drawn around whichever it joins. The rim pixel's
+    own colour breaks the tie — it is an anti-aliased mixture, and the fill it is
+    closer to is the region it is mostly made of — and the lower label breaks
+    what is left, so the answer never rests on the order the candidates came in.
+    """
+    cands = sorted(cands)
+    dists = np.stack([ndimage.distance_transform_edt(labels != n)[rim] for n in cands])
+    qx, qy, colour = xs[rim], ys[rim], rgba255[rim][:, :3]
+    off = np.stack([np.linalg.norm(colour - fill_at(n, qx, qy)[:, :3], axis=1) for n in cands])
+    nearest = dists.min(axis=0)
+    off = np.where(dists <= nearest + 1e-9, off, np.inf)
+    out = labels.copy()
+    out[rim] = np.asarray(cands)[np.argmin(off, axis=0)]
+    return out
+
+
 def _ring_area(poly: np.ndarray) -> float:
     if len(poly) < 3:
         return 0.0
@@ -261,6 +283,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     grad = discontinuity(prep.features)
     labels0 = initial_labels(grad, prep.features, min_region=p.min_region)
     labels = merge_regions(labels0, prep.features, MergeParams(detail=p.detail, gradients=p.gradients), grad)
+    dump.labels("labels_merge", labels)
     if not p.gradients:
         labels = posterize_regions(labels, prep.features, p.detail, p.min_region, grad)
 
@@ -305,16 +328,23 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # The residual is normalised per region by its own fit error, so a smooth
     # region that a gradient model fits imperfectly is not shredded into
     # fragments; only pixels that are outliers *for their region* qualify.
+    # A pixel's colour counts in proportion to how much of it shows: under a
+    # transparent pixel the colour is inpainted and means nothing, and measuring
+    # it left a whole transparent field hovering at the threshold, where the
+    # last bits of the fill decided which of its inpainting seams were "features".
     residual = np.zeros((height, width), np.float32)
     for lab in ids:
         m = labels == lab
-        pred = fills[lab].evaluate(xs[m], ys[m])
-        r = np.sqrt(((rgba255[m] - pred) ** 2).sum(axis=1))
+        diff = rgba255[m] - fills[lab].evaluate(xs[m], ys[m])
+        cover = prep.alpha[m]
+        r = np.sqrt(cover * cover * (diff[:, :3] ** 2).sum(axis=1) + diff[:, 3] ** 2)
         base = 7.5 * p.detail
         inliers = r[r < base]  # the swallowed feature itself must not inflate the scale
         fit_rms = float(np.sqrt(np.mean(inliers * inliers))) if inliers.size else 0.0
         residual[m] = r / max(base, 4.0 * fit_rms)
+    dump.labels("labels_clear", labels)
     labels, rescued = rescue_features(labels, residual, threshold=1.0, min_region=p.min_region)
+    dump.labels("labels_rescue", labels)
     if rescued:
         ids = [int(i) for i in np.unique(labels) if i != 0]
         fills.clear()
@@ -323,6 +353,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
 
     # Join gradient fragments (glows, off-centre radials) that one real fill explains.
     labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
+    dump.labels("labels_refine", labels)
     if changed:
         ids = [int(i) for i in np.unique(labels) if i != 0]
         visible.clear()
@@ -385,7 +416,9 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 cx, cy = float(np.average(xs[m], weights=w)), float(np.average(ys[m], weights=w))
                 opaque_nbrs = []
                 colour_match = False
-                for n in neighbours.get(t, ()):
+                # Sorted: the order candidates are tried in must not depend on
+                # how a set happens to hash its members.
+                for n in sorted(neighbours.get(t, ())):
                     if n in thin_set or n in invisible:
                         continue
                     n_fill = fills[n].evaluate(np.array([cx]), np.array([cy]))[0]
@@ -402,12 +435,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                     if len(cands) == 1:
                         labels = np.where(m, cands[0], labels)
                     else:
-                        # each rim pixel joins the nearest opaque neighbour
-                        dists = np.stack([ndimage.distance_transform_edt(labels != n)[m] for n in cands])
-                        nearest = np.asarray(cands)[np.argmin(dists, axis=0)]
-                        new = labels.copy()
-                        new[m] = nearest
-                        labels = new
+                        labels = split_rim(labels, m, cands, xs, ys, rgba255, fill_at)
                     fills.pop(t, None)
                     visible.pop(t, None)
                     order.remove(t)
@@ -415,6 +443,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 thin_labels = [lab for lab in thin_labels if lab not in absorbed]
                 enc = enclosure(labels)
         groups = _group_thin(thin_labels, labels, prep.rgb, prep.alpha, fill_at)
+        dump.text("strokes", f"thin={thin_labels} groups={groups}\n")
         transparent = np.isin(labels, list(invisible)) if invisible else np.zeros_like(labels, dtype=bool)
         for members in groups:
             union = np.isin(labels, members)
@@ -424,7 +453,10 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             field = thin_coverage(grown, labels, prep.rgb, prep.alpha, fill_at)
             stroke = stroke_geometry(union, field)
             if stroke is None:
+                dump.text("strokes", f"group {members}: no geometry\n")
                 continue
+            dump.text("strokes", "group %s: width=%.6f polylines=%s closed=%s fidelity=%.6f\n" % (
+                members, stroke.width, [len(q) for q in stroke.polylines], stroke.closed, stroke_fidelity(stroke, field)))
             # A letterform is thin, elongated and of consistent width — it passes
             # every geometric test for being a stroke, and stroking it mangles
             # its terminals and joins. Only the reconstruction tells them apart:
@@ -478,10 +510,12 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # The boundary, once: every edge between two regions is placed sub-pixel and
     # fitted a single time, so the two regions that share it are handed the same
     # curve and cannot leave a hairline between them.
+    dump.labels("labels_to_topology", labels)
     bnd = topology.build(
         labels, prep.rgb, prep.alpha, fill_at, curve_params,
         rank={lab: i for i, lab in enumerate(order)} if stacked else None,
     )
+    dump.arcs("arcs", bnd)
 
     # Every shape as it stands in the graph, fitted once: a record holds the
     # labels it paints, a whole-shape primitive or the rings whose fitted arcs

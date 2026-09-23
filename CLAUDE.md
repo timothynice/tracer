@@ -14,7 +14,12 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   Python needs the same fix in `vexel-rs/src/`, and `tools/diffcheck.py` is what
   proves it landed.
 - `backend/tools/diffcheck.py` — runs a pipeline stage in both implementations
-  over the corpus and reports where they disagree
+  over the corpus and reports where they disagree. Most stages feed both sides
+  one input (`segments` hands the Python's placed arcs to both fitters and
+  expects the same segments back); `trace_labels` and `trace_arcs` run the two engines end to end
+  (`VEXEL_DUMP=<dir>` makes either engine write the label map it hands the
+  boundary build, the fitted arcs and the stroke decisions — `vexel/dump.py`,
+  `vexel-rs/src/dump.rs`, one format) and compare what each actually produced
 - `backend/bench/` — Vexel Bench (`python -m bench …`); `bench/geometry.py` measures
   against vector truth, `bench/truth.py` reads the truth's corners
 - `backend/tests/` — pytest; run `cd backend && .venv/bin/python -m pytest`.
@@ -107,7 +112,21 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
   the fills to a colour level; where the two are allowed to differ, the
-  tolerance table says so and says why.
+  tolerance table says so and says why. Nothing in either pipeline may depend
+  on an order that is not defined — a Python `set`'s iteration order decided
+  which of two equidistant regions a rim pixel joined, and three such pixels
+  turned a wedge tip into a hairpin. Ties are broken by something both engines
+  compute (`engine.split_rim`: distance, then the pixel's own colour, then the
+  lower label). The stroke stage's skeleton is `strokes.medial_axis`, skimage's
+  algorithm with a raster-index tiebreak instead of skimage's OS-seeded one,
+  so a trace is reproducible and the two engines thin identically (`diffcheck
+  skeleton`). The rescue residual weights a pixel's colour by its alpha: the
+  colour under a transparent pixel is inpainted and means nothing, and scoring
+  it left whole transparent fields at the rescue threshold. Where two
+  candidates tie to the last bit — a staircase puts two vertices at the same
+  distance from a cubic — an argmax answers by arithmetic order, which the two
+  languages do not share; `curves._max_error` calls anything within
+  `SPLIT_TIE` tied and takes the vertex nearest the run's middle.
 - Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`.
 - Frontend follows the Studi0 design system (semantic HSL tokens, Poppins,
   `.dark` on `<html>`, `h-10 rounded-md` buttons, sticky blurred header). Never

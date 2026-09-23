@@ -103,6 +103,53 @@ fn mask_pixels(mask: &Mask, xs: &Grid<f64>, ys: &Grid<f64>, rgba: &[[f64; 4]]) -
     (x, y, c)
 }
 
+/// Hand every pixel of `rim` to the nearest of `cands`. See the Python `split_rim`.
+///
+/// A rim is a pixel or two wide, so exact distance ties are the rule: the rim
+/// pixel's own colour breaks them (the fill it is closer to is the region it is
+/// mostly made of), and the lower label breaks what is left, so the answer
+/// never rests on the order the candidates came in.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn split_rim(
+    l: &mut Labels,
+    rim: &Mask,
+    cands: &[i32],
+    xs: &Grid<f64>,
+    ys: &Grid<f64>,
+    rgba255: &[[f64; 4]],
+    fill_at: &dyn Fn(i32, &[f64], &[f64]) -> Vec<[f64; 4]>,
+) {
+    let mut cands: Vec<i32> = cands.to_vec();
+    cands.sort_unstable();
+    let dists: Vec<Grid<f64>> = cands
+        .par_iter()
+        .map(|n| crate::core::edt::edt_to_true(&labels::mask_of(l, *n)))
+        .collect();
+    let assign: Vec<(usize, i32)> = (0..l.len())
+        .filter(|i| rim.data[*i])
+        .map(|i| {
+            let nearest = dists.iter().map(|d| d.data[i]).fold(f64::INFINITY, f64::min);
+            let mut best = 0usize;
+            let mut best_off = f64::INFINITY;
+            for (k, n) in cands.iter().enumerate() {
+                if dists[k].data[i] > nearest + 1e-9 {
+                    continue;
+                }
+                let f = fill_at(*n, &[xs.data[i]], &[ys.data[i]])[0];
+                let off = (0..3).map(|c| (rgba255[i][c] - f[c]).powi(2)).sum::<f64>().sqrt();
+                if off < best_off {
+                    best_off = off;
+                    best = k;
+                }
+            }
+            (i, cands[best])
+        })
+        .collect();
+    for (i, v) in assign {
+        l.data[i] = v;
+    }
+}
+
 struct FitOut {
     fills: HashMap<i32, Fill>,
     visible: HashMap<i32, bool>,
@@ -152,7 +199,7 @@ fn fit_regions(
 /// Union-find over thin regions that touch (within one pixel) and have similar
 /// ink colour. Returns groups of labels.
 #[allow(clippy::too_many_arguments)]
-fn group_thin(
+pub(crate) fn group_thin(
     thin_labels: &[i32],
     l: &Labels,
     rgb: &Image,
@@ -233,6 +280,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         Some(&grad),
     );
     t.lap("merge_regions");
+    crate::dump::labels("labels_merge", &l);
     if !p.gradients {
         l = posterize_regions(&l, &prep.features, p.detail, p.min_region, &grad);
     }
@@ -296,11 +344,16 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         .map(|lab| {
             let idx: Vec<usize> = index.pixels(*lab).iter().map(|i| *i as usize).collect();
             let fill = &fills[lab];
+            // A pixel's colour counts in proportion to how much of it shows:
+            // under a transparent pixel the colour is inpainted and means
+            // nothing (see the Python).
             let r: Vec<f64> = idx
                 .iter()
                 .map(|i| {
                     let pred = fill.evaluate_one(xs.data[*i], ys.data[*i]);
-                    (0..4).map(|c| (rgba255[*i][c] - pred[c]).powi(2)).sum::<f64>().sqrt()
+                    let cover = prep.alpha.data[*i];
+                    let colour: f64 = (0..3).map(|c| (rgba255[*i][c] - pred[c]).powi(2)).sum();
+                    (cover * cover * colour + (rgba255[*i][3] - pred[3]).powi(2)).sqrt()
                 })
                 .collect();
             let base = 7.5 * p.detail;
@@ -320,8 +373,10 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         }
     }
     t.lap("residual");
+    crate::dump::labels("labels_clear", &l);
     let (rescued_labels, rescued) = rescue_features(&l, &residual, 1.0, p.min_region);
     l = rescued_labels;
+    crate::dump::labels("labels_rescue", &l);
     if !rescued.is_empty() {
         index = LabelIndex::build(&l);
         ids = labels::unique_ids(&l);
@@ -361,6 +416,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     }
 
     t.lap("refine_merge");
+    crate::dump::labels("labels_refine", &l);
     let mut enc = enclosure(&l);
     let mut order = paint_order(&enc);
     t.lap("enclosure");
@@ -492,26 +548,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                             }
                         }
                     } else {
-                        // each rim pixel joins the nearest opaque neighbour
-                        let dists: Vec<Grid<f64>> = cands
-                            .par_iter()
-                            .map(|n| crate::core::edt::edt_to_true(&labels::mask_of(&l, *n)))
-                            .collect();
-                        let assign: Vec<(usize, i32)> = (0..l.len())
-                            .filter(|i| m.data[*i])
-                            .map(|i| {
-                                let mut best = 0usize;
-                                for k in 1..dists.len() {
-                                    if dists[k].data[i] < dists[best].data[i] {
-                                        best = k;
-                                    }
-                                }
-                                (i, cands[best])
-                            })
-                            .collect();
-                        for (i, v) in assign {
-                            l.data[i] = v;
-                        }
+                        split_rim(&mut l, &m, cands, &xs, &ys, &rgba255, &fill_at);
                     }
                     fills.remove(t);
                     visible.remove(t);
@@ -525,6 +562,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         }
 
         let groups = group_thin(&thin_labels, &l, &prep.rgb, &prep.alpha, &fill_at, 30.0);
+        crate::dump::text("strokes", &format!("thin={:?} groups={:?}\n", thin_labels, groups));
         let transparent = Grid {
             h: height,
             w: width,
@@ -547,7 +585,21 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                     .collect(),
             };
             let field = thin_coverage(&grown, &l, &prep.rgb, &prep.alpha, &fill_at);
-            let Some(stroke) = stroke_geometry(&union, &field) else { continue };
+            let Some(stroke) = stroke_geometry(&union, &field) else {
+                crate::dump::text("strokes", &format!("group {:?}: no geometry\n", members));
+                continue;
+            };
+            crate::dump::text(
+                "strokes",
+                &format!(
+                    "group {:?}: width={:.6} polylines={:?} closed={:?} fidelity={:.6}\n",
+                    members,
+                    stroke.width,
+                    stroke.polylines.iter().map(|p| p.len()).collect::<Vec<_>>(),
+                    stroke.closed,
+                    stroke_fidelity(&stroke, &field)
+                ),
+            );
             // A letterform is thin, elongated and of consistent width — it
             // passes every geometric test for being a stroke, and stroking it
             // mangles its terminals and joins. Only the reconstruction tells
@@ -696,6 +748,7 @@ fn emit(
     // fitted a single time, so the two regions that share it are handed the same
     // curve and cannot leave a hairline between them.
     let rank: HashMap<i32, usize> = order.iter().enumerate().map(|(i, lab)| (*lab, i)).collect();
+    crate::dump::labels("labels_to_topology", l);
     let bnd = topology::build(
         l,
         &prep.rgb,
@@ -704,6 +757,7 @@ fn emit(
         curve_params,
         if stacked { Some(&rank) } else { None },
     );
+    crate::dump::arcs("arcs", &bnd);
 
     let mut defs: Vec<String> = Vec::new();
     // Either a stroke's finished markup, or a shape with its paint attributes,
@@ -777,4 +831,63 @@ fn emit(
         body,
         elements.concat()
     )
+}
+
+#[cfg(test)]
+mod rim_tests {
+    use super::*;
+
+    /// Two opaque regions, 1 and 2, with a one-pixel rim (label 3) between
+    /// them: every rim pixel is exactly one step from each, a distance tie.
+    fn scene() -> (Labels, Mask, Grid<f64>, Grid<f64>, Vec<[f64; 4]>) {
+        let (h, w) = (8usize, 9usize);
+        let mut l = Grid::<i32>::new(h, w);
+        let mut rim = Mask::new(h, w);
+        let mut xs = Grid::<f64>::new(h, w);
+        let mut ys = Grid::<f64>::new(h, w);
+        let mut rgba = vec![[0.0; 4]; h * w];
+        for r in 0..h {
+            for c in 0..w {
+                let i = r * w + c;
+                l.data[i] = if c < 4 { 1 } else if c == 4 { 3 } else { 2 };
+                rim.data[i] = c == 4;
+                xs.data[i] = c as f64 + 0.5;
+                ys.data[i] = r as f64 + 0.5;
+                let g = if c < 4 { 250.0 } else if c > 4 { 30.0 } else if r < 4 { 200.0 } else { 80.0 };
+                rgba[i] = [g, g, g, 255.0];
+            }
+        }
+        (l, rim, xs, ys, rgba)
+    }
+
+    fn fill_at(lab: i32, qx: &[f64], _qy: &[f64]) -> Vec<[f64; 4]> {
+        let g = if lab == 1 { 250.0 } else { 30.0 };
+        vec![[g, g, g, 255.0]; qx.len()]
+    }
+
+    #[test]
+    fn a_distance_tie_goes_to_the_fill_the_pixel_is_closer_to() {
+        let (mut l, rim, xs, ys, rgba) = scene();
+        split_rim(&mut l, &rim, &[2, 1], &xs, &ys, &rgba, &fill_at);
+        for r in 0..8 {
+            assert_eq!(l.data[r * 9 + 4], if r < 4 { 1 } else { 2 }, "row {r}");
+            assert_eq!(l.data[r * 9], 1);
+            assert_eq!(l.data[r * 9 + 8], 2);
+        }
+    }
+
+    #[test]
+    fn a_total_tie_goes_to_the_lower_label_whatever_the_candidate_order() {
+        let (mut a, rim, xs, ys, mut rgba) = scene();
+        for r in 0..8 {
+            rgba[r * 9 + 4] = [140.0, 140.0, 140.0, 255.0];
+        }
+        let mut b = a.clone();
+        split_rim(&mut a, &rim, &[1, 2], &xs, &ys, &rgba, &fill_at);
+        split_rim(&mut b, &rim, &[2, 1], &xs, &ys, &rgba, &fill_at);
+        assert_eq!(a.data, b.data);
+        for r in 0..8 {
+            assert_eq!(a.data[r * 9 + 4], 1);
+        }
+    }
 }

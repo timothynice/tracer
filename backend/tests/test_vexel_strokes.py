@@ -119,3 +119,52 @@ def test_the_gate_keeps_real_strokes_and_drops_mangled_ones():
     # Turned all the way strict, nothing is allowed to become a stroke.
     filled = trace_rgba(img, VexelParams(stroke_tolerance=0.05))
     assert "stroke-width" not in filled
+
+
+def _ring_mask(size: int = 48, r_out: float = 18.0, r_in: float = 16.0) -> np.ndarray:
+    ys, xs = np.mgrid[0:size, 0:size].astype(float) + 0.5
+    rr = np.hypot(xs - size / 2, ys - size / 2)
+    return (rr <= r_out) & (rr >= r_in)
+
+
+def test_medial_axis_is_deterministic():
+    """skimage breaks thinning-order ties with an OS-seeded generator, so its
+    skeleton of a two-pixel ring changes between calls; ours must not."""
+    from studi0trace.engines.vexel.strokes import medial_axis
+
+    m = _ring_mask()
+    first = medial_axis(m)
+    assert first.any()
+    for _ in range(5):
+        assert (medial_axis(m) == first).all()
+
+
+def test_medial_axis_matches_skimage_on_its_own_example():
+    from studi0trace.engines.vexel.strokes import medial_axis
+
+    square = np.zeros((7, 7), bool)
+    square[1:-1, 2:-2] = True
+    expected = np.array([
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 1, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 1, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0],
+    ], bool)
+    assert (medial_axis(square) == expected).all()
+
+
+def test_medial_axis_agrees_with_the_rust_port():
+    import pytest
+
+    from studi0trace.engines.vexel import engine as vexel
+    from studi0trace.engines.vexel.strokes import medial_axis
+
+    if vexel._vexel_rs is None:
+        pytest.skip("the vexel_rs extension is not built")
+    for m in (_ring_mask(), _ring_mask(size=40, r_out=15.0, r_in=14.0)):
+        h, w = m.shape
+        rs = np.asarray(vexel._vexel_rs._medial_axis(m.astype(np.uint8).ravel().tolist(), h, w), dtype=bool).reshape(h, w)
+        assert (medial_axis(m) == rs).all()

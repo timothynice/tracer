@@ -1471,6 +1471,12 @@ fn generate_bezier(points: &[P], u: &[f64], t1: P, t2: P) -> (P, P, P, P) {
     )
 }
 
+/// px: interior errors this close to the worst count as tied. See the Python `_max_error`.
+pub const SPLIT_TIE: f64 = 1e-9;
+
+/// The worst distance from the curve, and the interior vertex to split at:
+/// among the vertices tied for worst, the one nearest the middle of the run
+/// (the lower index if two are equally near). See the Python `_max_error`.
 fn max_error(points: &[P], c: &(P, P, P, P), u: &[f64]) -> (f64, usize) {
     let d: Vec<f64> = u
         .iter()
@@ -1478,10 +1484,17 @@ fn max_error(points: &[P], c: &(P, P, P, P), u: &[f64]) -> (f64, usize) {
         .map(|(i, t)| norm(sub(bezier(c.0, c.1, c.2, c.3, *t), points[i])))
         .collect();
     let split = if d.len() > 2 {
+        let top = d[1..d.len() - 1].iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let mid = (d.len() - 1) as f64 / 2.0;
         let mut best = 1usize;
+        let mut best_key = f64::INFINITY;
         for i in 1..d.len() - 1 {
-            if d[i] > d[best] {
-                best = i;
+            if d[i] >= top - SPLIT_TIE {
+                let key = (i as f64 - mid).abs();
+                if key < best_key {
+                    best_key = key;
+                    best = i;
+                }
             }
         }
         best

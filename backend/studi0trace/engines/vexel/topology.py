@@ -171,8 +171,8 @@ class Arc:
     t1: np.ndarray | None = None
     tip0: bool = False  # this end is the tip of a wedge closing to a point
     tip1: bool = False
-    trim0: float = 1.5  # vertices within this of each end are not believed (NODE_TRIM, widened by the node's move)
-    trim1: float = 1.5
+    trim0: float = NODE_TRIM  # vertices within this of each end are not believed (widened by the node's move)
+    trim1: float = NODE_TRIM
     sliver: np.ndarray | None = None  # per vertex: placed on a pixel handed back to a cut-off wedge (three-fill mixture)
     mirror: tuple[np.ndarray, np.ndarray] | None = None  # a closed arc's mirror axis (point, unit direction), when it has one
 

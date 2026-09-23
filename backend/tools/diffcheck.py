@@ -33,6 +33,8 @@ from studi0trace.engines.vexel.prepare import prepare  # noqa: E402
 from studi0trace.engines.vexel.weights import interior_weights  # noqa: E402
 from studi0trace.engines.vexel import topology  # noqa: E402
 from studi0trace.engines.vexel.curves import CurveParams  # noqa: E402
+from studi0trace.engines.vexel.engine import VexelParams, trace_rgba  # noqa: E402
+from studi0trace.engines.vexel.strokes import is_thin, medial_axis  # noqa: E402
 
 CORPUS = pathlib.Path(__file__).resolve().parent.parent / "bench" / "corpus"
 
@@ -76,6 +78,29 @@ TOLERANCE = {
     # handful of pixels in a frame. `arcs` is then given one extended map so that
     # what it compares is the graph, not this.
     "wedges": ("max", 0.0, 0.002),
+    # The skeleton decides whether a thin region is a stroke, and skimage's
+    # would decide it differently on every run; both engines now thin in the
+    # same deterministic order, so the two are one skeleton, pixel for pixel.
+    "skeleton": ("max", 0.0, 0.0),
+    # The stages above are each fed one input. `trace` runs the two engines
+    # end to end and compares what each actually handed the boundary build —
+    # the label map after every stage of its own (the rescue, the refine merge,
+    # the thin-rim absorb) — and the graph it fitted: every arc's vertices and
+    # every visible fitted segment. The labels are allowed what `labels0` is:
+    # the rim split breaks a distance tie on the pixel's colour against two
+    # fills that the two fitters agree on only to a colour level. The segments
+    # are compared as `arcs` are (a shape mismatch fails outright, the
+    # coordinates by RMS), because a segment's control points move with its
+    # vertices. The bled copies are not compared: never seen, fitted loosely
+    # from the same vertices, and their line-or-curve calls sit on knife edges.
+    # The fit, on its own: every arc the Python placed and junction-placed is
+    # handed to both fitters as it stands (vertices, pinned tangents, trims,
+    # sliver flags, mirror axis). Which segments come out — line, cubic or
+    # circular arc, and how many — must match exactly; the numbers then agree
+    # to the last bits the two least-squares solvers leave.
+    "segments": ("rms", 1e-3, 0.0),
+    "trace_labels": ("max", 0.0, 0.002),
+    "trace_arcs": ("rms", 0.05, 0.0),
 }
 
 
@@ -290,6 +315,154 @@ def arcs(path):
         print(f"  FAIL arcs      {path.name}: {len(rows)} arcs / {py.size} values in Python, {len(rs_rows)} arcs / {rs.size} in Rust")
         return np.zeros(1), np.full(1, 1e9)
     return py, rs
+
+
+@stage
+def skeleton(path):
+    """The medial axis of every thin region of the merged map, as the stroke
+    stage takes it: cropped to the region's box with a one-pixel margin."""
+    a, prep, labels, _fills = _prepared(path)
+    h, w = a.shape[:2]
+    py_out, rs_out = [], []
+    for lab in (int(i) for i in np.unique(labels) if i):
+        m = labels == lab
+        if not is_thin(m):
+            continue
+        rows, cols = np.nonzero(m)
+        crop = np.pad(m[rows.min():rows.max() + 1, cols.min():cols.max() + 1], 1)
+        py_out.append(medial_axis(crop).ravel())
+        rs_out.append(np.asarray(vexel_rs._medial_axis(crop.astype(np.uint8).ravel().tolist(), *crop.shape), dtype=bool))
+    if not py_out:
+        return np.zeros(1, np.int32), np.zeros(1, np.int32)
+    return np.concatenate(py_out).astype(np.int32), np.concatenate(rs_out).astype(np.int32)
+
+
+@stage
+def segments(path):
+    """What each fitter makes of the same placed arcs: the Python builds the
+    graph on one map, and every arc's state after the junctions are placed goes
+    to `topology._fit_arc` and to the Rust `fit_arc` alike."""
+    from studi0trace.engines.vexel.curves import CircArc, Cubic, Line
+
+    a, prep, labels, fills = _prepared(path)
+    params = CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True)
+    bnd = topology.build(labels, prep.rgb, prep.alpha,
+                         lambda lab, qx, qy: fills[lab].evaluate(qx, qy), params)
+
+    def py_seg(s):
+        if isinstance(s, Line):
+            return "L", [*s.p0, *s.p1]
+        if isinstance(s, Cubic):
+            return "C", [*s.p0, *s.c1, *s.c2, *s.p1]
+        assert isinstance(s, CircArc)
+        return "A", [*s.p0, *s.p1, s.r, float(s.large), float(s.sweep)]
+
+    py_out, rs_out = [], []
+    for arc in bnd.arcs:
+        py = [py_seg(s) for s in topology._fit_arc(arc, params)]
+        rs = vexel_rs._fit_arc(
+            arc.pts.ravel().tolist(), arc.closed,
+            None if arc.t0 is None else tuple(map(float, arc.t0)),
+            None if arc.t1 is None else tuple(map(float, arc.t1)),
+            float(arc.trim0), float(arc.trim1),
+            None if arc.sliver is None else [bool(v) for v in arc.sliver],
+            None if arc.mirror is None else (*map(float, arc.mirror[0]), *map(float, arc.mirror[1])),
+            params.corner_threshold, params.tol, params.snap_axis_deg,
+        )
+        if [k for k, _ in py] != [k for k, _ in rs]:
+            print(f"  FAIL segments  {path.name}: arc {arc.pair} ({len(arc.pts)} vertices) fits "
+                  f"{''.join(k for k, _ in py)} in Python, {''.join(k for k, _ in rs)} in Rust")
+            return np.zeros(1), np.full(1, 1e9)
+        py_out.extend(v for _, vals in py for v in vals)
+        rs_out.extend(v for _, vals in rs for v in vals)
+    return np.array(py_out, dtype=np.float64), np.array(rs_out, dtype=np.float64)
+
+
+def _read_labels(p: pathlib.Path) -> np.ndarray:
+    lines = p.read_text().splitlines()
+    return np.array([[int(v) for v in line.split()] for line in lines[1:]], dtype=np.int32)
+
+
+def _read_arcs(p: pathlib.Path) -> list[tuple]:
+    """Each arc as (pair, vertex count, vertices, segment kinds, segment numbers)."""
+    out, cur = [], None
+    for line in p.read_text().splitlines():
+        if line.startswith("arc "):
+            t = line.split()
+            cur = [(int(t[1]), int(t[2])), int(t[3][2:]), None, "", []]
+            out.append(cur)
+        elif line.startswith("  pts "):
+            cur[2] = [float(v) for tok in line.split()[1:] for v in tok.split(",")]
+        elif line.startswith("  seg "):
+            # The bled copy (`under`) is left out: it is never seen, it is
+            # fitted loosely from these same vertices, and its line-or-curve
+            # calls sit on knife edges that the last bits of the fills decide.
+            t = line.split()
+            cur[3] += t[1]
+            cur[4].extend(float(v) for v in t[2:])
+    return [tuple(c) for c in out]
+
+
+def _traced(path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    """Run both engines on `path` under `VEXEL_DUMP`; the two dump directories."""
+    import os
+    import tempfile
+
+    a = load(path)
+    h, w = a.shape[:2]
+    root = pathlib.Path(tempfile.mkdtemp(prefix="diffcheck-"))
+    py_dir, rs_dir = root / "python", root / "rust"
+    py_dir.mkdir()
+    rs_dir.mkdir()
+    saved = os.environ.get("VEXEL_DUMP")
+    try:
+        os.environ["VEXEL_DUMP"] = str(py_dir)
+        trace_rgba(a, VexelParams())
+        os.environ["VEXEL_DUMP"] = str(rs_dir)
+        vexel_rs.trace(a.tobytes(), w, h, VexelParams().model_dump())
+    finally:
+        if saved is None:
+            os.environ.pop("VEXEL_DUMP", None)
+        else:
+            os.environ["VEXEL_DUMP"] = saved
+    return py_dir, rs_dir
+
+
+_TRACED: dict[pathlib.Path, tuple[pathlib.Path, pathlib.Path]] = {}
+
+
+def _trace_dirs(path):
+    if path not in _TRACED:
+        _TRACED[path] = _traced(path)
+    return _TRACED[path]
+
+
+@stage
+def trace_labels(path):
+    """The label map each engine actually handed `topology.build`, after every
+    label stage of its own pipeline."""
+    py_dir, rs_dir = _trace_dirs(path)
+    return _read_labels(py_dir / "labels_to_topology.txt"), _read_labels(rs_dir / "labels_to_topology.txt")
+
+
+@stage
+def trace_arcs(path):
+    """The boundary graph each engine built and fitted on its own labels: every
+    arc's vertices and its visible fitted segments."""
+    py_dir, rs_dir = _trace_dirs(path)
+    py, rs = _read_arcs(py_dir / "arcs.txt"), _read_arcs(rs_dir / "arcs.txt")
+    key = lambda arc: (arc[0], arc[1], tuple(round(v, 6) for v in arc[2]))  # noqa: E731
+    py.sort(key=key)
+    rs.sort(key=key)
+    if [(a[0], a[1]) for a in py] != [(a[0], a[1]) for a in rs]:
+        print(f"  FAIL trace_arcs {path.name}: {len(py)} arcs in Python, {len(rs)} in Rust, or different pairs / vertex counts")
+        return np.zeros(1), np.full(1, 1e9)
+    for a, b in zip(py, rs):
+        if a[3] != b[3]:
+            print(f"  FAIL trace_arcs {path.name}: arc {a[0]} ({a[1]} vertices) is {a[3]} in Python, {b[3]} in Rust")
+            return np.zeros(1), np.full(1, 1e9)
+    flat = lambda arcs: np.array([v for a in arcs for v in (*a[2], *a[4])], dtype=np.float64)  # noqa: E731
+    return flat(py), flat(rs)
 
 
 def main() -> int:

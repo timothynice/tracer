@@ -1,11 +1,13 @@
-//! `skimage.morphology.medial_axis`, with one deliberate difference.
+//! `skimage.morphology.medial_axis`, with a deterministic processing order.
 //!
 //! skimage breaks ties in the processing order with `np.random.default_rng(None)`
-//! — seeded from the OS, so the Python engine's skeletons (and therefore which
-//! thin regions become strokes) are **not reproducible between runs**. Here the
-//! tiebreak is the pixel's raster index, which is deterministic and otherwise
-//! plays exactly the same role: it only ever separates pixels that already tie
-//! on both distance and cornerness.
+//! — seeded from the OS, so its skeletons (and therefore which thin regions
+//! become strokes) are **not reproducible between runs**. Here the tiebreak is
+//! the pixel's raster index, which is deterministic and otherwise plays exactly
+//! the same role: it only ever separates pixels that already tie on both
+//! distance and cornerness. The Python engine's `strokes.medial_axis` does the
+//! same, so the two produce one skeleton; `tools/diffcheck.py`'s `skeleton`
+//! stage holds them to it.
 
 use super::edt;
 use super::grid::{Grid, Mask};
