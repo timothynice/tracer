@@ -1328,6 +1328,99 @@ fn find_root(parent: &mut HashMap<u64, u64>, mut node: u64) -> u64 {
     node
 }
 
+/// Two wedges that meet tip to tip are one node: where two straight edges
+/// cross, the label map keeps a pixel or three of boundary between the regions
+/// on either side, and each wedge's tip is a node of its own. When the arc
+/// joining two tips is the boundary that carries on through both and the tips
+/// were placed closer than SHORT_ARC, both go to the corner read off the surer
+/// pair of sides; the arc collapses and `fit_arc` drops it. See `_tip_to_tip`
+/// in the Python. Reads `.0`, `.1`, `.2` and `.3` of each move only.
+fn tip_to_tip(moves: &mut [Junction], arcs: &[Arc], short: &[bool], reach: f64, limit: f64) {
+    let mut at: HashMap<ArcEnd, usize> = HashMap::new();
+    for (m, mv) in moves.iter().enumerate() {
+        for key in &mv.0 {
+            at.insert(*key, m);
+        }
+    }
+    let mut merged: Vec<bool> = vec![false; moves.len()];
+    // an arc end as the Python sorts its (index, 0 | -1) keys
+    let order = |e: &ArcEnd| (e.0, if e.1 { 1 } else { 0 });
+    for (idx, arc) in arcs.iter().enumerate() {
+        if arc.closed() || short[idx] {
+            continue;
+        }
+        let (Some(&m0), Some(&m1)) = (at.get(&(idx, true)), at.get(&(idx, false))) else {
+            continue;
+        };
+        if m0 == m1 || merged[m0] || merged[m1] {
+            continue;
+        }
+        let ends_of = |m: usize| -> Vec<ArcEnd> { moves[m].3.iter().map(|s| moves[m].0[*s]).collect() };
+        let (mut tips0, mut tips1) = (ends_of(m0), ends_of(m1));
+        if tips0.is_empty() || tips1.is_empty() || tips0.contains(&(idx, true)) || tips1.contains(&(idx, false)) {
+            continue;
+        }
+        let (a, b) = (moves[m0].1, moves[m1].1);
+        if (b[0] - a[0]).hypot(b[1] - a[1]) >= SHORT_ARC {
+            continue;
+        }
+        tips0.sort_by_key(order);
+        tips1.sort_by_key(order);
+        let sides: Vec<ArcEnd> = tips0.into_iter().chain(tips1).collect();
+        let line_of = |e: &ArcEnd| approach(&arcs[e.0].pts, e.1, TIP_TRIM + reach, TIP_TRIM, 2.0 * APPROACH_MAX, arcs[e.0].sliver.as_deref());
+        let through = [arc.pair.0, arc.pair.1];
+        let pairs: Vec<Vec<(ArcEnd, Option<(P, P, f64)>)>> = through
+            .iter()
+            .map(|lab| sides.iter().filter(|e| arcs[e.0].pair.0 == *lab || arcs[e.0].pair.1 == *lab).map(|e| (*e, line_of(e))).collect())
+            .collect();
+        if pairs.iter().any(|pair| pair.len() != 2 || pair.iter().any(|(_, l)| l.is_none())) {
+            continue;
+        }
+        let worst: Vec<f64> = pairs.iter().map(|pair| pair.iter().map(|(_, l)| l.unwrap().2).fold(f64::NEG_INFINITY, f64::max)).collect();
+        let sure = if worst[0] <= worst[1] { 0 } else { 1 };
+        let incident: Vec<ArcEnd> = moves[m0].0.iter().chain(moves[m1].0.iter()).copied().collect();
+        let lines: Vec<Option<(P, P, f64)>> = pairs[sure].iter().map(|(_, l)| *l).collect();
+        let node = on_border(node_estimate(&lines, [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], limit), arcs, &incident);
+        let mut collapsed = arc.pts.clone();
+        let last = collapsed.len() - 1;
+        collapsed[0] = node;
+        collapsed[last] = node;
+        if arc_length(&collapsed) >= 2.0 * SHORT_ARC {
+            continue;
+        }
+        let turned = incident.iter().any(|(i, at_start)| {
+            if *i == idx || arcs[*i].closed() {
+                return false;
+            }
+            let pts = &arcs[*i].pts;
+            let other = (*i, !*at_start);
+            let far = match at.get(&other) {
+                Some(&m) if m != m0 && m != m1 => moves[m].1,
+                _ => {
+                    if other.1 {
+                        pts[0]
+                    } else {
+                        pts[pts.len() - 1]
+                    }
+                }
+            };
+            let chord = [pts[pts.len() - 1][0] - pts[0][0], pts[pts.len() - 1][1] - pts[0][1]];
+            let run = if *at_start { [far[0] - node[0], far[1] - node[1]] } else { [node[0] - far[0], node[1] - far[1]] };
+            run[0] * chord[0] + run[1] * chord[1] <= 0.0
+        });
+        if turned {
+            continue;
+        }
+        let loose: Vec<ArcEnd> = pairs[1 - sure].iter().map(|(e, _)| *e).collect();
+        for m in [m0, m1] {
+            let inc = moves[m].0.clone();
+            moves[m].2.retain(|(s, _)| !loose.contains(&inc[*s]));
+            moves[m].1 = node;
+            merged[m] = true;
+        }
+    }
+}
+
 fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64) {
     const REACH_PX: f64 = 4.1;
     const TRIM: f64 = APPROACH_TRIM;
@@ -1585,6 +1678,9 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
         }
         moves.push((incident, target, pinned, tips));
     }
+
+    // After the tip-revert guard: a collapsed arc has no direction. See the Python.
+    tip_to_tip(&mut moves, arcs, &short, REACH_PX, LIMIT);
 
     for (incident, target, pinned, tips) in moves {
         for (slot, (i, at_start)) in incident.iter().enumerate() {
