@@ -685,6 +685,46 @@ def test_the_bled_copy_does_not_reach_where_a_shapes_edges_have_crossed():
     assert len(mid) and mid[:, 1].max() <= 10.0 + 0.3, f"the copy reached into a crossed sliver: {mid[:, 1].max():.2f}"
 
 
+# Silverpeak badge, arc (26, 138): five cubics joined smoothly. The Rust engine
+# has the same copy to the last bits (`under_tests` in vexel-rs/src/topology.rs).
+SILVERPEAK_ARC = [
+    ([600.6582867801136, 381.58124894983234], [599.3829822291585, 383.34094833479594],
+     [597.8606221538046, 386.2687495606855], [595.5, 386.92069397275225]),
+    ([595.5, 386.92069397275225], [593.8630926138252, 387.3727665849522],
+     [592.1336850978171, 386.68693044693777], [590.5, 386.980469877491]),
+    ([590.5, 386.980469877491], [589.410881879614, 387.17616188281715],
+     [587.2672882785189, 388.4513126638197], [587.0, 388.5]),
+    ([587.0, 388.5], [586.7744474487237, 388.5410850522558],
+     [586.656932260966, 387.8605751794979], [586.5, 388.02771045517073]),
+    ([586.5, 388.02771045517073], [585.4884668520069, 389.10500884175764],
+     [584.9976496271961, 390.5978658107586], [584.0035466733675, 391.6912689570962]),
+]
+SILVERPEAK_COPY_ENDS = [(599.849, 380.994), (595.729, 385.769), (590.61, 385.953), (587.483, 387.159),
+                        (585.771, 387.343), (583.264, 391.019), (584.004, 391.691)]
+
+
+def test_a_bled_copy_does_not_turn_on_the_last_bit_of_a_smooth_join():
+    """Each smooth join is sampled from both of its cubics, and the two offsets
+    land a rounding error apart (4e-14 here). Handed to the fit as two vertices,
+    they made its splits depend on that last bit, which the two engines'
+    Bezier evaluations do not share: the Rust copy of this arc came out split
+    2 px from the Python's. The second sample is put exactly on the first."""
+    import math
+
+    from studi0trace.engines.vexel.curves import Cubic
+
+    segs = [Cubic(*(np.array(p, dtype=float) for p in s)) for s in SILVERPEAK_ARC]
+    pts = np.array([s.p0 for s in segs] + [segs[-1].p1])
+    arc = Arc(pair=(26, 138), pts=pts, normal=np.tile([-0.6, -0.8], (len(pts), 1)), n0=0, n1=1)
+    arc.segments = segs
+    loose = CurveParams(corner_threshold=60.0, tol=0.6, shape_fitting=True, kind_tol=math.inf)
+    copy, jog = topology._under(arc, 1.0, loose, [])
+    assert jog == (True, True)
+    assert "".join(type(s).__name__[0] for s in copy) == "LCCCCCL"
+    ends = np.array([s.p1 for s in copy])
+    assert np.abs(ends - np.array(SILVERPEAK_COPY_ENDS)).max() < 2e-3, np.round(ends, 3).tolist()
+
+
 def test_every_ring_is_one_unbroken_curve(monkeypatch):
     """An arc too short to carry both of its nodes (the end cap of a stem on the
     canvas edge) has no segments; the ring used to jump the gap, and written as
@@ -698,6 +738,8 @@ def test_every_ring_is_one_unbroken_curve(monkeypatch):
         return bnd
 
     monkeypatch.setattr(vexel_engine.topology, "build", spy)
+    # the spy sits on the Python build; the Rust twin is `ring_bridges_an_arc_with_no_segments`
+    monkeypatch.setenv("VEXEL_BACKEND", "python")
     png = (CORPUS / "real" / "logo" / "studi0mail-logo-dark.png").read_bytes()
     trace(png)
     bnd = captured["bnd"]

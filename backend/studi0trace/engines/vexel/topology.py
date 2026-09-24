@@ -107,6 +107,8 @@ UNDER_CLEAR = 0.9
 # half the tolerance, this many times, before the samples are used as they stand.
 UNDER_DEV = 0.3
 UNDER_TRIES = 3
+# offset samples closer than this are put on one point (see `_under`)
+UNDER_SAME = 1e-9
 # Largest angle between a region's two arcs at a node that still counts as the
 # region closing to a point rather than turning a corner.
 WEDGE_ANGLE = 75.0
@@ -1504,6 +1506,23 @@ def build(
     # are made exactly so. Nodes never move, so the ring still closes.
     regularize([(arc.segments, arc.closed) for arc in arcs], params.snap_axis_deg)
 
+    later_is_b = _bleed_arcs(arcs, params, rank, bleed, see_through, painted_by)
+    return Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=later_is_b, rank=rank)
+
+
+def _bleed_arcs(
+    arcs: list[Arc],
+    params: CurveParams,
+    rank: dict[int, int] | None,
+    bleed: float = BLEED,
+    see_through: set[int] | None = None,
+    painted_by: dict[int, int] | None = None,
+) -> list[bool]:
+    """Give every fitted arc its bled copy (`Arc.under`, `under_into`,
+    `under_jog`) for the side painted earlier to use, and say for each arc
+    whether pair[1] paints later. See `build` for `see_through`/`painted_by`;
+    `tools/diffcheck.py under` hands this and the Rust `bleed_arcs` one set of
+    fitted arcs."""
     later_is_b: list[bool] = []
     by_label: dict[int, list[int]] = {}
     for idx, arc in enumerate(arcs):
@@ -1556,8 +1575,7 @@ def build(
         loose = replace(params, tol=min(2.0 * params.tol, UNDER_TOL * bleed), kind_tol=math.inf)
         arc.under, arc.under_jog = _under(arc, bleed if into == b else -bleed, loose, walls(into, painter, idx))
         arc.under_into = into
-
-    return Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=later_is_b, rank=rank)
+    return later_is_b
 
 
 def _symmetrize(bnd: Boundary) -> int:
@@ -2697,7 +2715,8 @@ def _ray_gap(pts: np.ndarray, normal: np.ndarray, walls: list[np.ndarray], far: 
     return gap
 
 
-def _under(arc: Arc, amount: float, params: CurveParams, walls: list[np.ndarray] | None = None) -> list[Segment]:
+def _under(arc: Arc, amount: float, params: CurveParams, walls: list[np.ndarray] | None = None
+           ) -> tuple[list[Segment], tuple[bool, bool]]:
     """The arc's visible curve pushed `amount` towards one side (towards pair[1]
     when positive), for the side painted earlier to use.
 
@@ -2736,6 +2755,16 @@ def _under(arc: Arc, amount: float, params: CurveParams, walls: list[np.ndarray]
         reach[_ray_gap(pts, -normal, walls, bleed) < bleed] = 0.0
     moved = pts + reach[:, None] * normal
     moved = moved[_clearance(moved, pts, bleed) >= UNDER_CLEAR * reach - 1e-9]
+    # A smooth join is sampled once from each side, and its two offsets land on
+    # one point a rounding error apart. The two engines' Bezier evaluations do
+    # not share that last bit, and the fit's splits turned on it (two vertices
+    # 4e-14 apart, or 1e-13): the second is put exactly on the first.
+    if len(moved) > 1:
+        same = np.nonzero(np.linalg.norm(np.diff(moved, axis=0), axis=1) <= UNDER_SAME)[0] + 1
+        for k in same:
+            moved[k] = moved[k - 1]
+        if arc.closed and float(np.linalg.norm(moved[-1] - moved[0])) <= UNDER_SAME:
+            moved[-1] = moved[0]
     if len(moved) < 2 or (arc.closed and len(moved) < 4):
         return list(arc.segments), (False, False)
     dense = np.vstack([moved, moved[:1]]) if arc.closed else moved

@@ -1,6 +1,6 @@
 //! Vexel's pipeline: RGBA in, SVG out.
 
-use crate::boundary::{contours, coverage_field, polygon_area, thin_coverage};
+use crate::boundary::{polygon_area, thin_coverage};
 use crate::core::grid::{Grid, Image, Mask};
 use crate::core::labels::{self, LabelIndex, Labels};
 use crate::core::morphology::dilate_cross;
@@ -480,6 +480,8 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     // regions (split at junctions, broken by anti-aliasing gaps), so thin
     // regions that touch and share an ink colour are grouped and stroked together.
     let mut stroke_of: HashMap<i32, String> = HashMap::new();
+    // label painted by a stroke along its middle -> the stroke's first member
+    let mut stroked: HashMap<i32, i32> = HashMap::new();
     let mut skip: HashSet<i32> = shadow_plan.absorbed.clone();
     if p.strokes {
         let fills_snapshot = fills.clone();
@@ -648,6 +650,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                     .unwrap();
                 stroke_of.insert(first, el);
                 skip.extend(members.iter().copied());
+                stroked.extend(members.iter().map(|m| (*m, first)));
             }
         }
     }
@@ -658,9 +661,11 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     // with the top one semi-transparent. The overlap region itself is dropped.
     let mut mask_override: HashMap<i32, Mask> = HashMap::new();
     let mut fill_override: HashMap<i32, Fill> = HashMap::new();
+    let mut over_backdrop: HashSet<i32> = HashSet::new();
     if p.overlaps && stacked {
         let dec = decompose_overlaps(&l, &fills, &visible, &curve_params, fit_params.tol);
         if !dec.empty() && dec.removed.intersection(&skip).count() == 0 {
+            over_backdrop = dec.over_backdrop.clone();
             skip.extend(dec.removed.iter().copied());
             mask_override.extend(dec.masks);
             fill_override.extend(dec.fills);
@@ -688,6 +693,35 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         }
     }
 
+    // A stroked region is painted by a line of one width along its middle,
+    // which cannot follow the region's own outline; its neighbours stop at that
+    // outline and nothing is bled into it, so wherever the line falls short of
+    // it the canvas showed through. The earliest neighbour painted before the
+    // line fills the region underneath. See the Python.
+    let mut underlay: HashMap<i32, BTreeSet<i32>> = HashMap::new();
+    if stacked && !stroked.is_empty() {
+        let mut nbrs: HashMap<i32, BTreeSet<i32>> = HashMap::new();
+        for (a, b) in adjacency(&l, None).keys() {
+            nbrs.entry(*a).or_default().insert(*b);
+            nbrs.entry(*b).or_default().insert(*a);
+        }
+        let pos: HashMap<i32, usize> = order.iter().enumerate().map(|(i, lab)| (*lab, i)).collect();
+        let mut thin: Vec<i32> = stroked.keys().copied().collect();
+        thin.sort_unstable();
+        for t in thin {
+            let (Some(_), Some(&line)) = (pos.get(&t), pos.get(&stroked[&t])) else { continue };
+            let owner = nbrs
+                .get(&t)
+                .into_iter()
+                .flatten()
+                .filter(|n| pos.contains_key(n) && !skip.contains(n) && !invisible.contains(n) && pos[n] < line)
+                .min_by_key(|n| pos[n]);
+            if let Some(owner) = owner {
+                underlay.entry(*owner).or_default().insert(t);
+            }
+        }
+    }
+
     t.lap("overlaps");
     // A small input with thin features is traced again at twice its size; the
     // viewBox carries the scale. See `upsample.rs` / the Python `upsample.py`.
@@ -701,6 +735,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     let svg = emit(
         &l, &enc, &order, &fills, &invisible, &skip, &stroke_of, &mask_override, &fill_override,
         &shadow_plan, &prep, stacked, &curve_params, p, height, width, rgba,
+        &Painting { stroked: &stroked, underlay: &underlay, over_backdrop: &over_backdrop },
     );
     t.lap("emit");
     t.total("trace");
@@ -729,6 +764,61 @@ fn shape_from_rings(
     Shape::Path { contours: rings.iter().map(|r| bnd.segments(r, Some(member))).collect() }
 }
 
+/// A fill no pixel shows through: every colour at full opacity.
+fn is_opaque(fill: &Fill) -> bool {
+    match fill {
+        Fill::Solid { rgba } => rgba[3] >= 250.0,
+        Fill::Linear { stops, .. } | Fill::Radial { stops, .. } => !stops.is_empty() && stops.iter().all(|s| s.rgba[3] >= 250.0),
+    }
+}
+
+/// The labels in every hole of `member` that holds only opaque regions painted
+/// after the shape (whose own rank is the lowest of its members): the shape
+/// paints on underneath them instead of cutting the hole. See the Python
+/// `_holes_to_fill`.
+fn holes_to_fill(l: &Labels, member: &HashSet<i32>, rank: &HashMap<i32, usize>, opaque: &HashSet<i32>) -> HashSet<i32> {
+    let rank_of = |lab: i32| -> i64 { rank.get(&lab).map_or(-1, |v| *v as i64) };
+    let own = member.iter().map(|m| rank_of(*m)).min().unwrap_or(-1);
+    let outside = Grid { h: l.h, w: l.w, data: l.data.iter().map(|v| !member.contains(v)).collect() };
+    let comp = labels::label_mask(&outside, 2);
+    let n = comp.data.iter().copied().max().unwrap_or(0).max(0) as usize;
+    let mut border = vec![false; n + 1];
+    let (h, w) = (l.h, l.w);
+    for c in 0..w {
+        border[comp.data[c] as usize] = true;
+        border[comp.data[(h - 1) * w + c] as usize] = true;
+    }
+    for r in 0..h {
+        border[comp.data[r * w] as usize] = true;
+        border[comp.data[r * w + w - 1] as usize] = true;
+    }
+    let mut labs: Vec<BTreeSet<i32>> = vec![BTreeSet::new(); n + 1];
+    for (i, k) in comp.data.iter().enumerate() {
+        if *k > 0 && !border[*k as usize] {
+            labs[*k as usize].insert(l.data[i]);
+        }
+    }
+    let mut out = HashSet::new();
+    for k in 1..=n {
+        if border[k] || labs[k].is_empty() {
+            continue;
+        }
+        if labs[k].iter().all(|v| opaque.contains(v) && rank_of(*v) > own) {
+            out.extend(labs[k].iter().copied());
+        }
+    }
+    out
+}
+
+/// How the regions no fill of their own paints are painted: a stroked label
+/// (-> its stroke's first member), the earlier shape filling each stroked label
+/// underneath (owner -> labels), and the overlap tops solved over the backdrop.
+struct Painting<'a> {
+    stroked: &'a HashMap<i32, i32>,
+    underlay: &'a HashMap<i32, BTreeSet<i32>>,
+    over_backdrop: &'a HashSet<i32>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit(
     l: &Labels,
@@ -748,6 +838,7 @@ fn emit(
     height: usize,
     width: usize,
     src: &[u8],
+    painting: &Painting,
 ) -> String {
     let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
         match fills.get(&lab) {
@@ -755,28 +846,22 @@ fn emit(
             None => vec![[0.0; 4]; qx.len()],
         }
     };
-    // Colour actually visible at (qx, qy) when a shape's footprint was
-    // extended: the fill of whichever original region lies under each pixel.
-    let fill_at_visible = |q_lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
-        qx.iter()
-            .zip(qy.iter())
-            .map(|(x, y)| {
-                let r = (*y as usize).min(height - 1);
-                let c = (*x as usize).min(width - 1);
-                let under = l.data[r * width + c];
-                match fills.get(&under) {
-                    Some(f) => f.evaluate_one(*x, *y),
-                    None => fill_at(q_lab, &[*x], &[*y])[0],
-                }
-            })
-            .collect()
-    };
 
     // The boundary, once: every edge between two regions is placed sub-pixel and
     // fitted a single time, so the two regions that share it are handed the same
     // curve and cannot leave a hairline between them.
     let rank: HashMap<i32, usize> = order.iter().enumerate().map(|(i, lab)| (*lab, i)).collect();
     crate::dump::labels("labels_to_topology", l);
+    // Nothing bleeds under paint that does not hide it: a top an overlap made
+    // translucent, or a region drawn as a line along its middle.
+    let mut see_through: HashSet<i32> = fill_override
+        .iter()
+        .filter(|(_, f)| matches!(f, Fill::Solid { rgba } if rgba[3] < 250.0))
+        .map(|(lab, _)| *lab)
+        .collect();
+    see_through.extend(painting.stroked.keys().copied());
+    let painted_by: HashMap<i32, i32> =
+        painting.underlay.iter().flat_map(|(owner, ts)| ts.iter().map(move |t| (*t, *owner))).collect();
     let mut bnd = topology::build(
         l,
         &prep.rgb,
@@ -784,8 +869,21 @@ fn emit(
         &fill_at,
         curve_params,
         if stacked { Some(&rank) } else { None },
+        &topology::Underlay { see_through, painted_by },
     );
     crate::dump::arcs("arcs", &bnd);
+
+    // Regions a shape may be laid under without being seen through them: an
+    // opaque fill; a top an overlap made translucent over the backdrop; and a
+    // region painted some other way (a stroke along its middle, a blend an
+    // overlap explains, a shadow band). See the Python.
+    let mut opaque: HashSet<i32> = order
+        .iter()
+        .copied()
+        .filter(|lab| !invisible.contains(lab) && fill_override.get(lab).or_else(|| fills.get(lab)).is_some_and(is_opaque))
+        .collect();
+    opaque.extend(painting.over_backdrop.iter().copied());
+    opaque.extend(skip.iter().copied().filter(|lab| !invisible.contains(lab)));
 
     let mut defs: Vec<String> = Vec::new();
     // Either a stroke's finished markup, or a record of a shape as it stands in
@@ -811,36 +909,44 @@ fn emit(
             filtered = true;
         }
         let (d, attrs) = fill.svg(&format!("g{}", i + 1), p.path_precision);
-        let rec = match mask_override.get(lab) {
-            // An overlap-decomposed shape has a footprint of its own, which is
-            // not a union of whole regions, so it is still traced on its own.
-            Some(mask) => {
-                let field = coverage_field(mask, *lab, l, &prep.rgb, &prep.alpha, &fill_at_visible);
-                let mut polys = contours(&field, 0.5);
-                if polys.is_empty() {
-                    continue;
+        let mut member = shape_labels(*lab, enc, stacked, invisible);
+        if let Some(ts) = painting.underlay.get(lab) {
+            member.extend(ts.iter().copied());
+        }
+        if let Some(mask) = mask_override.get(lab) {
+            // An overlap's shape is the union of its own region and the blends
+            // it explains: labels in the one graph, so its outline tiles with
+            // every neighbour. See the Python.
+            for (i, on) in mask.data.iter().enumerate() {
+                if *on {
+                    member.insert(l.data[i]);
                 }
-                polys.sort_by(|a, b| polygon_area(b).total_cmp(&polygon_area(a)));
-                crate::refine_render::Rec { member: [*lab].into_iter().collect(), primitive: Some(fit_shape(&polys, curve_params)), rings: Vec::new(), fill: fill.clone(), attrs: format!("{}{}", attrs, extra), filtered }
             }
-            None => {
-                let member = shape_labels(*lab, enc, stacked, invisible);
-                let mut rings = bnd.rings(&member);
+        }
+        let mut rings = bnd.rings(&member);
+        rings.retain(|r| !r.is_empty());
+        if stacked && rings.len() > 1 {
+            // A hole whose every region is painted later, opaquely, is not cut:
+            // this shape paints on underneath them. See the Python.
+            let filled = holes_to_fill(l, &member, &rank, &opaque);
+            if !filled.is_empty() {
+                member.extend(filled);
+                rings = bnd.rings(&member);
                 rings.retain(|r| !r.is_empty());
-                if rings.is_empty() {
-                    continue;
-                }
-                rings.sort_by(|a, b| polygon_area(&bnd.polyline(b)).total_cmp(&polygon_area(&bnd.polyline(a))));
-                let mut primitive = None;
-                if rings.len() == 1 && curve_params.shape_fitting {
-                    let candidate = fit_shape(&[bnd.polyline(&rings[0])], curve_params);
-                    if !matches!(candidate, Shape::Path { .. }) {
-                        primitive = Some(candidate);
-                    }
-                }
-                crate::refine_render::Rec { member: member.clone(), primitive, rings, fill: fill.clone(), attrs: format!("{}{}", attrs, extra), filtered }
             }
-        };
+        }
+        if rings.is_empty() {
+            continue;
+        }
+        rings.sort_by(|a, b| polygon_area(&bnd.polyline(b)).total_cmp(&polygon_area(&bnd.polyline(a))));
+        let mut primitive = None;
+        if rings.len() == 1 && curve_params.shape_fitting {
+            let candidate = fit_shape(&[bnd.polyline(&rings[0])], curve_params);
+            if !matches!(candidate, Shape::Path { .. }) {
+                primitive = Some(candidate);
+            }
+        }
+        let rec = crate::refine_render::Rec { member, primitive, rings, fill: fill.clone(), attrs: format!("{}{}", attrs, extra), filtered };
         if !d.is_empty() {
             defs.push(d);
         }

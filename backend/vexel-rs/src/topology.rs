@@ -44,15 +44,26 @@ use crate::curves::{
 /// anti-aliased edge, and stays well inside any region wide enough not to have
 /// been recovered as a stroke instead.
 pub const BLEED: f64 = 1.0;
-/// Arc length over which that reach eases off at a junction. Zero still pins the
-/// very last vertex to the node — all that is needed to keep the ring closed —
-/// and bleeds everything else fully; easing over a longer run measurably reopens
-/// the seam near junctions.
-pub const TAPER: f64 = 0.0;
 /// The bled copy's fitting tolerance, as a fraction of the bleed. It has to stay
 /// below it: an error larger than the offset would let the copy wander back over
 /// the edge it exists to cover.
 pub const UNDER_TOL: f64 = 0.6;
+/// The bled copy is read off the *visible* curve, sampled this far apart
+/// (UNDER_STEP / UNDER_SUB densely; every UNDER_SUB-th sample, and every one
+/// turning more than UNDER_TURN degrees, is fitted). See the Python `_under`.
+pub const UNDER_STEP: f64 = 1.0;
+pub const UNDER_SUB: usize = 4;
+pub const UNDER_TURN: f64 = 5.0;
+/// An offset sample that comes back nearer the visible curve than this share of
+/// its bleed is dropped: the loop an inside corner puts in an offset.
+pub const UNDER_CLEAR: f64 = 0.9;
+/// The fitted copy keeps within this share of the bleed of the offset samples;
+/// a fit that does not is tried again as curves only, then at half the
+/// tolerance, UNDER_TRIES times, before the samples are used as they stand.
+pub const UNDER_DEV: f64 = 0.3;
+pub const UNDER_TRIES: usize = 3;
+/// Offset samples closer than this are put on one point (see `under`).
+pub const UNDER_SAME: f64 = 1e-9;
 /// How far past the two pixels either side of a label edge the half-coverage
 /// search may reach, in pixels.
 pub const REACH: f64 = 0.75;
@@ -107,8 +118,12 @@ pub struct Arc {
     pub n0: Option<u64>,
     pub n1: Option<u64>,
     pub segments: Vec<Segment>,
-    /// The same curve, bled under whichever side paints later.
+    /// The same curve, bled under the side painted later.
     pub under: Vec<Segment>,
+    /// The label `under` reaches into.
+    pub under_into: Option<i32>,
+    /// `under` starts / ends with a jog from / to its node.
+    pub under_jog: (bool, bool),
     pub t0: Option<P>,
     pub t1: Option<P>,
     /// This end is the tip of a wedge closing to a point.
@@ -134,7 +149,11 @@ pub struct Boundary {
     /// The label map with a one-pixel border of 0, standing for outside the canvas.
     pub padded: Labels,
     edge_arc: HashMap<u64, (usize, usize)>,
+    /// Which side of each arc paints later (the Python's `_later_is_b`).
+    #[allow(dead_code)]
     later_is_b: Vec<bool>,
+    /// Paint order by label, when the shapes are stacked.
+    pub rank: Option<HashMap<i32, usize>>,
 }
 
 #[inline]
@@ -157,8 +176,10 @@ type Pixel = (usize, usize);
 /// One node of a junction: the arc it belongs to, and whether at its start.
 type ArcEnd = (usize, bool);
 /// A junction's decision, held back until every node has been worked out: the
-/// arc ends meeting there, where they all move to, and any pinned tangents.
-type Junction = (Vec<ArcEnd>, P, Vec<(usize, P)>, Vec<usize>);
+/// arc ends meeting there, where they all move to, any pinned tangents, the
+/// wedge sides that close to a tip there, and where all the arcs together
+/// place the node (what a tip reverts to: see `junctions`).
+type Junction = (Vec<ArcEnd>, P, Vec<(usize, P)>, Vec<usize>, P);
 
 struct Edges {
     /// vertex -> the boundary edges meeting there
@@ -1247,6 +1268,7 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
 
         let mut pinned: Vec<(usize, P)> = Vec::new();
         let mut tips: Vec<usize> = Vec::new();
+        let plain = target;
         if long.len() == 3 {
             let pairs: Vec<(i32, i32)> = long.iter().map(|s| arcs[incident[*s].0].pair).collect();
             if let Some((_lab, through)) = wedge(padded, target, &pairs, &away) {
@@ -1316,10 +1338,58 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
                 }
             }
         }
-        moves.push((incident, target, pinned, tips));
+        moves.push((incident, target, pinned, tips, plain));
     }
 
-    for (incident, target, pinned, tips) in moves {
+    // A tip is placed from its two sides alone and may travel up to TIP_LIMIT,
+    // which on a short arc is further than the arc is long: the tip then lands
+    // beyond the node at the arc's other end, the arc between them runs
+    // backwards, and its fit is a hairpin that crosses both neighbours. A node
+    // that would turn an arc round goes back to where all its arcs together
+    // place it. See the Python `_junctions`.
+    let mut at: HashMap<ArcEnd, usize> = HashMap::new();
+    for (m, mv) in moves.iter().enumerate() {
+        for key in &mv.0 {
+            at.insert(*key, m);
+        }
+    }
+    let mut targets: Vec<P> = moves.iter().map(|mv| mv.1).collect();
+    let mut reverted = vec![false; moves.len()];
+    for _ in 0..moves.len() {
+        let mut undo: Vec<usize> = Vec::new();
+        for (idx, arc) in arcs.iter().enumerate() {
+            if arc.closed() || short[idx] {
+                continue;
+            }
+            let (Some(&m0), Some(&m1)) = (at.get(&(idx, true)), at.get(&(idx, false))) else { continue };
+            if m0 == m1 {
+                continue;
+            }
+            let (first, last) = (arc.pts[0], arc.pts[arc.pts.len() - 1]);
+            let chord = [last[0] - first[0], last[1] - first[1]];
+            let d = [targets[m1][0] - targets[m0][0], targets[m1][1] - targets[m0][1]];
+            if d[0] * chord[0] + d[1] * chord[1] > 0.0 {
+                continue;
+            }
+            for m in [m0, m1] {
+                if !moves[m].3.is_empty() && !reverted[m] {
+                    undo.push(m);
+                }
+            }
+        }
+        if undo.is_empty() {
+            break;
+        }
+        undo.sort_unstable();
+        undo.dedup();
+        for m in undo {
+            targets[m] = moves[m].4;
+            reverted[m] = true;
+        }
+    }
+
+    for (m, (incident, _, pinned, tips, _)) in moves.into_iter().enumerate() {
+        let target = targets[m];
         for (slot, (i, at_start)) in incident.iter().enumerate() {
             let last = arcs[*i].pts.len() - 1;
             let idx = if *at_start { 0 } else { last };
@@ -1354,45 +1424,372 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
     }
 }
 
-/// The arc pushed `amount` towards one side, pinned back to its own ends.
+/// +1 when `pair.1` lies on the left of the arc as its vertices run, else -1.
 ///
-/// The ends are nodes that the other arcs meeting there have been fitted to, so
-/// the bleed has to reach zero at them or the ring tears open. It reaches zero
-/// at the end vertex itself, and over `taper` pixels before it.
-fn bled(arc: &Arc, amount: f64, taper: f64) -> Vec<P> {
+/// One sign for the whole arc, voted by every vertex: an arc parts the same two
+/// regions all the way along, with the same one on its left. Asked vertex by
+/// vertex, the vote failed at a stair step and pushed that vertex a pixel *out*
+/// of the later shape. See the Python `_side`.
+fn side(arc: &Arc) -> f64 {
     let pts = &arc.pts;
-    let n = pts.len();
-    if n < 3 {
-        return pts.clone();
-    }
-    // The per-vertex step between pixel centres is axis aligned, so it zigzags
-    // along a diagonal run and offsetting by it would fold the curve into a
-    // staircase. Take the normal from the curve's own tangent instead, and only
-    // borrow the step's sign to point it at the right side.
+    let n = pts.len().min(arc.normal.len());
     let closed = arc.closed();
-    let mut cum = vec![0.0f64; n];
-    for k in 1..n {
-        cum[k] = cum[k - 1] + ((pts[k][0] - pts[k - 1][0]).powi(2) + (pts[k][1] - pts[k - 1][1]).powi(2)).sqrt();
+    let mut sum = 0.0;
+    for k in 0..n {
+        let ahead = if closed { pts[(k + 1) % n] } else { pts[(k + 1).min(n - 1)] };
+        let behind = if closed { pts[(k + n - 1) % n] } else { pts[k.saturating_sub(1)] };
+        let t = [ahead[0] - behind[0], ahead[1] - behind[1]];
+        sum += -t[1] * arc.normal[k][0] + t[0] * arc.normal[k][1];
     }
-    let total = cum[n - 1];
+    if sum < 0.0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
 
-    (0..n)
-        .map(|k| {
-            let ahead = if closed { pts[(k + 1) % n] } else { pts[(k + 1).min(n - 1)] };
-            let behind = if closed { pts[(k + n - 1) % n] } else { pts[k.saturating_sub(1)] };
-            let tangent = normalize([ahead[0] - behind[0], ahead[1] - behind[1]]);
-            let mut normal = [-tangent[1], tangent[0]];
-            if normal[0] * arc.normal[k][0] + normal[1] * arc.normal[k][1] < 0.0 {
-                normal = [-normal[0], -normal[1]];
+/// `m + 1` parameters from 0 to 1, as `np.linspace(0, 1, m + 1)` makes them.
+fn unit_steps(m: usize) -> Vec<f64> {
+    let step = 1.0 / m as f64;
+    let mut t: Vec<f64> = (0..=m).map(|k| k as f64 * step).collect();
+    t[m] = 1.0;
+    t
+}
+
+/// Points along a fitted curve no more than `step` apart, with the unit tangent
+/// at each. Every segment is sampled end to end, so a join is sampled once from
+/// each side and a corner carries both of its tangents. See the Python `_sample`.
+pub fn sample(segments: &[Segment], step: f64) -> (Vec<P>, Vec<P>) {
+    let mut points: Vec<P> = Vec::new();
+    let mut tangents: Vec<P> = Vec::new();
+    for seg in segments {
+        let (pts, mut tan): (Vec<P>, Vec<P>) = match *seg {
+            Segment::Line { p0, p1 } => {
+                let d = [p1[0] - p0[0], p1[1] - p0[1]];
+                let m = (((d[0] * d[0] + d[1] * d[1]).sqrt() / step).ceil() as usize).max(1);
+                let t = unit_steps(m);
+                (t.iter().map(|u| [p0[0] + u * d[0], p0[1] + u * d[1]]).collect(), vec![d; m + 1])
             }
-            let scale = if closed {
-                1.0
-            } else {
-                (cum[k].min(total - cum[k]) / taper.max(1e-6)).clamp(0.0, 1.0)
-            };
-            [pts[k][0] + amount * scale * normal[0], pts[k][1] + amount * scale * normal[1]]
+            Segment::Cubic { p0, c1, c2, p1 } => {
+                let length = 0.5 * (dist(p1, p0) + (dist(c1, p0) + dist(c2, c1) + dist(p1, c2)));
+                let m = ((length / step).ceil() as usize).max(2);
+                let t = unit_steps(m);
+                (
+                    t.iter().map(|u| crate::curves::bezier(p0, c1, c2, p1, *u)).collect(),
+                    t.iter().map(|u| crate::curves::bezier_d1(p0, c1, c2, p1, *u)).collect(),
+                )
+            }
+            Segment::Arc { p0, p1, r, large, sweep } => {
+                let c = crate::reuse::arc_centre(p0, p1, r, large, sweep);
+                let r = dist(p0, c).max(1e-9);
+                let a0 = (p0[1] - c[1]).atan2(p0[0] - c[0]);
+                let a1 = (p1[1] - c[1]).atan2(p1[0] - c[0]);
+                let tau = 2.0 * std::f64::consts::PI;
+                let span = if sweep { (a1 - a0).rem_euclid(tau) } else { -((a0 - a1).rem_euclid(tau)) };
+                let m = ((span.abs() * r / step).ceil() as usize).max(2);
+                let t = unit_steps(m);
+                let a: Vec<f64> = t.iter().map(|u| a0 + span * u).collect();
+                let mut pts: Vec<P> = a.iter().map(|v| [c[0] + r * v.cos(), c[1] + r * v.sin()]).collect();
+                pts[0] = p0;
+                pts[m] = p1;
+                let s = if span >= 0.0 { 1.0 } else { -1.0 };
+                (pts, a.iter().map(|v| [-v.sin() * s, v.cos() * s]).collect())
+            }
+        };
+        // a control point on its end: the chord to the next sample
+        let n = pts.len();
+        for k in 0..n {
+            if (tan[k][0] * tan[k][0] + tan[k][1] * tan[k][1]).sqrt() < 1e-9 {
+                tan[k] = if k + 1 < n { [pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]] } else { [pts[n - 1][0] - pts[n - 2][0], pts[n - 1][1] - pts[n - 2][1]] };
+            }
+        }
+        for k in 0..n {
+            let len = (tan[k][0] * tan[k][0] + tan[k][1] * tan[k][1]).sqrt().max(1e-12);
+            tangents.push([tan[k][0] / len, tan[k][1] / len]);
+        }
+        points.extend(pts);
+    }
+    (points, tangents)
+}
+
+/// Distance from each point of `q` to the polyline `poly`. A distance over
+/// `within` may come back as anything over `within` (only the segments near a
+/// block of points are searched). See the Python `_clearance`.
+fn clearance(q: &[P], poly: &[P], within: f64) -> Vec<f64> {
+    if poly.len() < 2 || q.is_empty() {
+        if poly.len() == 1 {
+            return q.iter().map(|p| dist(*p, poly[0])).collect();
+        }
+        return vec![f64::INFINITY; q.len()];
+    }
+    let segs: Vec<(P, P, f64, P, P)> = poly
+        .windows(2)
+        .map(|w| {
+            let ab = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
+            let den = (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-18);
+            let lo = [w[0][0].min(w[1][0]), w[0][1].min(w[1][1])];
+            let hi = [w[0][0].max(w[1][0]), w[0][1].max(w[1][1])];
+            (w[0], ab, den, lo, hi)
         })
-        .collect()
+        .collect();
+    let mut out = vec![f64::INFINITY; q.len()];
+    for (block, chunk) in q.chunks(256).enumerate() {
+        let near: Vec<&(P, P, f64, P, P)> = if within.is_finite() {
+            let mut lo = [f64::INFINITY; 2];
+            let mut hi = [f64::NEG_INFINITY; 2];
+            for p in chunk {
+                lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+            }
+            let (lo, hi) = ([lo[0] - within, lo[1] - within], [hi[0] + within, hi[1] + within]);
+            segs.iter().filter(|s| s.4[0] >= lo[0] && s.4[1] >= lo[1] && s.3[0] <= hi[0] && s.3[1] <= hi[1]).collect()
+        } else {
+            segs.iter().collect()
+        };
+        if near.is_empty() {
+            continue;
+        }
+        for (k, p) in chunk.iter().enumerate() {
+            let mut best = f64::INFINITY;
+            for (a, ab, den, _, _) in &near {
+                let t = (((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / den).clamp(0.0, 1.0);
+                let dx = p[0] - (a[0] + t * ab[0]);
+                let dy = p[1] - (a[1] + t * ab[1]);
+                best = best.min(dx * dx + dy * dy);
+            }
+            out[block * 256 + k] = best.sqrt();
+        }
+    }
+    out
+}
+
+/// How far each ray `pts[i] + t·normal[i]` (0 <= t <= far) runs before it meets
+/// one of the polylines in `walls`; infinity where it meets none. See the
+/// Python `_ray_gap`.
+fn ray_gap(pts: &[P], normal: &[P], walls: &[&[P]], far: f64) -> Vec<f64> {
+    let mut gap = vec![f64::INFINITY; pts.len()];
+    if pts.is_empty() {
+        return gap;
+    }
+    let mut lo = [f64::INFINITY; 2];
+    let mut hi = [f64::NEG_INFINITY; 2];
+    for p in pts {
+        lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+        hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+    }
+    let (lo, hi) = ([lo[0] - far, lo[1] - far], [hi[0] + far, hi[1] + far]);
+    for wall in walls {
+        if wall.len() < 2 {
+            continue;
+        }
+        let mut wlo = [f64::INFINITY; 2];
+        let mut whi = [f64::NEG_INFINITY; 2];
+        for p in wall.iter() {
+            wlo = [wlo[0].min(p[0]), wlo[1].min(p[1])];
+            whi = [whi[0].max(p[0]), whi[1].max(p[1])];
+        }
+        if whi[0] < lo[0] || whi[1] < lo[1] || wlo[0] > hi[0] || wlo[1] > hi[1] {
+            continue;
+        }
+        for w in wall.windows(2) {
+            let (a, e) = (w[0], [w[1][0] - w[0][0], w[1][1] - w[0][1]]);
+            // a ray reaches no further than `far` from its origin
+            let (slo, shi) = ([a[0].min(w[1][0]) - far, a[1].min(w[1][1]) - far], [a[0].max(w[1][0]) + far, a[1].max(w[1][1]) + far]);
+            for (i, p) in pts.iter().enumerate() {
+                if p[0] < slo[0] || p[1] < slo[1] || p[0] > shi[0] || p[1] > shi[1] {
+                    continue;
+                }
+                let n = normal[i];
+                let den = n[0] * e[1] - n[1] * e[0];
+                if den.abs() <= 1e-12 {
+                    continue;
+                }
+                let ap = [a[0] - p[0], a[1] - p[1]];
+                let t = (ap[0] * e[1] - ap[1] * e[0]) / den;
+                let u = (ap[0] * n[1] - ap[1] * n[0]) / den;
+                if (0.0..=1.0).contains(&u) && (0.0..=far).contains(&t) && t < gap[i] {
+                    gap[i] = t;
+                }
+            }
+        }
+    }
+    gap
+}
+
+/// The arc's visible curve pushed `amount` towards one side (towards `pair.1`
+/// when positive), for the side painted earlier to use: an offset of the curve
+/// actually drawn, never more than halfway to the far side of the shape bled
+/// under (`walls`), fitted loosely and checked against the offset. An open
+/// arc's copy is pinned to its two nodes by a jog at each end; the flags say
+/// which ends have one. See the Python `_under`.
+pub fn under(arc: &Arc, amount: f64, params: &CurveParams, walls: &[&[P]]) -> (Vec<Segment>, (bool, bool)) {
+    if arc.segments.is_empty() {
+        return (Vec::new(), (false, false));
+    }
+    let bleed = amount.abs();
+    let (pts, tangent) = sample(&arc.segments, UNDER_STEP / UNDER_SUB as f64);
+    let s = 1f64.copysign(amount) * side(arc);
+    let normal: Vec<P> = tangent.iter().map(|t| [s * -t[1], s * t[0]]).collect();
+    let mut reach = vec![bleed; pts.len()];
+    if !walls.is_empty() {
+        let ahead = ray_gap(&pts, &normal, walls, 2.0 * bleed);
+        let back: Vec<P> = normal.iter().map(|n| [-n[0], -n[1]]).collect();
+        let behind = ray_gap(&pts, &back, walls, bleed);
+        for k in 0..pts.len() {
+            reach[k] = reach[k].min(0.5 * ahead[k]);
+            // a far side met *behind* the edge: the shape's two edges crossed
+            if behind[k] < bleed {
+                reach[k] = 0.0;
+            }
+        }
+    }
+    let offset: Vec<P> = (0..pts.len()).map(|k| [pts[k][0] + reach[k] * normal[k][0], pts[k][1] + reach[k] * normal[k][1]]).collect();
+    let clear = clearance(&offset, &pts, bleed);
+    let mut moved: Vec<P> = (0..offset.len()).filter(|k| clear[*k] >= UNDER_CLEAR * reach[*k] - 1e-9).map(|k| offset[k]).collect();
+    let closed = arc.closed();
+    // A smooth join is sampled once from each side and its two offsets land a
+    // rounding error apart: the second is put exactly on the first, so the
+    // fit's splits do not turn on the last bit of the offset. See the Python
+    // `_under`.
+    let same: Vec<usize> = (1..moved.len()).filter(|k| dist(moved[*k], moved[*k - 1]) <= UNDER_SAME).collect();
+    for k in same {
+        moved[k] = moved[k - 1];
+    }
+    if closed && moved.len() > 1 && dist(moved[moved.len() - 1], moved[0]) <= UNDER_SAME {
+        let first = moved[0];
+        let last = moved.len() - 1;
+        moved[last] = first;
+    }
+    if moved.len() < 2 || (closed && moved.len() < 4) {
+        return (arc.segments.clone(), (false, false));
+    }
+    let mut dense = moved.clone();
+    if closed {
+        dense.push(moved[0]);
+    }
+    // every UNDER_SUB-th sample, and every one where the offset turns
+    let steps: Vec<P> = dense.windows(2).map(|w| [w[1][0] - w[0][0], w[1][1] - w[0][1]]).collect();
+    let lengths: Vec<f64> = steps.iter().map(|d| (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-12)).collect();
+    let cos_limit = UNDER_TURN.to_radians().cos();
+    let mut pick: Vec<usize> = (0..dense.len()).step_by(UNDER_SUB).collect();
+    for k in 1..steps.len() {
+        let cos_turn = (steps[k][0] * steps[k - 1][0] + steps[k][1] * steps[k - 1][1]) / (lengths[k] * lengths[k - 1]);
+        if cos_turn < cos_limit {
+            pick.push(k);
+        }
+    }
+    pick.push(dense.len() - 1);
+    pick.sort_unstable();
+    pick.dedup();
+    let run: Vec<P> = pick.iter().map(|k| dense[*k]).collect();
+    let mut fitted: Option<Vec<Segment>> = None;
+    // lines first, as the visible curve was fitted; then curves only; then tighter
+    for k in 0..=UNDER_TRIES {
+        let segs = if k == 0 {
+            fit_stretch(&run, params.tol, None, None, params.kind_tol)
+        } else {
+            fit_open(&run, params.tol * 0.5f64.powi(k as i32 - 1), None, None)
+        };
+        let (probe, _) = sample(&segs, UNDER_STEP / UNDER_SUB as f64);
+        if !probe.is_empty() && clearance(&probe, &dense, 2.0 * bleed).into_iter().fold(f64::NEG_INFINITY, f64::max) <= UNDER_DEV * bleed {
+            fitted = Some(segs);
+            break;
+        }
+    }
+    let fitted = fitted.unwrap_or_else(|| {
+        run.windows(2).filter(|w| dist(w[1], w[0]) > 1e-9).map(|w| Segment::Line { p0: w[0], p1: w[1] }).collect()
+    });
+    if closed {
+        return (fitted, (false, false));
+    }
+    let head = arc.segments[0].start();
+    let tail = arc.segments[arc.segments.len() - 1].end();
+    let first = moved[0];
+    let last = moved[moved.len() - 1];
+    let jog = (dist(first, head) > 1e-9, dist(tail, last) > 1e-9);
+    let mut out: Vec<Segment> = Vec::with_capacity(fitted.len() + 2);
+    if jog.0 {
+        out.push(Segment::Line { p0: head, p1: first });
+    }
+    out.extend(fitted);
+    if jog.1 {
+        out.push(Segment::Line { p0: last, p1: tail });
+    }
+    (out, jog)
+}
+
+/// Every fitted arc's bled copy (`under`, `under_into`, `under_jog`), for the
+/// side painted earlier to use; and, per arc, whether `pair.1` paints later.
+///
+/// One copy per arc, into the side first painted later (its own shape's paint,
+/// or that of the shape filling it underneath, `painted_by`), never into a
+/// `see_through` label, reaching no further than halfway to that shape's far
+/// side where crossing it would show over something painted before the copy's
+/// painter. See the Python `_bleed_arcs`.
+pub fn bleed_arcs(
+    arcs: &mut [Arc],
+    params: &CurveParams,
+    rank: Option<&HashMap<i32, usize>>,
+    bleed: f64,
+    see_through: &std::collections::HashSet<i32>,
+    painted_by: &HashMap<i32, i32>,
+) -> Vec<bool> {
+    let rank_of = |lab: i32| -> i64 { rank.and_then(|r| r.get(&lab)).map_or(-1, |v| *v as i64) };
+    let mut by_label: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (idx, arc) in arcs.iter().enumerate() {
+        let (a, b) = arc.pair;
+        by_label.entry(a.min(b)).or_default().push(idx);
+        if a != b {
+            by_label.entry(a.max(b)).or_default().push(idx);
+        }
+    }
+    // The earliest paint on each label: its own shape's, or that of the shape
+    // filling it underneath.
+    let mut floor: HashMap<i32, i64> = rank.map(|r| r.iter().map(|(k, v)| (*k, *v as i64)).collect()).unwrap_or_default();
+    if let Some(r) = rank {
+        for (lab, owner) in painted_by {
+            if let (Some(a), Some(b)) = (r.get(lab), r.get(owner)) {
+                floor.insert(*lab, (*a).min(*b) as i64);
+            }
+        }
+    }
+    let floor_of = |lab: i32| -> i64 { floor.get(&lab).copied().unwrap_or(-1) };
+    let mut drawn: Vec<Option<Vec<P>>> = vec![None; arcs.len()];
+    let loose = CurveParams { tol: (2.0 * params.tol).min(UNDER_TOL * bleed), kind_tol: f64::INFINITY, ..*params };
+
+    let mut later_is_b = Vec::with_capacity(arcs.len());
+    for idx in 0..arcs.len() {
+        let (a, b) = arcs[idx].pair;
+        later_is_b.push(rank.is_some() && rank_of(b) > rank_of(a));
+        if rank.is_none() || bleed <= 0.0 || a == 0 || b == 0 {
+            continue;
+        }
+        let (into, side_lab) = if floor_of(a) < floor_of(b) { (b, a) } else { (a, b) };
+        if see_through.contains(&into) || floor_of(side_lab) >= rank_of(into) {
+            continue;
+        }
+        // the latest shape to use the copy: the side's own, when it is earlier
+        let painter = if rank_of(side_lab) < rank_of(into) { rank_of(side_lab) } else { floor_of(side_lab) };
+        // The far side of the shape bled under, where crossing it would put the
+        // painter's colour over something painted before it.
+        let mut wall_idx: Vec<usize> = Vec::new();
+        for &j in by_label.get(&into).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let other = if arcs[j].pair.1 == into { arcs[j].pair.0 } else { arcs[j].pair.1 };
+            if j == idx || arcs[j].segments.is_empty() || other == 0 || rank_of(other) >= painter {
+                continue;
+            }
+            if drawn[j].is_none() {
+                drawn[j] = Some(sample(&arcs[j].segments, UNDER_STEP).0);
+            }
+            wall_idx.push(j);
+        }
+        let walls: Vec<&[P]> = wall_idx.iter().map(|j| drawn[*j].as_deref().unwrap()).collect();
+        let (copy, jog) = under(&arcs[idx], if into == b { bleed } else { -bleed }, &loose, &walls);
+        arcs[idx].under = copy;
+        arcs[idx].under_jog = jog;
+        arcs[idx].under_into = Some(into);
+    }
+    later_is_b
 }
 
 /// Interior corners of an open arc: a turn that survives every chord scale.
@@ -1557,7 +1954,14 @@ pub fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f6
         // nodes of a corner pixel, collapsed. The ring runs straight through.
         return Vec::new();
     }
-    let corners = open_corners(pts, params.corner_threshold);
+    // A corner inside a node's approach window is believed no more than the
+    // other vertices there: where the node was moved back up its approach, the
+    // chain overshoots it and doubles back, and that fold kept as a break was a
+    // hook past the node that crossed the neighbour. See the Python `_fit_arc`.
+    let corners: Vec<usize> = open_corners(pts, params.corner_threshold)
+        .into_iter()
+        .filter(|k| dist(pts[*k], pts[0]) >= trims.0 && dist(pts[*k], pts[n - 1]) >= trims.1)
+        .collect();
     let sharp: Vec<P> = corners.iter().map(|k| sharp_corner(pts, *k)).collect();
     let mut bounds = vec![0usize, n - 1];
     bounds.extend_from_slice(&corners);
@@ -1595,20 +1999,6 @@ pub fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f6
         segments.extend(fit_stretch(piece, params.tol, ts, te, params.kind_tol));
     }
     snap_axis(segments, params.snap_axis_deg)
-}
-
-/// Fit a bled copy: its interior as an ordinary arc, joined to the shared
-/// nodes by two explicit one-pixel jogs. See the Python `_fit_under`.
-fn fit_under(moved: &[P], arc: &Arc, params: &CurveParams) -> Vec<Segment> {
-    let n = moved.len();
-    if arc.closed() || n < 4 {
-        return fit_arc(moved, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), None, params);
-    }
-    let inner_sliver: Option<Vec<bool>> = arc.sliver.as_ref().map(|sl| sl[1..n - 1].to_vec());
-    let mut out = vec![Segment::Line { p0: moved[0], p1: moved[1] }];
-    out.extend(fit_arc(&moved[1..n - 1], false, None, None, (0.0, 0.0), inner_sliver.as_deref(), None, params));
-    out.push(Segment::Line { p0: moved[n - 2], p1: moved[n - 1] });
-    out
 }
 
 /// Make a nearly horizontal or vertical line exactly so, as
@@ -1853,6 +2243,16 @@ fn snap_axis(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment> {
     segments
 }
 
+/// What the bled copies may not reach under: paint that does not hide what
+/// lies beneath it (a translucent fill, a line drawn along a region's middle),
+/// and, for a label no fill of its own paints (a stroked region), the earlier
+/// shape filling it underneath. See the Python `build`.
+#[derive(Default)]
+pub struct Underlay {
+    pub see_through: std::collections::HashSet<i32>,
+    pub painted_by: HashMap<i32, i32>,
+}
+
 /// The whole boundary of the label map, placed sub-pixel and fitted once.
 ///
 /// `rank` is the paint order by label. Given it, each arc also gets a copy bled
@@ -1864,8 +2264,9 @@ pub fn build(
     fill_at: FillAt,
     params: &CurveParams,
     rank: Option<&HashMap<i32, usize>>,
+    underlay: &Underlay,
 ) -> Boundary {
-    build_opt(labels, rgb, alpha, fill_at, params, rank, true, true)
+    build_opt(labels, rgb, alpha, fill_at, params, rank, underlay, true, true)
 }
 
 /// `snap = false` stops after placement, for `tools/diffcheck.py` to compare the
@@ -1878,6 +2279,7 @@ pub fn build_opt(
     fill_at: FillAt,
     params: &CurveParams,
     rank: Option<&HashMap<i32, usize>>,
+    underlay: &Underlay,
     snap: bool,
     extend: bool,
 ) -> Boundary {
@@ -1910,6 +2312,8 @@ pub fn build_opt(
             n1: ch.n1,
             segments: Vec::new(),
             under: Vec::new(),
+            under_into: None,
+            under_jog: (false, false),
             t0: None,
             t1: None,
             tip0: false,
@@ -1929,12 +2333,12 @@ pub fn build_opt(
     }
     if !snap {
         let later = vec![false; arcs.len()];
-        return Boundary { arcs, padded, edge_arc, later_is_b: later };
+        return Boundary { arcs, padded, edge_arc, later_is_b: later, rank: rank.cloned() };
     }
     // A region that is mirror- or rotationally symmetric is made exactly so
     // before its nodes are placed and its curves fitted (see the Python).
     {
-        let mut early = Boundary { arcs, padded: padded.clone(), edge_arc: edge_arc.clone(), later_is_b: Vec::new() };
+        let mut early = Boundary { arcs, padded: padded.clone(), edge_arc: edge_arc.clone(), later_is_b: Vec::new(), rank: None };
         symmetrize_boundary(&mut early);
         arcs = early.arcs;
     }
@@ -1958,26 +2362,10 @@ pub fn build_opt(
         crate::regularity::regularize(&mut lists, params.snap_axis_deg);
     }
 
-    let mut later_is_b = Vec::with_capacity(arcs.len());
-    for arc in arcs.iter_mut() {
-        let (a, b) = arc.pair;
-        let b_later = match rank {
-            Some(r) => r.get(&b).map_or(-1i64, |v| *v as i64) > r.get(&a).map_or(-1i64, |v| *v as i64),
-            None => false,
-        };
-        later_is_b.push(b_later);
-        if rank.is_some() && BLEED > 0.0 && a != 0 && b != 0 {
-            // The bled copy is never seen — the shape that causes it covers it —
-            // so it is fitted loosely, but no looser than the bleed can absorb.
-            // ... and weighed at its own tolerance alone: nobody sees it.
-            let loose = CurveParams { tol: (2.0 * params.tol).min(UNDER_TOL * BLEED), kind_tol: f64::INFINITY, ..*params };
-            let moved = bled(arc, if b_later { BLEED } else { -BLEED }, TAPER);
-            let under = fit_under(&moved, arc, &loose);
-            arc.under = under;
-        }
-    }
+    let later_is_b = bleed_arcs(&mut arcs, params, rank, BLEED, &underlay.see_through, &underlay.painted_by);
+    timer.lap("topology: bleed");
 
-    Boundary { arcs, padded, edge_arc, later_is_b }
+    Boundary { arcs, padded, edge_arc, later_is_b, rank: rank.cloned() }
 }
 
 /// Closed rings of directed lattice edges with `inside` always on the left.
@@ -2076,6 +2464,13 @@ fn runs(seq: &[(usize, usize)]) -> Vec<(usize, bool)> {
 }
 
 impl Boundary {
+    /// A boundary of arcs fitted elsewhere, for `tools/diffcheck.py`'s `under`
+    /// stage: `segments` needs only the arcs, the padded label map and the rank.
+    pub fn assembled(arcs: Vec<Arc>, padded: Labels, rank: Option<HashMap<i32, usize>>) -> Self {
+        let later_is_b = vec![false; arcs.len()];
+        Boundary { arcs, padded, edge_arc: HashMap::new(), later_is_b, rank }
+    }
+
     /// Closed rings bounding the union of `labels`, as (arc index, reversed).
     pub fn rings(&self, labels: &std::collections::HashSet<i32>) -> Vec<Vec<(usize, bool)>> {
         let inside: Vec<bool> = self.padded.data.iter().map(|v| labels.contains(v)).collect();
@@ -2114,27 +2509,89 @@ impl Boundary {
     /// The ring's fitted curve: each arc's one fit, reversed where walked
     /// backwards. Where the region on the other side is painted *later*, the
     /// bled copy is used instead, so the neighbour's anti-aliased edge lands on
-    /// this shape's ink rather than on the backdrop.
+    /// this shape's ink rather than on the backdrop. Two copies meeting at a
+    /// node where everything else is painted later are joined directly (the
+    /// shape runs past the node, under the later ones), and a gap between two
+    /// pieces (an arc too short to carry both its nodes) is bridged with a
+    /// line. See the Python `Boundary.segments`.
     pub fn segments(&self, ring: &[(usize, bool)], member: Option<&std::collections::HashSet<i32>>) -> Vec<Segment> {
-        let mut out: Vec<Segment> = Vec::new();
+        let rank_of = |lab: i32| -> i64 { self.rank.as_ref().and_then(|r| r.get(&lab)).map_or(-1, |v| *v as i64) };
+        let own: Option<i64> = match member {
+            Some(m) if !m.is_empty() && self.rank.is_some() => m.iter().map(|x| rank_of(*x)).min(),
+            _ => None,
+        };
+        // (segments, (jog in, jog out), start node, end node)
+        let mut pieces: Vec<(Vec<Segment>, (bool, bool), Option<u64>, Option<u64>)> = Vec::with_capacity(ring.len());
         for (idx, reverse) in ring {
             let arc = &self.arcs[*idx];
             let mut segs = &arc.segments;
+            let mut jog = (false, false);
             if let Some(member) = member {
-                if !arc.under.is_empty() {
-                    let later = if self.later_is_b[*idx] { arc.pair.1 } else { arc.pair.0 };
-                    if !member.contains(&later) {
+                if !arc.under.is_empty() && !arc.under_into.is_some_and(|u| member.contains(&u)) {
+                    // the far side is painted after this shape: reach under it
+                    if own.is_none_or(|o| arc.under_into.map_or(-1, rank_of) > o) {
                         segs = &arc.under;
+                        jog = arc.under_jog;
                     }
                 }
             }
             if *reverse {
-                out.extend(reverse_segments(segs));
+                pieces.push((reverse_segments(segs), (jog.1, jog.0), arc.n1, arc.n0));
             } else {
-                out.extend(segs.iter().cloned());
+                pieces.push((segs.clone(), jog, arc.n0, arc.n1));
+            }
+        }
+        if let (Some(member), Some(own)) = (member, own) {
+            let n = pieces.len();
+            if n > 1 {
+                for k in 0..n {
+                    let q = (k + 1) % n;
+                    let (p_end, q_start) = (pieces[k].3, pieces[q].2);
+                    if !(pieces[k].1 .1 && pieces[q].1 .0) || p_end.is_none() || p_end != q_start || !self.all_later(p_end.unwrap(), member, own) {
+                        continue;
+                    }
+                    if pieces[k].0.is_empty() || pieces[q].0.is_empty() {
+                        continue;
+                    }
+                    let from = pieces[k].0[pieces[k].0.len() - 1].start();
+                    let to = pieces[q].0[0].end();
+                    let last = pieces[k].0.len() - 1;
+                    pieces[k].0[last] = Segment::Line { p0: from, p1: to };
+                    pieces[q].0.remove(0);
+                    pieces[k].1 .1 = false;
+                    pieces[q].1 .0 = false;
+                }
+            }
+        }
+        let mut out: Vec<Segment> = Vec::new();
+        for (segs, _, _, _) in pieces {
+            for seg in segs {
+                if let Some(prev) = out.last() {
+                    let (a, b) = (prev.end(), seg.start());
+                    if dist(a, b) > 1e-6 {
+                        out.push(Segment::Line { p0: a, p1: b });
+                    }
+                }
+                out.push(seg);
             }
         }
         out
+    }
+
+    /// Every label at a lattice node is the shape's own or painted after it.
+    fn all_later(&self, node: u64, member: &std::collections::HashSet<i32>, own: i64) -> bool {
+        let lat_cols = (self.padded.w + 1) as u64;
+        let (i, j) = ((node / lat_cols) as usize, (node % lat_cols) as usize);
+        let rank_of = |lab: i32| -> i64 { self.rank.as_ref().and_then(|r| r.get(&lab)).map_or(-1, |v| *v as i64) };
+        for r in i.saturating_sub(1)..(i + 1).min(self.padded.h) {
+            for c in j.saturating_sub(1)..(j + 1).min(self.padded.w) {
+                let v = *self.padded.get(r, c);
+                if !(member.contains(&v) || (v != 0 && rank_of(v) > own)) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
@@ -2163,5 +2620,159 @@ mod node_tests {
         let (centre, dir, rms) = approach(&pts, true, 4.0, 0.8, APPROACH_MAX, None).unwrap();
         assert!(rms < 0.05 && dir[1].abs() < 1e-12, "{centre:?} {dir:?} {rms}");  // the residual carries the direction uncertainty of the window
         assert!(centre[0] > 4.0, "the window should have grown past the first reach: {centre:?}");
+    }
+}
+
+#[cfg(test)]
+mod under_tests {
+    //! Twins of the Python `_under` / `Boundary.segments` tests in
+    //! `tests/test_vexel_topology.py`.
+    use super::*;
+    use std::collections::HashSet;
+
+    fn arc(pair: (i32, i32), pts: Vec<P>, normal: P, n0: Option<u64>, n1: Option<u64>, segments: Vec<Segment>) -> Arc {
+        let n = pts.len();
+        Arc {
+            pair,
+            pts,
+            normal: vec![normal; n],
+            n0,
+            n1,
+            segments,
+            under: Vec::new(),
+            under_into: None,
+            under_jog: (false, false),
+            t0: None,
+            t1: None,
+            tip0: false,
+            tip1: false,
+            trim0: NODE_TRIM,
+            trim1: NODE_TRIM,
+            sliver: None,
+            mirror: None,
+        }
+    }
+
+    fn straight(y: f64) -> Arc {
+        let pts: Vec<P> = (0..21).map(|k| [k as f64, y]).collect();
+        let seg = Segment::Line { p0: pts[0], p1: pts[20] };
+        arc((1, 2), pts, [0.0, 1.0], Some(0), Some(1), vec![seg])
+    }
+
+    fn points(segs: &[Segment]) -> Vec<P> {
+        segs.iter().flat_map(|s| [s.start(), s.end()]).collect()
+    }
+
+    fn params() -> CurveParams {
+        CurveParams { corner_threshold: 60.0, tol: 0.4, shape_fitting: true, snap_axis_deg: 1.5, kind_tol: crate::curves::KIND_TOL }
+    }
+
+    #[test]
+    fn the_bled_copy_stops_halfway_across_a_thin_later_shape() {
+        let a = straight(10.0);
+        let wall: Vec<P> = (0..25).map(|k| [k as f64 - 2.0, 10.5]).collect();
+        let (segs, jog) = under(&a, 1.0, &params(), &[&wall]);
+        let top = points(&segs).iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+        assert_eq!(jog, (true, true));
+        assert!(top <= 10.4, "the copy crossed the far side: {top:.2}");
+        assert!(top >= 10.2, "the copy did not bleed at all: {top:.2}");
+    }
+
+    #[test]
+    fn the_bled_copy_does_not_reach_where_a_shapes_edges_have_crossed() {
+        let a = straight(10.0);
+        let behind: Vec<P> = (0..9).map(|k| [k as f64 + 6.0, 9.7]).collect();
+        let (segs, _) = under(&a, 1.0, &params(), &[&behind]);
+        let (probe, _) = sample(&segs, 0.25);
+        let mid: Vec<&P> = probe.iter().filter(|p| p[0] > 7.5 && p[0] < 13.5).collect();
+        let top = mid.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+        assert!(!mid.is_empty() && top <= 10.3, "the copy reached into a crossed sliver: {top:.2}");
+    }
+
+    #[test]
+    fn one_side_for_the_whole_arc() {
+        // a stair step's own lattice step is square to the curve; the arc votes
+        let mut a = straight(10.0);
+        a.normal[5] = [1.0, 0.0];
+        a.normal[6] = [-1.0, 0.0];
+        assert_eq!(side(&a), 1.0);
+        let b = arc((1, 2), a.pts.clone(), [0.0, -1.0], Some(0), Some(1), a.segments.clone());
+        assert_eq!(side(&b), -1.0);
+    }
+
+    /// Twin of `test_a_bled_copy_does_not_turn_on_the_last_bit_of_a_smooth_join`:
+    /// the silverpeak badge's arc (26, 138), whose copy this engine split 2 px
+    /// from the Python's while each smooth join was handed to the fit as two
+    /// vertices a rounding error apart.
+    #[test]
+    fn a_bled_copy_does_not_turn_on_the_last_bit_of_a_smooth_join() {
+        let c = |p0: P, c1: P, c2: P, p1: P| Segment::Cubic { p0, c1, c2, p1 };
+        let segs = vec![
+            c([600.6582867801136, 381.58124894983234], [599.3829822291585, 383.34094833479594], [597.8606221538046, 386.2687495606855], [595.5, 386.92069397275225]),
+            c([595.5, 386.92069397275225], [593.8630926138252, 387.3727665849522], [592.1336850978171, 386.68693044693777], [590.5, 386.980469877491]),
+            c([590.5, 386.980469877491], [589.410881879614, 387.17616188281715], [587.2672882785189, 388.4513126638197], [587.0, 388.5]),
+            c([587.0, 388.5], [586.7744474487237, 388.5410850522558], [586.656932260966, 387.8605751794979], [586.5, 388.02771045517073]),
+            c([586.5, 388.02771045517073], [585.4884668520069, 389.10500884175764], [584.9976496271961, 390.5978658107586], [584.0035466733675, 391.6912689570962]),
+        ];
+        let mut pts: Vec<P> = segs.iter().map(|s| s.start()).collect();
+        pts.push(segs[segs.len() - 1].end());
+        let a = arc((26, 138), pts, [-0.6, -0.8], Some(0), Some(1), segs);
+        let loose = CurveParams { tol: 0.6, kind_tol: f64::INFINITY, ..params() };
+        let (copy, jog) = under(&a, 1.0, &loose, &[]);
+        assert_eq!(jog, (true, true));
+        let kinds: String = copy.iter().map(|s| match s { Segment::Line { .. } => 'L', Segment::Cubic { .. } => 'C', Segment::Arc { .. } => 'A' }).collect();
+        assert_eq!(kinds, "LCCCCCL");
+        let want: [P; 7] = [[599.849, 380.994], [595.729, 385.769], [590.61, 385.953], [587.483, 387.159], [585.771, 387.343], [583.264, 391.019], [584.004, 391.691]];
+        for (s, w) in copy.iter().zip(want) {
+            let e = s.end();
+            assert!((e[0] - w[0]).abs() < 2e-3 && (e[1] - w[1]).abs() < 2e-3, "copy ends at {e:?}, the Python's at {w:?}");
+        }
+    }
+
+    #[test]
+    fn ring_bridges_an_arc_with_no_segments() {
+        // three arcs around label 1; the middle one is too short to carry both
+        // of its nodes and was fitted to nothing: the ring still closes
+        let (a, b, c) = ([0.0, 0.0], [4.0, 0.0], [4.0, 1.6]);
+        let arcs = vec![
+            arc((1, 2), vec![a, b], [0.0, 1.0], Some(0), Some(1), vec![Segment::Line { p0: a, p1: b }]),
+            arc((1, 3), vec![b, c], [1.0, 0.0], Some(1), Some(2), Vec::new()),
+            arc((1, 4), vec![c, a], [0.0, 1.0], Some(2), Some(0), vec![Segment::Line { p0: c, p1: a }]),
+        ];
+        let bnd = Boundary::assembled(arcs, Grid::from_vec(3, 3, vec![0; 9]), None);
+        let member: HashSet<i32> = [1].into_iter().collect();
+        let segs = bnd.segments(&[(0, false), (1, false), (2, false)], Some(&member));
+        assert_eq!(segs.len(), 3);
+        for w in segs.windows(2) {
+            assert!(dist(w[0].end(), w[1].start()) < 1e-9, "the ring jumps");
+        }
+    }
+
+    #[test]
+    fn copies_meeting_at_an_all_later_node_are_joined() {
+        // label 1 (painted first) meets 2 and 3 (both later) at the lattice node
+        // between pixels (1,1),(1,2),(2,1),(2,2) of a 4x4 padded map
+        let lat_cols = 5u64;
+        let node = 2 * lat_cols + 2;
+        let padded = Grid::from_vec(4, 4, vec![0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 2, 0, 0, 0, 0, 0]);
+        let x = [2.0, 2.0];
+        let jog_a = [2.0, 1.0];
+        let jog_b = [1.0, 2.0];
+        let mut first = arc((1, 2), vec![[2.0, 0.0], x], [1.0, 0.0], Some(9), Some(node), vec![Segment::Line { p0: [2.0, 0.0], p1: x }]);
+        first.under = vec![Segment::Line { p0: [2.0, 0.0], p1: [2.5, 0.5] }, Segment::Line { p0: [2.5, 0.5], p1: jog_a }, Segment::Line { p0: jog_a, p1: x }];
+        first.under_into = Some(2);
+        first.under_jog = (true, true);
+        let mut second = arc((1, 3), vec![x, [0.0, 2.0]], [0.0, 1.0], Some(node), Some(9), vec![Segment::Line { p0: x, p1: [0.0, 2.0] }]);
+        second.under = vec![Segment::Line { p0: x, p1: jog_b }, Segment::Line { p0: jog_b, p1: [0.5, 2.5] }, Segment::Line { p0: [0.5, 2.5], p1: [0.0, 2.0] }];
+        second.under_into = Some(3);
+        second.under_jog = (true, true);
+        let rank: HashMap<i32, usize> = [(1, 0), (2, 1), (3, 2)].into_iter().collect();
+        let bnd = Boundary::assembled(vec![first, second], padded, Some(rank));
+        let member: HashSet<i32> = [1].into_iter().collect();
+        let segs = bnd.segments(&[(0, false), (1, false)], Some(&member));
+        // the out-jog of the first and the in-jog of the second became one line
+        // from the first copy straight to the second, past the node
+        assert!(segs.iter().all(|s| dist(s.end(), x) > 1e-9 && dist(s.start(), x) > 1e-9), "a copy still jogs back to the node");
+        assert!(segs.iter().any(|s| dist(s.start(), jog_a) < 1e-9 && dist(s.end(), jog_b) < 1e-9));
     }
 }

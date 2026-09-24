@@ -27,6 +27,8 @@ pub struct Decomposition {
     pub removed: HashSet<i32>,
     /// (top, below) ordering constraints
     pub above: Vec<(i32, i32)>,
+    /// opaque regions made tops, solved over the opaque backdrop
+    pub over_backdrop: HashSet<i32>,
 }
 
 impl Decomposition {
@@ -285,6 +287,11 @@ pub fn decompose_overlaps(
         let (t, x, alpha, tc) = accepted[c];
         if !accepted.contains_key(&t) {
             dec.fills.insert(t, Fill::Solid { rgba: [tc[0], tc[1], tc[2], alpha * 255.0] });
+            // An opaque region read as a translucent shape over the backdrop:
+            // its own area is its colour with the backdrop beneath it.
+            if solid_rgba(t).is_some_and(|c| c[3] >= 250.0) && bg_colour.is_some() {
+                dec.over_backdrop.insert(t);
+            }
         }
         let top_owner = resolve(&accepted, t, 0);
         let under = resolve(&accepted, x, 1);
