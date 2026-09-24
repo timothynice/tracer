@@ -1442,7 +1442,6 @@ def _junctions(
             targets[m] = moves[m][4]
             reverted.add(m)
     moves = [(incident, targets[m], tangents, tips) for m, (incident, _t, tangents, tips, _p) in enumerate(moves)]
-    _tip_to_tip(moves, arcs, short, reach, limit)
 
     for incident, target, tangents, tips in moves:
         for i, k in incident:
@@ -1471,85 +1470,6 @@ def _junctions(
                 arcs[i].t0 = pinned
             else:
                 arcs[i].t1 = pinned
-
-
-def _tip_to_tip(moves: list, arcs: list[Arc], short: set[int], reach: float, limit: float) -> None:
-    """Two wedges that meet tip to tip are one node.
-
-    Where two straight edges cross — the V's arm over the ribbon, the white
-    wedge above the crossing and the overlap below it — the four regions meet
-    at one point, but a label map cannot hold a four-way crossing between
-    pixel corners: it keeps a pixel or three of boundary between the two
-    regions on either side, and each wedge's tip is a node of its own. Placed
-    from its own two sides, each tip lands within a pixel or two of the other
-    and the arc between them stays: a sub-pixel nub on the crossing (1.5 px on
-    the wordmark's V). When the arc joining two tips is the boundary that
-    carries on through both, and the tips were placed closer than SHORT_ARC,
-    both nodes go to the point closest to all four sides' lines, and the arc
-    collapses and is dropped by `_fit_arc`. Not where that would turn one of
-    the sides round, or leave the arc too long to be dropped.
-
-    Runs after the tip-revert guard: a collapsed arc has no direction, and the
-    guard would read it as one turned round.
-    """
-    at: dict[tuple[int, int], int] = {}
-    for m, move in enumerate(moves):
-        for key in move[0]:
-            at[key] = m
-    merged: set[int] = set()
-    for idx, arc in enumerate(arcs):
-        if arc.closed or idx in short or (idx, 0) not in at or (idx, -1) not in at:
-            continue
-        m0, m1 = at[(idx, 0)], at[(idx, -1)]
-        if m0 == m1 or m0 in merged or m1 in merged:
-            continue
-        tips0, tips1 = moves[m0][3], moves[m1][3]
-        if not tips0 or not tips1 or (idx, 0) in tips0 or (idx, -1) in tips1:
-            continue
-        a, b = moves[m0][1], moves[m1][1]
-        if float(np.linalg.norm(b - a)) >= SHORT_ARC:
-            continue
-        # The through arc parts two regions, each of which has a side against
-        # both wedges: its corner is where those two sides cross. The corner
-        # read off the surer pair of lines is the node; the other region's
-        # sides are let go of their lines' directions and meet it along their
-        # own vertices.
-        through = arc.pair
-        sides = sorted(tips0) + sorted(tips1)
-        lines = {key: _approach(arcs[key[0]].pts, key[1] == 0, TIP_TRIM + reach, TIP_TRIM, grow_to=2.0 * APPROACH_MAX,
-                                exclude=arcs[key[0]].sliver) for key in sides}
-        pairs = [[key for key in sides if through[j] in arcs[key[0]].pair] for j in (0, 1)]
-        if any(len(pair) != 2 or any(lines[key] is None for key in pair) for pair in pairs):
-            continue
-        worst = [max(lines[key][2] for key in pair) for pair in pairs]
-        sure = 0 if worst[0] <= worst[1] else 1
-        incident = list(moves[m0][0]) + list(moves[m1][0])
-        node = _node_estimate([lines[key] for key in pairs[sure]], (a + b) / 2.0, limit)
-        node = _on_border(node, [(arcs[i], k) for i, k in incident])
-        collapsed = arc.pts.copy()
-        collapsed[0] = node
-        collapsed[-1] = node
-        if _arc_length(collapsed) >= 2.0 * SHORT_ARC:
-            continue
-        turned = False
-        for i, k in incident:
-            if i == idx or arcs[i].closed:
-                continue
-            other = (i, -1 if k == 0 else 0)
-            far = moves[at[other]][1] if other in at and at[other] not in (m0, m1) else arcs[i].pts[other[1]]
-            chord = arcs[i].pts[-1] - arcs[i].pts[0]
-            run = far - node if k == 0 else node - far
-            if float(np.dot(run, chord)) <= 0.0:
-                turned = True
-                break
-        if turned:
-            continue
-        for m in (m0, m1):
-            incident_m, _t, tangents, tips = moves[m]
-            for key in pairs[1 - sure]:
-                tangents.pop(key, None)
-            moves[m] = (incident_m, node, tangents, tips)
-        merged.update((m0, m1))
 
 
 def build(

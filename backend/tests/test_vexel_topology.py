@@ -871,38 +871,3 @@ def test_a_held_tip_leaves_its_curved_side_free_and_the_straight_edge_beyond_it_
             if top.sum() > 50:
                 waves.append(float(np.ptp(pts[top, 1])))
         assert waves and max(waves) < 0.1, (preset, waves)
-
-
-def x_crossing(cx: float, cy: float, size: int = 64, half: float = 30.0) -> bytes:
-    """Two straight edges crossing at (cx, cy), `half` degrees either side of
-    the vertical: a pale wedge above the crossing, a darker one below, and a
-    region either side — the wordmark's V, where the arm's edge crosses the
-    ribbon's. Rendered by resvg."""
-    import math
-
-    far = 200.0
-    s, c = far * math.sin(math.radians(half)), far * math.cos(math.radians(half))
-    up_l, up_r, dn_l, dn_r = (cx - s, cy - c), (cx + s, cy - c), (cx - s, cy + c), (cx + s, cy + c)
-
-    def pts(*ps):
-        return " ".join(f"{x:.3f},{y:.3f}" for x, y in ps)
-
-    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">'
-           f'<rect width="{size}" height="{size}" fill="#10a0ff"/>'
-           f'<polygon points="{pts((cx, cy), up_l, (-far, cy), dn_l)}" fill="#1a2a80"/>'
-           f'<polygon points="{pts((cx, cy), up_l, up_r)}" fill="#ffffff"/>'
-           f'<polygon points="{pts((cx, cy), dn_l, dn_r)}" fill="#0a60e0"/></svg>')
-    return bytes(resvg_py.svg_to_bytes(svg_string=svg, width=size, height=size))
-
-
-def test_two_wedges_that_meet_tip_to_tip_are_one_node():
-    """Where two edges cross, the label map keeps a few pixels of boundary
-    between the regions either side, and each wedge's tip was a node of its
-    own: placed from its own sides, the two tips stood a pixel apart and the arc
-    between them stayed, a nub on the crossing (the dark region's corner 0.95 px
-    from it here). The two tips are one node, and every region meets there."""
-    cross = np.array([32.3, 30.7])
-    svg = trace(x_crossing(*cross))
-    for fill in ("#ffffff", "#1a2a80", "#10a0ff", "#0a60e0"):
-        nearest = np.linalg.norm(path_anchors(svg, fill) - cross, axis=1).min()
-        assert nearest < 0.15, f"{fill}: nearest anchor {nearest:.2f} px from the crossing"
