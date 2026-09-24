@@ -299,12 +299,6 @@ mod python {
     }
 
     #[pyfunction]
-    fn _dbg_fit_open(pts: Vec<f64>, tol: f64) -> Vec<(String, Vec<f64>)> {
-        let pts: Vec<[f64; 2]> = pts.chunks(2).map(|c| [c[0], c[1]]).collect();
-        curves::fit_open(&pts, tol, None, None).iter().map(seg_out).collect()
-    }
-
-    #[pyfunction]
     fn _lstsq(a: Vec<f64>, rows: usize, cols: usize, b: Vec<f64>, bcols: usize) -> Vec<f64> {
         use crate::core::linalg::Mat;
         let am = Mat { rows, cols, d: a };
@@ -523,7 +517,6 @@ mod python {
     m.add_function(wrap_pyfunction!(_stage_upsample, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_under, m)?)?;
-        m.add_function(wrap_pyfunction!(_dbg_fit_open, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_wedges, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_edge_mix, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;
