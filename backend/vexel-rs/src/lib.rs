@@ -18,6 +18,7 @@ pub mod overlaps;
 pub mod partition;
 pub mod posterize;
 pub mod prepare;
+pub mod rects;
 pub mod refine;
 pub mod refine_render;
 pub mod regularity;
@@ -344,6 +345,113 @@ mod python {
         rows.concat()
     }
 
+    fn seg_rows(segs: &[curves::Segment]) -> Vec<(String, Vec<f64>)> {
+        segs.iter()
+            .map(|s| match s {
+                curves::Segment::Line { p0, p1 } => ("L".to_string(), vec![p0[0], p0[1], p1[0], p1[1]]),
+                curves::Segment::Cubic { p0, c1, c2, p1 } => {
+                    ("C".to_string(), vec![p0[0], p0[1], c1[0], c1[1], c2[0], c2[1], p1[0], p1[1]])
+                }
+                curves::Segment::Arc { p0, p1, r, large, sweep } => {
+                    ("A".to_string(), vec![p0[0], p0[1], p1[0], p1[1], *r, *large as u8 as f64, *sweep as u8 as f64])
+                }
+            })
+            .collect()
+    }
+
+    fn seg_from_row(kind: &str, v: &[f64]) -> curves::Segment {
+        match kind {
+            "L" => curves::Segment::Line { p0: [v[0], v[1]], p1: [v[2], v[3]] },
+            "C" => curves::Segment::Cubic { p0: [v[0], v[1]], c1: [v[2], v[3]], c2: [v[4], v[5]], p1: [v[6], v[7]] },
+            _ => curves::Segment::Arc { p0: [v[0], v[1]], p1: [v[2], v[3]], r: v[4], large: v[5] != 0.0, sweep: v[6] != 0.0 },
+        }
+    }
+
+    fn points(v: &[f64]) -> Vec<[f64; 2]> {
+        v.chunks(2).map(|c| [c[0], c[1]]).collect()
+    }
+
+    type ArcOut = (Vec<f64>, Vec<f64>, Vec<(String, Vec<f64>)>, Option<Vec<f64>>, (Option<(f64, f64)>, Option<(f64, f64)>), (f64, f64), bool);
+
+    /// Stage 7a on arcs another implementation fitted, for `tools/diffcheck.py`'s
+    /// `rects` stage: the Python hands over its graph as it stood after the arc
+    /// fit (every arc's state, the padded label map and the edge index) and
+    /// gets back the decision log and every arc as `rectify` + `fillets` left it.
+    #[pyfunction]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn _stage_rects(
+        padded: Vec<i32>,
+        ph: usize,
+        pw: usize,
+        rgb: Vec<f64>,
+        h: usize,
+        w: usize,
+        edge_keys: Vec<u64>,
+        edge_vals: Vec<(usize, usize)>,
+        pairs: Vec<(i32, i32)>,
+        pts: Vec<Vec<f64>>,
+        normals: Vec<Vec<f64>>,
+        ends: Vec<(Option<u64>, Option<u64>)>,
+        segments: Vec<Vec<(String, Vec<f64>)>>,
+        tangents: Vec<(Option<(f64, f64)>, Option<(f64, f64)>)>,
+        flags: Vec<(bool, bool, f64, f64)>,
+        slivers: Vec<Option<Vec<bool>>>,
+        mirrors: Vec<Option<(f64, f64, f64, f64)>>,
+        corner_threshold: f64,
+        tol: f64,
+        snap_axis_deg: f64,
+    ) -> (Vec<Vec<f64>>, Vec<ArcOut>) {
+        use crate::core::grid::{Grid, Image};
+        let arcs: Vec<topology::Arc> = (0..pairs.len())
+            .map(|k| topology::Arc {
+                pair: pairs[k],
+                pts: points(&pts[k]),
+                normal: points(&normals[k]),
+                n0: ends[k].0,
+                n1: ends[k].1,
+                segments: segments[k].iter().map(|(kind, v)| seg_from_row(kind, v)).collect(),
+                under: Vec::new(),
+                t0: tangents[k].0.map(|t| [t.0, t.1]),
+                t1: tangents[k].1.map(|t| [t.0, t.1]),
+                tip0: flags[k].0,
+                tip1: flags[k].1,
+                trim0: flags[k].2,
+                trim1: flags[k].3,
+                sliver: slivers[k].clone(),
+                mirror: mirrors[k].map(|m| ([m.0, m.1], [m.2, m.3])),
+                rect: None,
+            })
+            .collect();
+        let edge_arc: std::collections::HashMap<u64, (usize, usize)> = edge_keys.into_iter().zip(edge_vals).collect();
+        let mut bnd = topology::Boundary::from_parts(arcs, Grid::from_vec(ph, pw, padded), edge_arc);
+        let image = Image { h, w, c: 3, data: rgb };
+        let params = curves::CurveParams { corner_threshold, tol, shape_fitting: true, snap_axis_deg, kind_tol: curves::KIND_TOL };
+        let mut log: Vec<Vec<f64>> = Vec::new();
+        let (rect_arcs, radii) = topology::rectify::rectify(&mut bnd, &params, &image, Some(&mut log));
+        topology::rectify::fillets(&mut bnd, &params, &rect_arcs, &radii, Some(&mut log));
+        let out = bnd
+            .arcs
+            .iter()
+            .map(|a| {
+                let rect = a.rect.as_ref().map(|s| match s {
+                    curves::Shape::Rect { x, y, w, h } => vec![*x, *y, *w, *h, 0.0],
+                    curves::Shape::RoundedRect { x, y, w, h, rx } => vec![*x, *y, *w, *h, *rx],
+                    _ => Vec::new(),
+                });
+                (
+                    a.pts.iter().flat_map(|p| [p[0], p[1]]).collect(),
+                    a.normal.iter().flat_map(|p| [p[0], p[1]]).collect(),
+                    seg_rows(&a.segments),
+                    rect,
+                    (a.t0.map(|t| (t[0], t[1])), a.t1.map(|t| (t[0], t[1]))),
+                    (a.trim0, a.trim1),
+                    a.sliver.is_some(),
+                )
+            })
+            .collect();
+        (log, out)
+    }
+
     /// The label map after cut-off regions have been handed back the pixels
     /// their ink still runs through, for `tools/diffcheck.py`.
     #[pyfunction]
@@ -432,6 +540,7 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_labels0, m)?)?;
     m.add_function(wrap_pyfunction!(_stage_upsample, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_rects, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_wedges, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_edge_mix, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;

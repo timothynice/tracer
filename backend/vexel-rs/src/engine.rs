@@ -721,7 +721,8 @@ fn shape_from_rings(
     params: &CurveParams,
 ) -> Shape {
     if rings.len() == 1 && params.shape_fitting {
-        let primitive = fit_shape(&[bnd.polyline(&rings[0])], params);
+        // a ring `topology::rectify` made a rectangle is one already
+        let primitive = bnd.primitive(&rings[0]).unwrap_or_else(|| fit_shape(&[bnd.polyline(&rings[0])], params));
         if !matches!(primitive, Shape::Path { .. }) {
             return primitive;
         }
@@ -833,7 +834,9 @@ fn emit(
                 rings.sort_by(|a, b| polygon_area(&bnd.polyline(b)).total_cmp(&polygon_area(&bnd.polyline(a))));
                 let mut primitive = None;
                 if rings.len() == 1 && curve_params.shape_fitting {
-                    let candidate = fit_shape(&[bnd.polyline(&rings[0])], curve_params);
+                    // a ring `topology::rectify` made a rectangle is one already; the
+                    // arcs carry the same outline, so a neighbour's edge agrees with it
+                    let candidate = bnd.primitive(&rings[0]).unwrap_or_else(|| fit_shape(&[bnd.polyline(&rings[0])], curve_params));
                     if !matches!(candidate, Shape::Path { .. }) {
                         primitive = Some(candidate);
                     }
