@@ -25,6 +25,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 const SVG_NS: &str = "xmlns=\"http://www.w3.org/2000/svg\"";
 /// Further `refine_merge` passes before a ramp is posterised (see the Python).
 const POSTERIZE_JOIN_ROUNDS: usize = 3;
+/// The default `detail`: the fit tolerance a posterised trace finds its ramps at.
+const POSTERIZE_FIT_DETAIL: f64 = 6.0;
 
 #[derive(Clone)]
 pub struct VexelParams {
@@ -309,10 +311,13 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         })
         .collect();
 
+    // With gradients off the fills are still fitted as the default detail would
+    // fit them, so a ramp the bands should show is found as a ramp (see the Python).
+    let fit_detail = if p.gradients { p.detail } else { p.detail.min(POSTERIZE_FIT_DETAIL) };
     let mut fit_params = FitParams {
         gradients: true,
         max_stops: p.max_stops,
-        tol: (p.detail / 2.0).max(2.0),
+        tol: (fit_detail / 2.0).max(2.0),
     };
 
     let mut index = LabelIndex::build(&l);
@@ -697,7 +702,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         // The middle band of three is by construction a blend of the other
         // two: bands are never read as overlaps.
         let seen: HashMap<i32, bool> = visible.iter().map(|(k, v)| (*k, *v && !levels.band.contains_key(k))).collect();
-        let dec = decompose_overlaps(&l, &fills, &seen, &curve_params, fit_params.tol);
+        let dec = decompose_overlaps(&l, &fills, &seen, &curve_params, (p.detail / 2.0).max(2.0));
         if !dec.empty() && dec.removed.intersection(&skip).count() == 0 {
             skip.extend(dec.removed.iter().copied());
             mask_override.extend(dec.masks);
@@ -729,7 +734,9 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     t.lap("overlaps");
     // A small input with thin features is traced again at twice its size; the
     // viewBox carries the scale. See `upsample.rs` / the Python `upsample.py`.
-    if p.upsample == "always" || (p.upsample == "auto" && crate::upsample::wants_upsample(&l, height, width)) {
+    // A band's edges lie on its ramp's level lines: the regions before the cut
+    // are the evidence for the upsample, not a narrow band.
+    if p.upsample == "always" || (p.upsample == "auto" && crate::upsample::wants_upsample(&levels.unbanded(&l), height, width)) {
         crate::dump::text("upsample", "2x\n");
         let up = crate::upsample::upsample2x(rgba, height, width);
         let mut q = p.clone();

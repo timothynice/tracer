@@ -39,6 +39,7 @@ from studi0trace.engines.vexel.weights import interior, interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
 POSTERIZE_JOIN_ROUNDS = 3  # further `refine_merge` passes before a ramp is posterised
+POSTERIZE_FIT_DETAIL = 6.0  # the default `detail`: the fit tolerance a posterised trace finds its ramps at
 _CROSS = ndimage.generate_binary_structure(2, 1)
 
 try:  # pragma: no cover - exercised by whichever backend is installed
@@ -320,7 +321,12 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     ys = ys.astype(np.float64) + 0.5
     rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
 
-    fit_params = FitParams(gradients=True, max_stops=p.max_stops, tol=max(2.0, p.detail / 2.0))
+    # With gradients off the fills are still fitted as the default detail would
+    # fit them, so a ramp the bands should show is found as a ramp: `detail`
+    # then sets how far apart its bands are (`posterize`), not whether a
+    # 28 ΔE ramp across a card is "flat enough".
+    fit_detail = p.detail if p.gradients else min(p.detail, POSTERIZE_FIT_DETAIL)
+    fit_params = FitParams(gradients=True, max_stops=p.max_stops, tol=max(2.0, fit_detail / 2.0))
     fills: dict[int, object] = {}
     visible: dict[int, bool] = {}
 
@@ -411,7 +417,8 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # level lines, and the band edges are placed on those lines (`posterize`).
     bands = Levels()
     if not p.gradients:
-        labels, fills, visible, bands = posterize_fills(labels, fills, visible, xs, ys, rgba255, p.detail, p.min_region)
+        labels, fills, visible, bands = posterize_fills(labels, fills, visible, xs, ys, rgba255, prep.features, p.detail,
+                                                       p.min_region)
         dump.labels("labels_posterize", labels)
         ids = [int(i) for i in np.unique(labels) if i != 0]
         fit_params = replace(fit_params, gradients=False)
@@ -545,7 +552,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         # The middle band of three is by construction a blend of the other two:
         # bands are never read as overlaps.
         dec = decompose_overlaps(labels, fills, {lab: v and lab not in bands.band for lab, v in visible.items()},
-                                 curve_params, tol=fit_params.tol)
+                                 curve_params, tol=max(2.0, p.detail / 2.0))
         if not dec.empty and not (dec.removed & skip):
             over_backdrop = set(dec.over_backdrop)
             skip |= dec.removed
@@ -589,7 +596,10 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
 
     # A small input with thin features is traced again at twice its size; the
     # viewBox carries the scale. See `upsample.py` for the evidence.
-    if p.upsample == "always" or (p.upsample == "auto" and wants_upsample(labels, height, width)):
+    # A band's edges lie on its ramp's level lines, placed without reading the
+    # pixels, so a narrow band is no evidence for the upsample: the regions
+    # before the cut are.
+    if p.upsample == "always" or (p.upsample == "auto" and wants_upsample(bands.unbanded(labels), height, width)):
         dump.text("upsample", "2x\n")
         return halve(trace_rgba(upsample2x(rgba), p.model_copy(update={"upsample": "never"})), width, height)
     bnd = topology.build(

@@ -15,7 +15,7 @@ import pytest
 
 from studi0trace.engines.vexel import engine as vexel
 from studi0trace.engines.vexel.engine import VexelParams, trace_rgba
-from studi0trace.engines.vexel.fills import Linear, Stop
+from studi0trace.engines.vexel.fills import Linear, Radial, Stop
 from studi0trace.engines.vexel.posterize import BAND_MIN_PX, Levels, _features, band_levels
 
 FLAT = VexelParams(gradients=False, shadows=False, detail=14.0, min_region=16)
@@ -49,6 +49,17 @@ def test_a_short_ramp_gets_fewer_bands_rather_than_slivers():
     edges = np.concatenate([[0.0], levels, [0.2]]) * 100.0
     assert levels.size >= 1
     assert np.diff(edges).min() >= BAND_MIN_PX - 1e-9, edges
+
+
+def test_a_radial_holding_its_centre_measures_the_inner_disc_by_its_diameter():
+    # a 12 px eye: a dark pupil of radius ~2.5 px, white beyond — one level,
+    # though the pupil is narrower than BAND_MIN_PX from centre to edge
+    eye = Radial(0.0, 0.0, 12.0, stops=[Stop(0.0, np.array([0.0, 46.0, 100.0, 255.0])),
+                                        Stop(0.38, np.array([248.0, 250.0, 251.0, 255.0])),
+                                        Stop(1.0, np.array([255.0, 255.0, 255.0, 255.0]))])
+    levels = band_levels(eye, 0.05, 1.0, 14.0)
+    assert levels.size == 1 and 2 * levels[0] * 12.0 >= BAND_MIN_PX, levels
+    assert band_levels(eye, 0.3, 1.0, 14.0).size == 0, "a ring holds no disc"
 
 
 def test_a_band_edge_crosses_its_lattice_edge_on_the_level():

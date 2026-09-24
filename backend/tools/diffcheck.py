@@ -368,7 +368,8 @@ def posterize(path):
         m = labels == lab
         wt, core = interior(m)
         fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], params, weights=wt, core=core)
-    py_labels, py_fills, _, lv = posterize_fills(labels, fills, {lab: True for lab in fills}, xs, ys, rgba255, 14.0, 16)
+    py_labels, py_fills, _, lv = posterize_fills(labels, fills, {lab: True for lab in fills}, xs, ys, rgba255,
+                                                 prep.features, 14.0, 16)
     rows: list[float] = []
     for k in sorted(py_fills):
         group, band = lv.band.get(k, (0, -1))

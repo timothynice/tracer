@@ -52,6 +52,27 @@ impl Levels {
         Some((&self.fields[&fa.0], self.levels[&fa.0][fa.1.min(fb.1)]))
     }
 
+    /// `l` with every ramp's bands one region again (each labelled as its
+    /// lowest band): the shapes the partition drew, before the cut.
+    pub fn unbanded(&self, l: &Labels) -> Labels {
+        if self.band.is_empty() {
+            return l.clone();
+        }
+        let mut first: HashMap<i32, i32> = HashMap::new();
+        let mut labs: Vec<i32> = self.band.keys().copied().collect();
+        labs.sort_unstable();
+        for lab in labs {
+            first.entry(self.band[&lab].0).or_insert(lab);
+        }
+        let mut out = l.clone();
+        for v in out.data.iter_mut() {
+            if let Some((group, _)) = self.band.get(v) {
+                *v = first[group];
+            }
+        }
+        out
+    }
+
     /// Is the edge between `a` and `b` a level line of one ramp?
     pub fn sibling(&self, a: i32, b: i32) -> bool {
         self.between(a, b).is_some()
@@ -142,7 +163,8 @@ fn invert(length: &[f64], ts: &[f64], v: f64) -> f64 {
 }
 
 /// The n−1 levels of t between n bands of equal colour distance, none over
-/// `step` and none narrower than `BAND_MIN_PX`, for a ramp seen over t in
+/// `step` and none narrower than `BAND_MIN_PX` (a central disc by its
+/// diameter), for a ramp seen over t in
 /// [t_lo, t_hi]. Empty: one flat colour.
 pub fn band_levels(ramp: &Fill, t_lo: f64, t_hi: f64, step: f64) -> Vec<f64> {
     let (lo, hi) = (t_lo.clamp(0.0, 1.0), t_hi.clamp(0.0, 1.0));
@@ -165,8 +187,10 @@ pub fn band_levels(ramp: &Fill, t_lo: f64, t_hi: f64, step: f64) -> Vec<f64> {
         length.push(acc);
     }
     let total = acc;
-    // Bands of equal colour distance are not of equal width where the ramp is
-    // uneven in Lab, so the count comes down until the narrowest is wide enough.
+    // Equal colour distances crowd where the ramp is steep, so the count comes
+    // down until no band is narrower than BAND_MIN_PX; a radial's innermost band
+    // is a disc, as wide as its diameter, when the region holds the centre.
+    let disc = matches!(ramp, Fill::Radial { .. }) && lo * reach <= 1.0;
     let most = ((total / step.max(1e-9) - 1e-9).ceil() as i64).min((span_px / BAND_MIN_PX).floor() as i64);
     for n in (2..=most).rev() {
         let levels: Vec<f64> = (1..n).map(|j| invert(&length, &ts, j as f64 * total / n as f64)).collect();
@@ -174,8 +198,11 @@ pub fn band_levels(ramp: &Fill, t_lo: f64, t_hi: f64, step: f64) -> Vec<f64> {
         edges.push(lo);
         edges.extend_from_slice(&levels);
         edges.push(hi);
-        let narrowest = edges.windows(2).map(|e| e[1] - e[0]).fold(f64::INFINITY, f64::min);
-        if narrowest * reach >= BAND_MIN_PX - 1e-9 {
+        let mut widths: Vec<f64> = edges.windows(2).map(|e| (e[1] - e[0]) * reach).collect();
+        if disc {
+            widths[0] = 2.0 * levels[0] * reach;
+        }
+        if widths.iter().copied().fold(f64::INFINITY, f64::min) >= BAND_MIN_PX - 1e-9 {
             return levels;
         }
     }
@@ -313,7 +340,8 @@ pub fn posterize_fills(
         let mut fill = fills[&lab].clone();
         let mut levels = Vec::new();
         let t: Vec<f64> = px.iter().map(|i| fill.param(xs.data[*i as usize], ys.data[*i as usize])).collect();
-        if !matches!(fill, Fill::Solid { .. }) {
+        // A thin region's ramp is its anti-aliasing along a line: never cut.
+        if !matches!(fill, Fill::Solid { .. }) && !crate::strokes::is_thin_at(h, w, px) {
             let (lo, hi) = t.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(*v), b.max(*v)));
             levels = band_levels(&fill, lo, hi, step);
         }

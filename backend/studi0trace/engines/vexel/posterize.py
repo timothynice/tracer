@@ -40,6 +40,7 @@ from skimage.measure import label as cc_label
 
 from studi0trace.engines.vexel.fills import Fill, FitParams, Linear, Radial, Solid, _interp_stops, fit_fill
 from studi0trace.engines.vexel.prepare import ALPHA_FEATURE_SCALE
+from studi0trace.engines.vexel.strokes import is_thin
 from studi0trace.engines.vexel.weights import interior
 
 # Narrowest band, in px across its level lines. A ramp over a short span with a
@@ -54,6 +55,22 @@ RAMP_SAMPLES = 256
 # neighbouring band it shares the most edge with.
 THIN_BAND = 2.0
 
+# Does the model's family of level lines match the image's? Pixels the model
+# puts at one t (one 1 px step of the ramp) should be one colour: where, within
+# a band of at least FOLLOW_MIN core pixels, they spread by more than half a
+# band step (RMS ΔE about their own mean), the lines are not the image's — a
+# centred radial fitted to a rounded card's shadow, whose true level lines are
+# the card's outline grown outwards — and cutting along them draws circles the
+# image does not have.
+FOLLOW_MIN = 64
+
+# Such a ramp is cut where the pixels themselves cross its levels instead: each
+# pixel's own position along the ramp (the nearest point of the ramp's colour
+# curve to its colour, premultiplied), after a Gaussian of this sigma within the
+# region, so the band edges are smooth level lines of the image and not of its
+# noise.
+SMOOTH_SIGMA = 1.5
+
 
 @dataclass(frozen=True)
 class Levels:
@@ -62,14 +79,18 @@ class Levels:
     band: dict[int, tuple[int, int]] = field(default_factory=dict)  # label -> (group, band index)
     fields: dict[int, Fill] = field(default_factory=dict)  # group -> its fitted Linear | Radial
     levels: dict[int, np.ndarray] = field(default_factory=dict)  # group -> t between band k and k+1, ascending
+    # group -> (row, col, t) for a ramp cut where its pixels cross the levels:
+    # each pixel's own t over the region's bounding box from (row, col), NaN outside
+    observed: dict[int, tuple[int, int, np.ndarray]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.band)
 
     def model(self, lab: int) -> Fill | None:
-        """The gradient a band was cut from, or None for a label that is no band."""
+        """The gradient a band was cut along, or None for a label that is no band
+        or a band of a ramp whose level lines were not the image's."""
         found = self.band.get(int(lab))
-        return None if found is None else self.fields[found[0]]
+        return None if found is None or found[0] in self.observed else self.fields[found[0]]
 
     def _between(self, a: int, b: int) -> tuple[Fill, float] | None:
         """(ramp, level) when `a` and `b` are consecutive bands of one ramp."""
@@ -78,9 +99,24 @@ class Levels:
             return None
         return self.fields[fa[0]], float(self.levels[fa[0]][min(fa[1], fb[1])])
 
+    def unbanded(self, labels: np.ndarray) -> np.ndarray:
+        """`labels` with every ramp's bands one region again (each labelled as
+        its lowest band): the shapes the partition drew, before the cut."""
+        if not self.band:
+            return labels
+        first: dict[int, int] = {}
+        for lab in sorted(self.band):
+            first.setdefault(self.band[lab][0], lab)
+        lut = np.arange(int(labels.max()) + 1, dtype=labels.dtype)
+        for lab, (group, _) in self.band.items():
+            lut[lab] = first[group]
+        return lut[labels]
+
     def sibling(self, a: int, b: int) -> bool:
-        """Is the edge between `a` and `b` a level line of one ramp?"""
-        return self._between(a, b) is not None
+        """Is the edge between `a` and `b` one of a ramp's own level lines (a
+        line or a circle, which a node can be moved onto)?"""
+        fa = self.band.get(int(a))
+        return self._between(a, b) is not None and fa[0] not in self.observed
 
     def onto(self, a: int, b: int, point: np.ndarray, along: int | None = None) -> np.ndarray:
         """`point` moved onto the level line between bands `a` and `b`: across
@@ -126,8 +162,14 @@ class Levels:
         if found is None:
             return None
         ramp, level = found
-        t_a = ramp.param(c_a[:, 0], c_a[:, 1])
-        t_b = ramp.param(c_b[:, 0], c_b[:, 1])
+        seen = self.observed.get(self.band[int(a)][0])
+        if seen is None:
+            t_a = ramp.param(c_a[:, 0], c_a[:, 1])
+            t_b = ramp.param(c_b[:, 0], c_b[:, 1])
+        else:  # the pixels' own t at the two pixel centres
+            r0, c0, grid = seen
+            t_a = grid[np.floor(c_a[:, 1]).astype(np.int64) - r0, np.floor(c_a[:, 0]).astype(np.int64) - c0]
+            t_b = grid[np.floor(c_b[:, 1]).astype(np.int64) - r0, np.floor(c_b[:, 0]).astype(np.int64) - c0]
         den = t_b - t_a
         s = np.where(np.abs(den) > 1e-12, (level - t_a) / np.where(np.abs(den) > 1e-12, den, 1.0), np.nan)
         return np.where((s >= 0.0) & (s <= 1.0), s, np.nan)
@@ -165,14 +207,98 @@ def band_levels(ramp: Fill, t_lo: float, t_hi: float, step: float) -> np.ndarray
     feat = _features(_interp_stops(ts, ramp.stops))
     length = np.concatenate([[0.0], np.cumsum(np.sqrt(((feat[1:] - feat[:-1]) ** 2).sum(axis=1)))])
     total = float(length[-1])
-    # Bands of equal colour distance are not of equal width where the ramp is
-    # uneven in Lab, so the count comes down until the narrowest is wide enough.
+    # Equal colour distances crowd where the ramp is steep, so the count comes
+    # down until no band is narrower than BAND_MIN_PX. A radial's innermost band
+    # is a disc when the region holds the centre, and a disc is as wide as its
+    # diameter: a pupil in a radial eye is a band.
+    disc = isinstance(ramp, Radial) and lo * reach <= 1.0
     for n in range(min(int(math.ceil(total / max(step, 1e-9) - 1e-9)), int(math.floor(span_px / BAND_MIN_PX))), 1, -1):
         levels = np.array([_invert(length, ts, j * total / n) for j in range(1, n)])
-        edges = np.concatenate([[lo], levels, [hi]])
-        if float(np.diff(edges).min()) * reach >= BAND_MIN_PX - 1e-9:
+        widths = np.diff(np.concatenate([[lo], levels, [hi]])) * reach
+        if disc:
+            widths[0] = 2.0 * float(levels[0]) * reach
+        if float(widths.min()) >= BAND_MIN_PX - 1e-9:
             return levels
     return none
+
+
+def follows(ramp: Fill, t: np.ndarray, features: np.ndarray, core: np.ndarray, levels: np.ndarray,
+            step: float) -> bool:
+    """Are the ramp's level lines the image's? `t` and `features` are the
+    region's pixels' (row-major), `core` which of them are past the rim. See
+    FOLLOW_MIN: false when, in some band, the pixels at one t spread by more
+    than half of `step`."""
+    reach = math.hypot(ramp.x2 - ramp.x1, ramp.y2 - ramp.y1) if isinstance(ramp, Linear) else ramp.r
+    tc, fc = t[core], features[core].astype(np.float64)
+    if tc.size == 0:
+        return True
+    at = np.floor((tc - tc.min()) * reach).astype(np.int64)
+    count = np.bincount(at).astype(np.float64)
+    mean = np.stack([np.bincount(at, weights=fc[:, k], minlength=count.size) for k in range(4)], axis=1)
+    mean /= np.maximum(count, 1.0)[:, None]
+    d = fc - mean[at]
+    dev = ((d[:, 0] * d[:, 0] + d[:, 1] * d[:, 1]) + d[:, 2] * d[:, 2]) + d[:, 3] * d[:, 3]
+    k_of = np.searchsorted(levels, tc, side="right")
+    n = np.bincount(k_of, minlength=levels.size + 1)
+    spread = np.bincount(k_of, weights=dev, minlength=levels.size + 1)
+    bar = (0.5 * step) ** 2
+    return not any(n[k] >= FOLLOW_MIN and spread[k] / n[k] > bar for k in range(levels.size + 1))
+
+
+def _premultiplied(c: np.ndarray) -> np.ndarray:
+    a = c[..., 3:4] / 255.0
+    return np.concatenate([c[..., :3] * a, c[..., 3:4]], axis=-1)
+
+
+def observed_t(ramp: Fill, lo: float, hi: float, rgba: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """Each of the region's pixels' own position t along the ramp (row-major
+    over `m`, the region in the crop `rgba`): the nearest point of the ramp's
+    colour curve over [lo, hi] to the pixel's colour after a Gaussian of
+    SMOOTH_SIGMA within the region, both premultiplied, so a transparent pixel's
+    inpainted colour counts for nothing."""
+    inside = m.astype(np.float64)
+    den = ndimage.gaussian_filter(inside, SMOOTH_SIGMA, mode="constant")
+    pm = _premultiplied(rgba.astype(np.float64)) * inside[..., None]
+    num = np.stack([ndimage.gaussian_filter(pm[..., k], SMOOTH_SIGMA, mode="constant") for k in range(4)], axis=-1)
+    c = num[m] / den[m][:, None]
+    ts = lo + (hi - lo) * np.arange(RAMP_SAMPLES + 1) / RAMP_SAMPLES
+    curve = _premultiplied(_interp_stops(ts, ramp.stops))
+
+    def d2(p: np.ndarray, q: np.ndarray) -> np.ndarray:
+        d = p - q
+        return ((d[..., 0] * d[..., 0] + d[..., 1] * d[..., 1]) + d[..., 2] * d[..., 2]) + d[..., 3] * d[..., 3]
+
+    near = np.empty(len(c), dtype=np.int64)
+    for i in range(0, len(c), 2048):
+        near[i:i + 2048] = np.argmin(d2(c[i:i + 2048, None, :], curve[None]), axis=1)
+    # the nearest point of the two segments either side of the nearest sample
+    best_t = ts[near].copy()
+    best_d = d2(c, curve[near])
+    for j0 in (near - 1, near):
+        ok = (j0 >= 0) & (j0 < RAMP_SAMPLES)
+        j = np.clip(j0, 0, RAMP_SAMPLES - 1)
+        p0, p1 = curve[j], curve[j + 1]
+        e, f = p1 - p0, c - p0
+        ee = ((e[:, 0] * e[:, 0] + e[:, 1] * e[:, 1]) + e[:, 2] * e[:, 2]) + e[:, 3] * e[:, 3]
+        ef = ((e[:, 0] * f[:, 0] + e[:, 1] * f[:, 1]) + e[:, 2] * f[:, 2]) + e[:, 3] * f[:, 3]
+        u = np.clip(np.where(ee > 0.0, ef / np.where(ee > 0.0, ee, 1.0), 0.0), 0.0, 1.0)
+        dist = d2(c, p0 + u[:, None] * e)
+        better = ok & (dist < best_d)
+        best_d = np.where(better, dist, best_d)
+        best_t = np.where(better, ts[j] + u * (ts[j + 1] - ts[j]), best_t)
+    return best_t
+
+
+def _band_colour(c: np.ndarray, own: bool) -> np.ndarray:
+    """A band's paint from the colours over it: their mean, alpha-weighted for
+    the pixels' own colours (`own`), whose colour under a transparent pixel is
+    inpainted and means nothing."""
+    if not own:
+        return c.mean(axis=0)
+    a = c[:, 3]
+    total = float(a.sum())
+    rgb = (c[:, :3] * a[:, None]).sum(axis=0) / total if total > 0.0 else c[:, :3].mean(axis=0)
+    return np.concatenate([rgb, [float(a.mean())]])
 
 
 def _absorb(pieces: np.ndarray, first: int, count: int, min_region: int) -> dict[int, int]:
@@ -250,6 +376,7 @@ def posterize_fills(
     xs: np.ndarray,
     ys: np.ndarray,
     rgba255: np.ndarray,
+    features: np.ndarray,
     step: float,
     min_region: int,
 ) -> tuple[np.ndarray, dict[int, Fill], dict[int, bool], Levels]:
@@ -258,7 +385,9 @@ def posterize_fills(
     Returns the new labels (compact, 1..K, in the order the regions had, each
     ramp's bands in order along it), a Solid fill and the visibility for every
     label, and the `Levels` the bands were cut at. A gradient too short to cut
-    becomes its core's flat colour.
+    becomes its core's flat colour. A ramp whose level lines are not the
+    image's (`follows`) is cut where its pixels cross the levels (`observed_t`),
+    each band the mean of its own pixels.
     """
     solid = FitParams(gradients=False)
     out = np.zeros_like(labels)
@@ -267,6 +396,7 @@ def posterize_fills(
     band: dict[int, tuple[int, int]] = {}
     fields: dict[int, Fill] = {}
     level_of: dict[int, np.ndarray] = {}
+    seen_of: dict[int, tuple[int, int, np.ndarray]] = {}
     next_id = 1
     boxes = ndimage.find_objects(np.maximum(labels, 0))
     for index, box in enumerate(boxes):
@@ -276,7 +406,9 @@ def posterize_fills(
         m = labels[box] == lab
         fill = fills[lab]
         levels = np.zeros(0)
-        if isinstance(fill, (Linear, Radial)):
+        # A thin region's ramp is its anti-aliasing along a line, and the line
+        # is one stroke of one colour: it is never cut.
+        if isinstance(fill, (Linear, Radial)) and not is_thin(labels == lab):
             t = fill.param(xs[box][m], ys[box][m])
             levels = band_levels(fill, float(t.min()), float(t.max()), step)
         if levels.size == 0:
@@ -289,6 +421,14 @@ def posterize_fills(
             new_visible[next_id] = visible[lab]
             next_id += 1
             continue
+        _, core = interior(labels == lab)
+        lo, hi = min(max(float(t.min()), 0.0), 1.0), min(max(float(t.max()), 0.0), 1.0)
+        free = not follows(fill, t, features[box][m], core, levels, step)
+        if free:
+            t = observed_t(fill, lo, hi, rgba255[box], m)
+            grid = np.full(m.shape, np.nan)
+            grid[m] = t
+            seen_of[lab] = (box[0].start, box[1].start, grid)
         k_of = np.full(m.shape, -1, np.int64)
         k_of[m] = np.searchsorted(levels, t, side="right")
         pieces = np.zeros(m.shape, np.int64)
@@ -306,18 +446,21 @@ def posterize_fills(
             pieces[pieces == k] = d
         kept = [k for k in range(1, count + 1) if k not in joined]
         region = out[box]
-        model = fill.evaluate(xs[box][m], ys[box][m])
+        # the ramp's mean over the band: a band that is mostly the plateau
+        # beyond a steep step is the plateau's colour, not the step's. A ramp
+        # whose lines were not the image's is not its colours either, and a
+        # band there is the mean of its own pixels (premultiplied).
+        colour = rgba255[box][m] if free else fill.evaluate(xs[box][m], ys[box][m])
         for k in kept:
             piece = pieces == k
             region[piece] = next_id
             b = piece_band[k]
-            # the ramp's mean over the band: a band that is mostly the plateau
-            # beyond a steep step is the plateau's colour, not the step's
-            new_fills[next_id] = Solid(rgba=model[piece[m]].mean(axis=0))
+            new_fills[next_id] = Solid(rgba=_band_colour(colour[piece[m]], free))
             new_visible[next_id] = visible[lab]
             band[next_id] = (lab, b)
             next_id += 1
         fields[lab] = fill
         level_of[lab] = levels
     # ids were handed out consecutively, so the map is compact already
-    return out.astype(np.int32), new_fills, new_visible, Levels(band=band, fields=fields, levels=level_of)
+    return out.astype(np.int32), new_fills, new_visible, Levels(band=band, fields=fields, levels=level_of,
+                                                                observed=seen_of)
