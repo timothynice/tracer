@@ -40,6 +40,15 @@ fn inpaint_transparent(rgb: &mut Image, alpha: &Grid<f64>) {
     }
 }
 
+/// `alpha · 255` as the Python computes it: its alpha is float32 and so is
+/// `prep.alpha * 255.0`, which rounds back to the integer alpha exactly
+/// (f32(242/255)·255 is 242). Widened to f64 first, it is 242.00000077, and on
+/// a translucent low-contrast edge that is 1.5e-6 px of placed vertex.
+#[inline]
+pub fn alpha255(alpha: f64) -> f64 {
+    (alpha as f32 * 255.0f32) as f64
+}
+
 pub fn prepare(rgba: &[u8], h: usize, w: usize) -> Prepared {
     let n = h * w;
     let mut rgb = Image::new(h, w, 3);

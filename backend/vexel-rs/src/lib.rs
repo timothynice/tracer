@@ -362,7 +362,7 @@ mod python {
         let rgba255: Vec<[f64; 4]> = (0..h * w)
             .map(|i| {
                 let px = prep.rgb.px(i);
-                [px[0], px[1], px[2], prep.alpha.data[i] * 255.0]
+                [px[0], px[1], px[2], crate::prepare::alpha255(prep.alpha.data[i])]
             })
             .collect();
         let xs: Vec<f64> = (0..h * w).map(|i| (i % w) as f64 + 0.5).collect();
@@ -717,7 +717,7 @@ mod python {
         let rgba255: Vec<[f64; 4]> = (0..h * w)
             .map(|i| {
                 let px = prep.rgb.px(i);
-                [px[0], px[1], px[2], prep.alpha.data[i] * 255.0]
+                [px[0], px[1], px[2], crate::prepare::alpha255(prep.alpha.data[i])]
             })
             .collect();
         let (out, new_fills, _, lv) =

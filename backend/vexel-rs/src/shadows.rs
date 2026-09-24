@@ -839,7 +839,7 @@ fn try_ray(
     let mut corrected: Vec<[f64; 4]> = (0..h * w)
         .map(|i| {
             let p = rgb.px(i);
-            [p[0], p[1], p[2], prep.alpha.data[i] * 255.0]
+            [p[0], p[1], p[2], crate::prepare::alpha255(prep.alpha.data[i])]
         })
         .collect();
     let mut composed: Vec<[f64; 3]> = vec![*b0; h * w];
@@ -990,7 +990,7 @@ fn detect_clear(
     let mut small_alpha = Grid::<f64>::new(sh, sw);
     for r in 0..sh {
         for c in 0..sw {
-            small_alpha.data[r * sw + c] = alpha.data[(r * step) * w + c * step] * 255.0;
+            small_alpha.data[r * sw + c] = crate::prepare::alpha255(alpha.data[(r * step) * w + c * step]);
         }
     }
 
@@ -1334,7 +1334,7 @@ fn detect_inset(
                     (p[0] - s * u[0]).clamp(0.0, 255.0),
                     (p[1] - s * u[1]).clamp(0.0, 255.0),
                     (p[2] - s * u[2]).clamp(0.0, 255.0),
-                    (prep.alpha.data[i] * 255.0).clamp(0.0, 255.0),
+                    crate::prepare::alpha255(prep.alpha.data[i]).clamp(0.0, 255.0),
                 ]
             })
             .collect();

@@ -89,7 +89,7 @@ fn outside_label(labels: &Labels, mask: &Mask) -> Labels {
 
 fn pixel_colour(rgb: &Image, alpha: &Grid<f64>, i: usize) -> [f64; 4] {
     let p = rgb.px(i);
-    [p[0], p[1], p[2], alpha.data[i] * 255.0]
+    [p[0], p[1], p[2], crate::prepare::alpha255(alpha.data[i])]
 }
 
 /// 1 inside, 0 outside, estimated coverage on the boundary ring — computed on

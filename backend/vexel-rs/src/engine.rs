@@ -308,7 +308,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     let rgba255: Vec<[f64; 4]> = (0..height * width)
         .map(|i| {
             let q = prep.rgb.px(i);
-            [q[0], q[1], q[2], prep.alpha.data[i] * 255.0]
+            [q[0], q[1], q[2], crate::prepare::alpha255(prep.alpha.data[i])]
         })
         .collect();
 

@@ -78,11 +78,12 @@ TOLERANCE = {
     # Rust sums with independent accumulators — a few ulps of a colour level.
     "local_fills": ("max", 1e-9, 0.0),
     # The placement alone, given one (extended) label map and the Python's
-    # fills: what differs is those ulps and the Python's alpha, scaled to 255 in
-    # float32 where the Rust scales it in double (a few 1e-7 px, and there
-    # before the local fills), carried through a projection and a crossing
-    # interpolation. A decision they tipped (a coverage level at exactly a
-    # half) would move a vertex by a pixel and fail this outright.
+    # fills: what differs is those ulps, carried through a projection and a
+    # crossing interpolation. (The Rust scales alpha to 255 in float32 as the
+    # Python does, `prepare::alpha255`: in double it was 7.7e-7 of a level off,
+    # 1.5e-6 px on venn-512-ds's translucent low-contrast edge.) A decision
+    # they tipped (a coverage level at exactly a half) would move a vertex by
+    # a pixel and fail this outright.
     "placed": ("max", 1e-6, 0.0),
     # `placed` carried through symmetry and the junctions, given one label map
     # and one set of fills: the same ulps, through line fits and node solves.
@@ -462,9 +463,7 @@ def nodes(path):
     the wedge extension, the placement, symmetry and the junctions (the tip
     hold, the revert guard) and rectangles, given one label map and the
     Python's fills — `placed` carried through everything that moves a vertex,
-    so a difference here is a rule, not a fill. The Rust passes it only with
-    the pinholes port's tip-revert guard and the rects port in; until then it
-    names the arcs where they bite."""
+    so a difference here is a rule, not a fill."""
     a, prep, labels, fills = _prepared(path)
     h, w = a.shape[:2]
     bnd = topology.build(labels, prep.rgb, prep.alpha, lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
