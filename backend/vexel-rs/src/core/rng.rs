@@ -1,12 +1,14 @@
 //! numpy's PCG64 and `Generator.choice(n, k, replace=False)`.
 //!
 //! `fills.fit_fill` subsamples large regions with
-//! `np.random.default_rng(1234).choice(n, 2500, replace=False)`, and which
+//! `np.random.default_rng(1234).choice(n, 25000, replace=False)`, and which
 //! pixels it picks changes the fitted gradient. Reproducing the draw is the
 //! only way to tell a real difference in the fit from sampling noise, so this
 //! is PCG64's `xsl_rr_128_64` output function, numpy's Lemire bounded
-//! generation, and Floyd's algorithm with the same hash-set probing and the
-//! same final shuffle.
+//! generation, and both of `choice`'s roads: the tail shuffle of the whole
+//! range numpy takes when more than a fiftieth of a large population is
+//! wanted, and Floyd's algorithm with the same hash-set probing and the same
+//! final shuffle otherwise.
 //!
 //! The seed is always the literal 1234, so the 128-bit state SeedSequence
 //! derives for it is embedded rather than reimplementing SeedSequence.
@@ -111,9 +113,30 @@ fn gen_mask(mut max: u64) -> u64 {
     max
 }
 
-/// `Generator.choice(pop_size, size, replace=False)` — Floyd's algorithm, then
-/// numpy's Fisher-Yates shuffle of the result.
+/// numpy's `_shuffle_int(n, first, data)`: Fisher-Yates over `data[first..n]`
+/// from the top, each drawing its partner from everything below it.
+fn shuffle_int(rng: &mut Pcg64, n: usize, first: usize, data: &mut [u64]) {
+    for i in (first..n).rev() {
+        let j = rng.bounded(i as u64) as usize;
+        data.swap(i, j);
+    }
+}
+
+/// `Generator.choice(pop_size, size, replace=False)` (shuffle=True). numpy
+/// takes one of two roads: past 10000 with more than a fiftieth of the
+/// population wanted, a tail shuffle of the whole range; otherwise Floyd's
+/// algorithm, then a Fisher-Yates shuffle of the result. `fit_fill` asks for
+/// 25000 of a region, which is the tail shuffle for every region under 1.25
+/// M pixels; taking Floyd's there fitted large gradients to other pixels
+/// than the Python (silverpeak-badge's backdrop ramp 3 px off at its end).
 pub fn choice_without_replacement(rng: &mut Pcg64, pop_size: u64, size: usize) -> Vec<u64> {
+    const CUTOFF: u64 = 50;
+    if pop_size > 10_000 && size as u64 > pop_size / CUTOFF {
+        let n = pop_size as usize;
+        let mut idx: Vec<u64> = (0..pop_size).collect();
+        shuffle_int(rng, n, (n - size).max(1), &mut idx);
+        return idx[n - size..].to_vec();
+    }
     let mut idx = vec![0u64; size];
     let set_size_seed = (1.2f64 * size as f64) as u64;
     let mask = gen_mask(set_size_seed);
@@ -140,9 +163,6 @@ pub fn choice_without_replacement(rng: &mut Pcg64, pop_size: u64, size: usize) -
         }
     }
     // `_shuffle_int(size, 1, idx)`
-    for i in (1..size).rev() {
-        let j = rng.bounded(i as u64) as usize;
-        idx.swap(i, j);
-    }
+    shuffle_int(rng, size, 1, &mut idx);
     idx
 }
