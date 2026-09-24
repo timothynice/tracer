@@ -2412,6 +2412,32 @@ mod node_tests {
     use super::*;
 
     #[test]
+    fn local_fills_read_the_colour_beside_the_edge() {
+        // the Python's test_local_fills_read_the_colour_beside_the_edge
+        let (h, w) = (20, 20);
+        let mut labels: Labels = Grid::new(h, w);
+        let mut rgb = Image::new(h, w, 3);
+        for r in 0..h {
+            for c in 0..w {
+                let (lab, col) = if c < 10 { (1, [20.0, 120.0, 250.0]) } else { (2, [10.0, 150.0, 250.0]) };
+                labels.set(r, c, lab);
+                rgb.data[(r * w + c) * 3..(r * w + c) * 3 + 3].copy_from_slice(&col);
+            }
+        }
+        let fill = |lab: i32, qx: &[f64], _qy: &[f64]| -> Vec<[f64; 4]> {
+            let v = if lab == 1 { [20.0, 100.0, 250.0, 255.0] } else { [10.0, 150.0, 250.0, 255.0] };
+            vec![v; qx.len()]
+        };
+        let local = LocalFills::build(&labels, &rgb, &fill);
+        let at_edge = local.at(&fill, 1, &[9.5], &[10.5])[0];
+        assert!((at_edge[1] - 120.0).abs() < 3.0, "{at_edge:?}");
+        let right = local.at(&fill, 2, &[10.5], &[10.5])[0];
+        for (got, want) in right.iter().zip([10.0, 150.0, 250.0, 255.0]) {
+            assert!((got - want).abs() < 1e-6, "{right:?}");
+        }
+    }
+
+    #[test]
     fn node_estimate_recovers_a_shallow_crossing_and_declines_a_parallel_one() {
         let d1: P = [1.0, 0.0];
         let a = 15f64.to_radians();
