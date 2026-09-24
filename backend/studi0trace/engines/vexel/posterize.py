@@ -167,12 +167,22 @@ class Levels:
             t_a = ramp.param(c_a[:, 0], c_a[:, 1])
             t_b = ramp.param(c_b[:, 0], c_b[:, 1])
         else:  # the pixels' own t at the two pixel centres
-            r0, c0, grid = seen
-            t_a = grid[np.floor(c_a[:, 1]).astype(np.int64) - r0, np.floor(c_a[:, 0]).astype(np.int64) - c0]
-            t_b = grid[np.floor(c_b[:, 1]).astype(np.int64) - r0, np.floor(c_b[:, 0]).astype(np.int64) - c0]
+            t_a, t_b = _sample(seen, c_a), _sample(seen, c_b)
         den = t_b - t_a
         s = np.where(np.abs(den) > 1e-12, (level - t_a) / np.where(np.abs(den) > 1e-12, den, 1.0), np.nan)
         return np.where((s >= 0.0) & (s <= 1.0), s, np.nan)
+
+
+def _sample(seen: tuple[int, int, np.ndarray], c: np.ndarray) -> np.ndarray:
+    """An observed t grid at pixel centres `c` (N, 2): NaN off the region (a
+    pixel the wedge extension handed to a band from outside it)."""
+    r0, c0, grid = seen
+    r = np.floor(c[:, 1]).astype(np.int64) - r0
+    q = np.floor(c[:, 0]).astype(np.int64) - c0
+    ok = (r >= 0) & (r < grid.shape[0]) & (q >= 0) & (q < grid.shape[1])
+    out = np.full(len(c), np.nan)
+    out[ok] = grid[r[ok], q[ok]]
+    return out
 
 
 def _features(colours: np.ndarray) -> np.ndarray:
