@@ -80,6 +80,8 @@ pub const TRIM_SHARE: f64 = 0.3;
 /// An arc shorter than this has no direction worth reading; nodes it joins are
 /// one junction, and it collapses onto them.
 pub const SHORT_ARC: f64 = 2.1;
+/// px: a vertex this close to the end guard of `open_corners` is on it.
+pub const GUARD_TIE: f64 = 1e-9;
 /// Two arcs leaving a node are one smooth curve only if one line or one cubic
 /// fits SMOOTH_SPAN px of each, node in the middle, within SMOOTH_TOL of the
 /// tolerance; pairs turning more than SMOOTH_MAX_TURN are not tried.
@@ -1445,10 +1447,12 @@ fn open_corners(pts: &[P], threshold_deg: f64) -> Vec<usize> {
         }
     }
     // The ends are nodes: already placed, already tangent-matched, and the chord
-    // either side of them is truncated, which biases the angle there.
+    // either side of them is truncated, which biases the angle there. The test
+    // is inclusive at both ends, and a vertex within GUARD_TIE of the guard is
+    // on it: a staircase's last step is exactly one pixel. See the Python.
     const GUARD: f64 = 1.0;
     for k in 0..n {
-        if cum[k] < GUARD || cum[k] > total - GUARD {
+        if cum[k] <= GUARD + GUARD_TIE || cum[k] >= total - GUARD - GUARD_TIE {
             angles[k] = 0.0;
         }
     }

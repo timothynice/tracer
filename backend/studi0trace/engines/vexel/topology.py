@@ -166,6 +166,8 @@ TRIM_SHARE = 0.3
 # and that arc's "line" is the lattice edge it happens to sit on. The nodes are
 # placed from the long arcs alone, and then coincide.
 SHORT_ARC = 2.1
+# px: a vertex this close to the end guard of `_open_corners` is on it.
+GUARD_TIE = 1e-9
 # Two arcs leaving a node are one smooth curve only if one line or one cubic
 # fits SMOOTH_SPAN px of each, node in the middle, within a fraction of the
 # tolerance. Pairs turning more than SMOOTH_MAX_TURN are not even tried.
@@ -2842,9 +2844,15 @@ def _open_corners(pts: np.ndarray, threshold_deg: float, scales: tuple[float, ..
         angles = np.minimum(angles, ang)
     # The ends are nodes: already placed, already tangent-matched, and the
     # chord either side of them is truncated, which biases the angle there.
+    # A vertex exactly `guard` from an end is the rule on a pixel lattice (a
+    # staircase's last step is one pixel), so the test is the same inclusive
+    # one at both ends, and anything within GUARD_TIE of the guard counts as
+    # on it: the start had been exclusive and the end inclusive (the Rust
+    # port's end exclusive), so an arc fitted a corner at a zig-zag one pixel
+    # from its end in one engine and not the other, and an arc walked the
+    # other way round could fit differently from itself.
     guard = 1.0
-    angles[: max(1, int(np.searchsorted(cum, guard)))] = 0.0
-    angles[min(n - 1, int(np.searchsorted(cum, cum[-1] - guard))) :] = 0.0
+    angles[(cum <= guard + GUARD_TIE) | (cum >= cum[-1] - guard - GUARD_TIE)] = 0.0
 
     cand = np.nonzero(angles > threshold_deg)[0]
     if cand.size == 0:

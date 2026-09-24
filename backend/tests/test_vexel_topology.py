@@ -871,3 +871,40 @@ def test_a_held_tip_leaves_its_curved_side_free_and_the_straight_edge_beyond_it_
             if top.sum() > 50:
                 waves.append(float(np.ptp(pts[top, 1])))
         assert waves and max(waves) < 0.1, (preset, waves)
+
+
+# thin-mark-512-ds, arc (706, 726) as the junctions leave it: a staircase that
+# zig-zags one pixel before its end node, the last step exactly one pixel.
+_ZIGZAG = np.array([[336.32, 373.8019], [337.0746, 374.9586], [337.804, 375.7293], [338.152, 376.1], [338.826, 376.8],
+                    [339.5, 377.5], [338.2575, 378.5], [338.396, 379.5], [339.5, 380.0], [340.5, 381.25],
+                    [341.0, 380.5], [341.0, 381.5]])
+
+
+def test_a_vertex_one_pixel_from_either_end_of_an_arc_is_never_its_corner():
+    """The end guard of `_open_corners` was exclusive at the start and inclusive
+    at the end, and the Rust port's was exclusive at the end: the zig-zag one
+    pixel before this arc's end node was a corner in Rust and not in Python
+    (CCCCCL against CCCL), and the arc walked the other way round could fit
+    differently from itself. Both ends are guarded alike now, inclusively."""
+    from studi0trace.engines.vexel import engine as vexel
+    from studi0trace.engines.vexel.curves import Line
+    from studi0trace.engines.vexel.topology import _open_corners
+
+    n = len(_ZIGZAG)
+    back = _ZIGZAG[::-1].copy()
+    assert n - 2 not in _open_corners(_ZIGZAG, 60.0)
+    assert 1 not in _open_corners(back, 60.0)
+    assert sorted(n - 1 - k for k in _open_corners(back, 60.0)) == _open_corners(_ZIGZAG, 60.0)
+
+    if vexel._vexel_rs is None:
+        return
+    # the Rust fitter finds the same breaks: one corner, the same segment kinds
+    params = CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True)
+    for pts in (_ZIGZAG, back):
+        rs = vexel._vexel_rs._fit_arc(pts.ravel().tolist(), False, None, None, 0.0, 0.0, None, None,
+                                      params.corner_threshold, params.tol, params.snap_axis_deg)
+        from studi0trace.engines.vexel.topology import _fit_arc
+
+        arc = Arc(pair=(1, 2), pts=pts, n0=0, n1=1, trim0=0.0, trim1=0.0)
+        py = ["L" if isinstance(s, Line) else "C" for s in _fit_arc(arc, params)]
+        assert py == ["L" if k == "L" else "C" for k, _ in rs]
