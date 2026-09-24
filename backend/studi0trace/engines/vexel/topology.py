@@ -97,6 +97,19 @@ UNDER_TOL = 0.6
 # offset of what is drawn, not of the vertices the fit was free to leave.
 UNDER_STEP = 1.0
 UNDER_SUB = 4
+# A length that is a whole number of steps up to rounding is that many steps.
+# A rectangle's side on the pixel grid is 16 px long give or take the last bit
+# of the arithmetic that put its nodes there, and `ceil` of 16.000000000000004
+# is one more vertex than `ceil` of 16.0: which one came out depended on the
+# order the two engines summed the node positions in.
+STEP_TIE = 1e-9
+
+
+def _steps(length: float, step: float = 1.0) -> int:
+    """How many `step`s cover `length`: `ceil`, with a length within
+    `STEP_TIE` of a whole number of steps taken as exactly that number."""
+    return int(math.ceil(length / step - STEP_TIE))
+
 UNDER_TURN = 5.0  # degrees
 # ...and a sample that comes back nearer the visible curve than this share of
 # the bleed is dropped: the offset of an inside corner, or of a bend tighter than
@@ -2352,11 +2365,11 @@ def _resample(arc: Arc) -> None:
         if isinstance(seg, CircArc):
             dense = arc_points(seg, 33)
             length = float(np.sum(np.linalg.norm(np.diff(dense, axis=0), axis=1)))
-            k = max(2, int(math.ceil(length / RESAMPLE_STEP)) + 1)
+            k = max(2, _steps(length, RESAMPLE_STEP) + 1)
             q = arc_points(seg, k)
         else:
             length = float(np.linalg.norm(seg.p1 - seg.p0))
-            k = max(2, int(math.ceil(length / RESAMPLE_STEP)) + 1)
+            k = max(2, _steps(length, RESAMPLE_STEP) + 1)
             t = np.linspace(0.0, 1.0, k)[:, None]
             q = seg.p0 + (seg.p1 - seg.p0) * t
         pts.extend(q if not pts else q[1:])
@@ -2662,10 +2675,10 @@ def _resample_corner(arc: Arc, x: np.ndarray, da: np.ndarray, db: np.ndarray, t1
     end = x + db * float((pts[hi] - x) @ db)
     parts = []
     for p, q in ((start, t1), (t2, end)):
-        k = max(2, int(math.ceil(float(np.linalg.norm(q - p)))) + 1)
+        k = max(2, _steps(float(np.linalg.norm(q - p))) + 1)
         parts.append(p + (q - p) * np.linspace(0.0, 1.0, k)[:, None])
     dense = arc_points(fillet, 33)
-    k = max(2, int(math.ceil(float(np.sum(np.linalg.norm(np.diff(dense, axis=0), axis=1))))) + 1)
+    k = max(2, _steps(float(np.sum(np.linalg.norm(np.diff(dense, axis=0), axis=1)))) + 1)
     new = np.vstack([parts[0][:-1], arc_points(fillet, k)[:-1], parts[1]])
     ahead = np.vstack([new[1:], new[-1:]])
     behind = np.vstack([new[:1], new[:-1]])
@@ -2739,14 +2752,14 @@ def _sample(segments: list[Segment], step: float = UNDER_STEP) -> tuple[np.ndarr
     for seg in segments:
         if isinstance(seg, Line):
             d = seg.p1 - seg.p0
-            m = max(1, math.ceil(float(np.linalg.norm(d)) / step))
+            m = max(1, _steps(float(np.linalg.norm(d)), step))
             t = np.linspace(0.0, 1.0, m + 1)
             pts = seg.p0 + t[:, None] * d
             tan = np.repeat(d[None, :], m + 1, axis=0)
         elif isinstance(seg, Cubic):
             length = 0.5 * (float(np.linalg.norm(seg.p1 - seg.p0)) + float(
                 np.linalg.norm(seg.c1 - seg.p0) + np.linalg.norm(seg.c2 - seg.c1) + np.linalg.norm(seg.p1 - seg.c2)))
-            m = max(2, math.ceil(length / step))
+            m = max(2, _steps(length, step))
             t = np.linspace(0.0, 1.0, m + 1)
             pts = _bezier(seg, t)
             tan = _bezier_d1(seg, t)
@@ -2756,7 +2769,7 @@ def _sample(segments: list[Segment], step: float = UNDER_STEP) -> tuple[np.ndarr
             a0 = math.atan2(seg.p0[1] - c[1], seg.p0[0] - c[0])
             a1 = math.atan2(seg.p1[1] - c[1], seg.p1[0] - c[0])
             span = (a1 - a0) % (2.0 * math.pi) if seg.sweep else -((a0 - a1) % (2.0 * math.pi))
-            m = max(2, math.ceil(abs(span) * r / step))
+            m = max(2, _steps(abs(span) * r, step))
             a = a0 + span * np.linspace(0.0, 1.0, m + 1)
             pts = np.column_stack([c[0] + r * np.cos(a), c[1] + r * np.sin(a)])
             pts[0], pts[-1] = seg.p0, seg.p1

@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{Arc, Boundary, NODE_TRIM};
+use super::{steps, Arc, Boundary, NODE_TRIM};
 use crate::core::grid::Image;
 use crate::curves::{fit_cubics, intersect, normalize, reverse_segments, CurveParams, Segment, Shape, P};
 use crate::rects::{self, linspace01, np_median, np_percentile, np_sum, py_mod, py_sum, Model, NODE_ON};
@@ -975,13 +975,13 @@ fn resample(arc: &mut Arc) {
         let q = match seg {
             Segment::Arc { .. } => {
                 let length = np_length(&seg_arc_points(seg, 33));
-                let k = 2usize.max((length / RESAMPLE_STEP).ceil() as usize + 1);
+                let k = 2usize.max(steps(length, RESAMPLE_STEP) + 1);
                 seg_arc_points(seg, k)
             }
             _ => {
                 let (p0, p1) = (seg.start(), seg.end());
                 let length = norm(sub(p1, p0));
-                let k = 2usize.max((length / RESAMPLE_STEP).ceil() as usize + 1);
+                let k = 2usize.max(steps(length, RESAMPLE_STEP) + 1);
                 line_points(p0, p1, k)
             }
         };
@@ -1375,10 +1375,10 @@ fn resample_corner(arc: &mut Arc, x: P, da: P, db: P, t1: P, t2: P, fillet: &Seg
     };
     let mut parts: Vec<Vec<P>> = Vec::new();
     for (p, q) in [(start, t1), (t2, end)] {
-        let k = 2usize.max(norm(sub(q, p)).ceil() as usize + 1);
+        let k = 2usize.max(steps(norm(sub(q, p)), 1.0) + 1);
         parts.push(line_points(p, q, k));
     }
-    let k = 2usize.max(np_length(&seg_arc_points(fillet, 33)).ceil() as usize + 1);
+    let k = 2usize.max(steps(np_length(&seg_arc_points(fillet, 33)), 1.0) + 1);
     let mut new: Vec<P> = parts[0][..parts[0].len() - 1].to_vec();
     let arcp = seg_arc_points(fillet, k);
     new.extend(arcp[..arcp.len() - 1].iter().copied());

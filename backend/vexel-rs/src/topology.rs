@@ -55,6 +55,16 @@ pub const UNDER_TOL: f64 = 0.6;
 /// turning more than UNDER_TURN degrees, is fitted). See the Python `_under`.
 pub const UNDER_STEP: f64 = 1.0;
 pub const UNDER_SUB: usize = 4;
+/// A length that is a whole number of steps up to rounding is that many steps
+/// (see the Python `STEP_TIE`): a rectangle's side on the pixel grid is 16 px
+/// give or take the last bit, and `ceil` would make that one vertex more or not
+/// depending on the order the node positions were summed in.
+pub const STEP_TIE: f64 = 1e-9;
+
+/// How many `step`s cover `length` (the Python `_steps`).
+pub fn steps(length: f64, step: f64) -> usize {
+    (length / step - STEP_TIE).ceil() as usize
+}
 pub const UNDER_TURN: f64 = 5.0;
 /// An offset sample that comes back nearer the visible curve than this share of
 /// its bleed is dropped: the loop an inside corner puts in an offset.
@@ -528,7 +538,7 @@ fn coverage(
             let px = rgb.at(r, c);
             // Premultiplied, as the pixel shows: the colour under a transparent
             // pixel is inpainted and means nothing. See `topology._premultiplied`.
-            let colour = premultiplied(&[px[0], px[1], px[2], *alpha.get(r, c) * 255.0]);
+            let colour = premultiplied(&[px[0], px[1], px[2], crate::prepare::alpha255(*alpha.get(r, c))]);
             let (fa, fb) = (premultiplied(&f_a[k]), premultiplied(&f_b[k]));
             let mut denom = 0.0;
             let mut proj = 0.0;
@@ -908,7 +918,7 @@ pub fn extend_wedges(
             return [0.0; 4];
         }
         let px = rgb.at(r as usize, c as usize);
-        [px[0], px[1], px[2], *alpha.get(r as usize, c as usize) * 255.0]
+        [px[0], px[1], px[2], crate::prepare::alpha255(*alpha.get(r as usize, c as usize))]
     };
 
     let mut out = padded.clone();
@@ -1779,13 +1789,13 @@ pub fn sample(segments: &[Segment], step: f64) -> (Vec<P>, Vec<P>) {
         let (pts, mut tan): (Vec<P>, Vec<P>) = match *seg {
             Segment::Line { p0, p1 } => {
                 let d = [p1[0] - p0[0], p1[1] - p0[1]];
-                let m = (((d[0] * d[0] + d[1] * d[1]).sqrt() / step).ceil() as usize).max(1);
+                let m = steps((d[0] * d[0] + d[1] * d[1]).sqrt(), step).max(1);
                 let t = unit_steps(m);
                 (t.iter().map(|u| [p0[0] + u * d[0], p0[1] + u * d[1]]).collect(), vec![d; m + 1])
             }
             Segment::Cubic { p0, c1, c2, p1 } => {
                 let length = 0.5 * (dist(p1, p0) + (dist(c1, p0) + dist(c2, c1) + dist(p1, c2)));
-                let m = ((length / step).ceil() as usize).max(2);
+                let m = steps(length, step).max(2);
                 let t = unit_steps(m);
                 (
                     t.iter().map(|u| crate::curves::bezier(p0, c1, c2, p1, *u)).collect(),
@@ -1799,7 +1809,7 @@ pub fn sample(segments: &[Segment], step: f64) -> (Vec<P>, Vec<P>) {
                 let a1 = (p1[1] - c[1]).atan2(p1[0] - c[0]);
                 let tau = 2.0 * std::f64::consts::PI;
                 let span = if sweep { (a1 - a0).rem_euclid(tau) } else { -((a0 - a1).rem_euclid(tau)) };
-                let m = ((span.abs() * r / step).ceil() as usize).max(2);
+                let m = steps(span.abs() * r, step).max(2);
                 let t = unit_steps(m);
                 let a: Vec<f64> = t.iter().map(|u| a0 + span * u).collect();
                 let mut pts: Vec<P> = a.iter().map(|v| [c[0] + r * v.cos(), c[1] + r * v.sin()]).collect();
