@@ -15,6 +15,7 @@ from skimage.feature import canny
 from skimage.metrics import structural_similarity
 from skimage.morphology import dilation, disk
 
+from bench.artifacts import scorecard
 from bench.config import DEFAULT_WEIGHTS, Weights
 from bench.geometry import line_debt, outline_error
 from bench.raster import luminance, rasterize, to_rgb_on_white
@@ -120,9 +121,9 @@ def seam_index(svg: str, src_rgba: np.ndarray, scale: int = 4, slack: float = 0.
     obvious defect in the output: the backdrop showing through the artwork, dark
     in a dark preview, white in an exported file.
 
-    So this measures coverage structurally rather than by comparing colours. Each
-    painted element is rendered on its own at `scale` and the results are
-    composited the way the renderer stacks them, which is the point: two shapes
+    So this measures coverage structurally rather than by comparing colours: the
+    alpha of a `scale`x render, in which the renderer stacks every element's own
+    anti-aliased coverage source-over, which is the point: two shapes
     that abut on exactly the same line still each anti-alias their own half of
     it, and a half over a half is three quarters, not one. Counting only the
     places nothing at all paints would miss that entirely, so what is counted is
@@ -138,27 +139,19 @@ def seam_index(svg: str, src_rgba: np.ndarray, scale: int = 4, slack: float = 0.
     the edge of the canvas.
     """
     height, width = src_rgba.shape[:2]
-    body = _BODY.search(svg)
-    if not body:
+    if not _BODY.search(svg):
         return 0.0
-    head, inner, tail = body.group(1), body.group(2), body.group(3)
-    defs = re.search(r"<defs\b.*?</defs>", inner, re.DOTALL)
-    prelude = defs.group(0) if defs else ""
-    elements = [m.group(0) for m in _ELEMENT.finditer(inner.replace(prelude, "", 1))]
-    if len(elements) < 2:
-        return 0.0
-
     want = src_rgba[..., 3].astype(np.float32) / 255.0
     want[:1, :] = want[-1:, :] = 0.0
     want[:, :1] = want[:, -1:] = 0.0
     if not (want > 0.5).any():
         return 0.0
-
-    covered = np.zeros((height * scale, width * scale), np.float32)
-    for element in elements:
-        rendered = rasterize(head + prelude + element + tail, width * scale, height * scale)
-        alpha = rendered[..., 3].astype(np.float32) / 255.0
-        covered += alpha * (1.0 - covered)  # source-over, as the renderer stacks them
+    # One render: the renderer composites every element's own anti-aliased
+    # coverage source-over, which is the stacking described above. (Rendering
+    # each element alone and compositing by hand gave the same numbers at 10-20x
+    # the cost, and read a drawing wrapped in one root <g> — the small-input
+    # upsampler's scale(0.5) — as a single element with no seams at all.)
+    covered = rasterize(svg, width * scale, height * scale)[..., 3].astype(np.float32) / 255.0
     per_pixel = covered.reshape(height, scale, width, scale).mean(axis=(1, 3))
     ink = want > 0.5
     return 1e6 * float((ink & (want - per_pixel > slack)).sum()) / float(ink.sum())
@@ -192,6 +185,8 @@ def all_metrics(
         **(outline_error(truth_svg, svg, src_rgba.shape[1], src_rgba.shape[0]) if truth_svg
            else {"outline_px": None, "outline_p99_px": None, "junction_px": None}),
         **line_debt(svg),
+        # What a designer sees wrong: pinholes, slivers, wobble, uneven corners.
+        **scorecard(svg, src_rgba),
         **stats,
         "path_ratio": (stats["paths"] / truth_paths) if truth_paths else None,
         "elapsed_ms": elapsed_ms,

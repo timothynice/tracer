@@ -13,6 +13,7 @@ import numpy as np
 from PIL import Image
 
 from bench import metrics
+from bench.artifacts import ARTIFACT_KEYS, LOWER_IS_BETTER
 from bench.config import DEFAULT_WEIGHTS, Weights
 from bench.corpus import Item
 from bench.raster import load_png, rasterize, to_rgb_on_white
@@ -24,7 +25,7 @@ NUMERIC_KEYS = (
     "paths", "nodes", "bytes", "gradients", "unique_fills", "path_ratio", "elapsed_ms",
     "outline_px", "outline_p99_px", "junction_px", "line_debt_px", "line_debt_segments", "nodes_per_100px",
     "fidelity", "smoothness", "economy", "score",
-)
+) + tuple(k for k in ARTIFACT_KEYS if k not in ("elements", "segments"))
 THUMB = 160
 
 
@@ -144,9 +145,11 @@ def load_results(path: Path) -> dict:
 
 
 def compare(a: dict, b: dict, tolerance: float = 0.01, metric: str = "score") -> tuple[list[str], bool]:
-    """Per engine/class deltas of `metric` (b − a). Regressed if any drops by > tolerance."""
+    """Per engine/class deltas of `metric` (b − a). Regressed if any drops by > tolerance
+    (rises, for a metric where lower is better — the artifact counts, seam_ppm)."""
     lines: list[str] = []
     regressed = False
+    sign = -1.0 if metric in LOWER_IS_BETTER else 1.0
     for engine, by_cls in sorted(b["summary"].items()):
         base = a["summary"].get(engine, {})
         for cls, stats in sorted(by_cls.items()):
@@ -155,10 +158,10 @@ def compare(a: dict, b: dict, tolerance: float = 0.01, metric: str = "score") ->
                 continue
             delta = stats[metric] - base[cls][metric]
             flag = ""
-            if delta < -tolerance:
+            if sign * delta < -tolerance:
                 flag = "  REGRESSION"
                 regressed = True
-            elif delta > tolerance:
+            elif sign * delta > tolerance:
                 flag = "  improved"
             lines.append(f"{engine:>10} {cls:<9} {metric}: {base[cls][metric]:.4f} → {stats[metric]:.4f}  ({delta:+.4f}){flag}")
     return lines, regressed

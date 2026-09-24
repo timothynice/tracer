@@ -193,6 +193,29 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_artifacts(args) -> int:
+    """The artifact scorecard of one SVG against its source, with where each defect is."""
+    from bench.artifacts import scorecard
+    from bench.raster import load_png
+
+    card = scorecard(Path(args.svg).read_text(encoding="utf-8"), load_png(args.source), detail=True)
+    for k, v in card.items():
+        if not k.startswith("_"):
+            print(f"{k:>22}  {v:.2f}" if isinstance(v, float) else f"{k:>22}  {v}")
+    if args.where:
+        print("\npinholes (x, y, sub-px, min cover):",
+              [(round(c["x"], 1), round(c["y"], 1), c["subpx"], round(c["min_cover"], 2)) for c in card["_clusters"] if c["pinhole"]])
+        print("slivers (x, y, area, thickness):", [tuple(round(v, 1) for v in s) for s in card["_slivers_at"]])
+        print("inflections (x, y):", [(round(x), round(y)) for x, y in card["_flips_at"]])
+        print("uneven rects (x, y, radii, bow, skew):", card["_radius_at"])
+        cells: dict = {}
+        for x, y, v in card["_wobble_at"]:
+            key = (int(x // 32) * 32, int(y // 32) * 32)
+            cells[key] = cells.get(key, 0.0) + v
+        print("wobble by 32 px cell:", sorted(((k, round(v)) for k, v in cells.items()), key=lambda t: -t[1])[:12])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="bench", description="Vexel Bench: fidelity evaluation for tracing engines")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -235,6 +258,12 @@ def build_parser() -> argparse.ArgumentParser:
     im.add_argument("--sizes", type=int, nargs="+", default=[512, 128], help="render sizes for SVG inputs")
     im.add_argument("--corpus", default=str(CORPUS))
     im.set_defaults(fn=cmd_import)
+
+    a = sub.add_parser("artifacts", help="artifact scorecard of one SVG against its source PNG")
+    a.add_argument("svg")
+    a.add_argument("source")
+    a.add_argument("--where", action="store_true", help="also list where each defect is")
+    a.set_defaults(fn=cmd_artifacts)
 
     rp = sub.add_parser("report", help="regenerate index.html from a results.json")
     rp.add_argument("results")
