@@ -372,3 +372,48 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod tie_tests {
+    //! Twins of `tests/test_vexel_parity.py`'s symmetry tests.
+    use super::*;
+
+    #[test]
+    fn an_image_between_two_vertices_matches_the_lower_index() {
+        let poly: Vec<P> = vec![[2.0, 0.0], [0.0, 0.0], [5.0, 5.0], [9.0, 1.0]];
+        let grid = Grid::new(&poly);
+        assert_eq!(grid.nearest([1.0, 0.0]).1, 0);
+        assert_eq!(grid.nearest([1.0, 1e-13]).1, 0);
+        assert_eq!(grid.nearest([5.0, 4.0]).1, 2);
+        let mut ring: Vec<P> = vec![[9.0, 9.0]];
+        ring.extend((0..12).rev().map(|k| {
+            let a = 2.0 * std::f64::consts::PI * k as f64 / 12.0;
+            [a.cos(), a.sin()]
+        }));
+        assert_eq!(Grid::new(&ring).nearest([0.0, 0.0]).1, 1);
+    }
+
+    #[test]
+    fn an_isotropic_ring_has_no_principal_axes_only_the_grid() {
+        let mut ring: Vec<P> = Vec::new();
+        for e in 0..32 {
+            ring.push([e as f64 + 100.0, 100.0]);
+        }
+        for e in 0..32 {
+            ring.push([132.0, e as f64 + 100.0]);
+        }
+        for e in 0..32 {
+            ring.push([132.0 - e as f64, 132.0]);
+        }
+        for e in 0..32 {
+            ring.push([100.0, 132.0 - e as f64]);
+        }
+        let axes = mirror_axes(&ring);
+        assert_eq!(axes.len(), 12);
+        assert_eq!(axes[0].1, [1.0, 0.0]);
+        for (k, (_c, d)) in axes.iter().enumerate() {
+            let ang = d[1].atan2(d[0]).to_degrees().rem_euclid(180.0);
+            assert!((ang - 15.0 * k as f64).abs() < 1e-9, "axis {k} at {ang}");
+        }
+    }
+}

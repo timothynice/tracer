@@ -3157,3 +3157,18 @@ mod under_tests {
         assert!(segs.iter().any(|s| dist(s.start(), jog_a) < 1e-9 && dist(s.end(), jog_b) < 1e-9));
     }
 }
+
+#[cfg(test)]
+mod step_tests {
+    use super::*;
+
+    #[test]
+    fn a_length_a_whole_number_of_steps_up_to_rounding_is_that_many() {
+        assert_eq!(steps(16.000000000000004, 1.0), 16);
+        assert_eq!(steps(15.999999999999996, 1.0), 16);
+        assert_eq!(steps(16.0, 1.0), 16);
+        assert_eq!(steps(16.01, 1.0), 17);
+        assert_eq!(steps(8.000000000000002, 0.5), 16);
+        assert_eq!(steps(0.0, 1.0), 0);
+    }
+}

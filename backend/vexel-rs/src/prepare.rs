@@ -73,3 +73,20 @@ pub fn prepare(rgba: &[u8], h: usize, w: usize) -> Prepared {
     }
     Prepared { rgb, alpha, features }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alpha255_is_the_integer_alpha_the_python_gets() {
+        // the prepared alpha is float32's a/255; scaled back in float32, as
+        // numpy scales the Python's, it is `a` exactly
+        for a in 0..=255u8 {
+            let alpha = (a as f32 / 255.0) as f64;
+            assert_eq!(alpha255(alpha), a as f64);
+        }
+        // widened first, it is not
+        assert_ne!((242.0f32 / 255.0) as f64 * 255.0, 242.0);
+    }
+}
