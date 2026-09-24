@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import type { UploadedImage } from "./useUpload";
@@ -9,6 +9,8 @@ export interface UseVectorizeArgs {
   image: UploadedImage | null;
   engines: string[];
   params: Record<string, ParamValues>;
+  /** Let the server trace every Auto candidate and pick one; `params` then play no part. */
+  auto?: boolean;
   enabled?: boolean;
   /** Called when the server no longer has the upload; must return a fresh image_id. */
   reupload: () => Promise<string | null>;
@@ -17,7 +19,7 @@ export interface UseVectorizeArgs {
 
 export interface VectorizeState {
   results: Record<string, EngineResult> | undefined;
-  data: VectorizeResponse | undefined;
+  data: (VectorizeResponse & { hash: string }) | undefined;
   /** A request is in flight (the displayed results may be from the previous settings). */
   updating: boolean;
   /** The displayed results belong to an earlier key. */
@@ -26,23 +28,36 @@ export interface VectorizeState {
   refetch: () => void;
 }
 
-/** Debounces parameter changes, cancels superseded requests, caches per (image, engines, params). */
-export function useVectorize({ image, engines, params, enabled = true, reupload, debounceMs = 250 }: UseVectorizeArgs): VectorizeState {
+/** Debounces parameter changes, cancels superseded requests, caches per (image, engines, params | auto). */
+export function useVectorize({ image, engines, params, auto = false, enabled = true, reupload, debounceMs = 250 }: UseVectorizeArgs): VectorizeState {
+  const client = useQueryClient();
   const engineList = useMemo(() => [...engines].sort(), [engines]);
   const liveKey = useMemo(
-    () => (image ? { hash: image.hash, engines: engineList.join(","), params: Object.fromEntries(engineList.map((e) => [e, paramsKey(params[e] ?? {})])) } : null),
-    [image, engineList, params],
+    () =>
+      image
+        ? auto
+          ? { hash: image.hash, engines: engineList.join(","), auto: true }
+          : { hash: image.hash, engines: engineList.join(","), params: Object.fromEntries(engineList.map((e) => [e, paramsKey(params[e] ?? {})])) }
+        : null,
+    [image, engineList, params, auto],
   );
   const liveKeyString = JSON.stringify(liveKey);
 
-  // Debounce: the query only sees the key after it has been stable for debounceMs.
+  // Debounce: the query only sees the key after it has been stable for
+  // debounceMs — unless its answer is already cached (Auto, or settings seen
+  // before), which is shown at once: there is nothing to wait for.
   const [settled, setSettled] = useState(liveKeyString);
   useEffect(() => {
     if (settled === liveKeyString) return;
+    if (client.getQueryData(["vectorize", JSON.parse(liveKeyString)]) !== undefined) {
+      setSettled(liveKeyString);
+      return;
+    }
     const t = setTimeout(() => setSettled(liveKeyString), debounceMs);
     return () => clearTimeout(t);
-  }, [liveKeyString, settled, debounceMs]);
+  }, [liveKeyString, settled, debounceMs, client]);
   const settledKey = useMemo(() => JSON.parse(settled) as typeof liveKey, [settled]);
+  const settledAuto = !!(settledKey && "auto" in settledKey && settledKey.auto);
 
   const query = useQuery({
     queryKey: ["vectorize", settledKey],
@@ -53,14 +68,16 @@ export function useVectorize({ image, engines, params, enabled = true, reupload,
     queryFn: async ({ signal }) => {
       if (!image) throw new Error("no image");
       const hash = image.hash;
-      const parameters = Object.fromEntries(engineList.map((e) => [e, params[e] ?? {}]));
+      // Auto's candidates carry their own parameters; what the panel holds is not sent.
+      const parameters = settledAuto ? {} : Object.fromEntries(engineList.map((e) => [e, params[e] ?? {}]));
+      const args = { engines: engineList, parameters, auto: settledAuto };
       try {
-        return { ...(await vectorize({ imageId: image.imageId, engines: engineList, parameters }, signal)), hash };
+        return { ...(await vectorize({ imageId: image.imageId, ...args }, signal)), hash };
       } catch (err) {
         if (err instanceof ApiError && err.code === "image_expired") {
           const fresh = await reupload();
           if (!fresh) throw err;
-          return { ...(await vectorize({ imageId: fresh, engines: engineList, parameters }, signal)), hash };
+          return { ...(await vectorize({ imageId: fresh, ...args }, signal)), hash };
         }
         throw err;
       }

@@ -71,6 +71,46 @@ export interface EngineResult {
   error?: EngineError | null;
 }
 
+/** How one Auto candidate did on this image. */
+export interface CandidateScores {
+  /** Mean CIEDE2000 against the source; lower is closer. */
+  delta_e: number;
+  edge_f1: number;
+  /** 0 is clean; each clearly visible defect costs about 1. */
+  artifact_index: number;
+  /** No pinhole, sliver, wobbly edge or uneven rectangle. */
+  clean: boolean;
+  /** What is visibly wrong, in a designer's words ("3 pinholes", "wobbly edges"). */
+  issues: string[];
+  shapes: number;
+  pinholes: number;
+  slivers: number;
+  wobble: number;
+  inflections: number;
+  uneven_rects: number;
+}
+
+/** One preset Auto traced with. */
+export interface AutoCandidate {
+  preset: string;
+  label: string;
+  svg?: string | null;
+  elapsed_ms?: number | null;
+  stats?: Record<string, number> | null;
+  parameters?: Record<string, unknown> | null;
+  scores?: CandidateScores | null;
+  error?: EngineError | null;
+}
+
+/** What Auto tried for one engine and what it chose; the choice is also that engine's `results` entry. */
+export interface AutoResult {
+  engine: string;
+  pick: string | null;
+  /** Finishes the sentence "Auto chose <label> — …". */
+  reason: string;
+  candidates: AutoCandidate[];
+}
+
 export interface VectorizeResponse {
   success: boolean;
   image_id: string;
@@ -78,6 +118,8 @@ export interface VectorizeResponse {
   height: number;
   results: Record<string, EngineResult>;
   parameters_used: Record<string, Record<string, unknown>>;
+  /** Per engine, only when the request asked for Auto. */
+  auto?: Record<string, AutoResult> | null;
 }
 
 export interface UploadResponse {
@@ -98,6 +140,10 @@ export interface Preset {
   detail: string;
   sample: string;
   params: ParamValues;
+  /** "auto" traces with every candidate and picks per image (request it with `auto`, not its params). */
+  kind?: "auto" | "preset";
+  /** Whether Auto tries this preset. */
+  auto_candidate?: boolean;
 }
 
 class TimeoutError extends Error {
@@ -177,12 +223,15 @@ export interface VectorizeArgs {
   imageId: string;
   engines: string[];
   parameters: Record<string, ParamValues>;
+  /** Trace with every Auto candidate and let the server pick (engines without candidates trace as usual). */
+  auto?: boolean;
 }
 
-export function vectorize({ imageId, engines, parameters }: VectorizeArgs, signal?: AbortSignal): Promise<VectorizeResponse> {
+export function vectorize({ imageId, engines, parameters, auto }: VectorizeArgs, signal?: AbortSignal): Promise<VectorizeResponse> {
   const form = new FormData();
   form.append("image_id", imageId);
   form.append("engines", engines.join(","));
   form.append("parameters", JSON.stringify(parameters));
+  if (auto) form.append("auto", "true");
   return request<VectorizeResponse>("/vectorize", { method: "POST", body: form }, signal);
 }
