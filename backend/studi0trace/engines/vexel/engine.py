@@ -39,7 +39,12 @@ from studi0trace.engines.vexel.weights import interior, interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
 POSTERIZE_JOIN_ROUNDS = 3  # further `refine_merge` passes before a ramp is posterised
-POSTERIZE_FIT_DETAIL = 6.0  # the default `detail`: the fit tolerance a posterised trace finds its ramps at
+# The detail whose fit tolerance a posterised trace finds its ramps at. At the
+# user's (Flat's 14) a 28 ΔE ramp across a card is "flat enough" and loses the
+# two bands it should show; at the default 6 a backdrop carrying four soft
+# shadows is fitted as one radial round the largest, and cut into circles the
+# image does not have. Chosen on the bench between the two.
+POSTERIZE_FIT_DETAIL = 8.0
 _CROSS = ndimage.generate_binary_structure(2, 1)
 
 try:  # pragma: no cover - exercised by whichever backend is installed
@@ -321,10 +326,9 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     ys = ys.astype(np.float64) + 0.5
     rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
 
-    # With gradients off the fills are still fitted as the default detail would
-    # fit them, so a ramp the bands should show is found as a ramp: `detail`
-    # then sets how far apart its bands are (`posterize`), not whether a
-    # 28 ΔE ramp across a card is "flat enough".
+    # With gradients off the fills are fitted at POSTERIZE_FIT_DETAIL's
+    # tolerance, so a ramp the bands should show is found as a ramp: `detail`
+    # then sets how far apart its bands are (`posterize`).
     fit_detail = p.detail if p.gradients else min(p.detail, POSTERIZE_FIT_DETAIL)
     fit_params = FitParams(gradients=True, max_stops=p.max_stops, tol=max(2.0, fit_detail / 2.0))
     fills: dict[int, object] = {}

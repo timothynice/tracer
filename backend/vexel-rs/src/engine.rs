@@ -25,8 +25,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 const SVG_NS: &str = "xmlns=\"http://www.w3.org/2000/svg\"";
 /// Further `refine_merge` passes before a ramp is posterised (see the Python).
 const POSTERIZE_JOIN_ROUNDS: usize = 3;
-/// The default `detail`: the fit tolerance a posterised trace finds its ramps at.
-const POSTERIZE_FIT_DETAIL: f64 = 6.0;
+/// The detail whose fit tolerance a posterised trace finds its ramps at: see
+/// the Python `POSTERIZE_FIT_DETAIL` for why it sits between 6 and 14.
+const POSTERIZE_FIT_DETAIL: f64 = 8.0;
 
 #[derive(Clone)]
 pub struct VexelParams {
@@ -311,8 +312,8 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         })
         .collect();
 
-    // With gradients off the fills are still fitted as the default detail would
-    // fit them, so a ramp the bands should show is found as a ramp (see the Python).
+    // With gradients off the fills are fitted at POSTERIZE_FIT_DETAIL's
+    // tolerance, so a ramp the bands should show is found as a ramp (see the Python).
     let fit_detail = if p.gradients { p.detail } else { p.detail.min(POSTERIZE_FIT_DETAIL) };
     let mut fit_params = FitParams {
         gradients: true,

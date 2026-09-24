@@ -369,7 +369,7 @@ def posterize(path):
     rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
     # the Flat preset fits its ramps at the default detail's tolerance
     # (`engine.POSTERIZE_FIT_DETAIL`) and cuts them at its own detail
-    params = FitParams(gradients=True, max_stops=4, tol=3.0)
+    params = FitParams(gradients=True, max_stops=4, tol=4.0)
     fills = {}
     for lab in (int(i) for i in np.unique(labels) if i):
         m = labels == lab
