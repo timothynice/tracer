@@ -73,6 +73,20 @@ TOLERANCE = {
     # reported `max` is printed beside the RMS, so a single badly placed
     # junction is still visible to a reader.
     "arcs": ("rms", 0.05, 0.0),
+    # The local fills' correction grids, given one label map and one set of
+    # fills: an erosion, a box and two Gaussian filters in float64, which the
+    # Rust sums with independent accumulators — a few ulps of a colour level.
+    "local_fills": ("max", 1e-9, 0.0),
+    # The placement alone, given one (extended) label map and the Python's
+    # fills: what differs is those ulps and the Python's alpha, scaled to 255 in
+    # float32 where the Rust scales it in double (a few 1e-7 px, and there
+    # before the local fills), carried through a projection and a crossing
+    # interpolation. A decision they tipped (a coverage level at exactly a
+    # half) would move a vertex by a pixel and fail this outright.
+    "placed": ("max", 1e-6, 0.0),
+    # `placed` carried through symmetry and the junctions, given one label map
+    # and one set of fills: the same ulps, through line fits and node solves.
+    "nodes": ("max", 1e-6, 0.0),
     "upsample": ("max", 0.0, 0.0),
     # The wedge extension hands whole pixels back to a region that the partition
     # cut off, on a threshold over a three-way colour mix — and that mix is read
@@ -329,6 +343,121 @@ def wedges(path):
     rs = np.asarray(vexel_rs._stage_wedges(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist()),
                     dtype=np.int32).reshape(h + 2, w + 2)
     return py.astype(np.int32), rs
+
+
+def _fill_args(fills: dict) -> tuple[list[int], list[str], list[list[float]]]:
+    """The Python's fills as the Rust stage hooks take them (`_fills_from`)."""
+    labs, kinds, vals = [], [], []
+    for lab in sorted(fills):
+        f = fills[lab]
+        if isinstance(f, Solid):
+            v = [float(x) for x in f.rgba]
+        else:
+            head = [f.x1, f.y1, f.x2, f.y2] if isinstance(f, Linear) else [f.cx, f.cy, f.r]
+            v = [float(x) for x in head] + [float(x) for s in f.stops for x in (s.offset, *s.rgba)]
+        labs.append(int(lab))
+        kinds.append(f.kind)
+        vals.append(v)
+    return labs, kinds, vals
+
+
+@stage
+def local_fills(path):
+    """Every region's local colour correction (`topology._local_corrections`,
+    Rust `LocalFills`): the fitted fill's own residual over the region's pure
+    pixels, Gaussian-smoothed and divided by the smoothed support. Both are
+    given one label map and the Python's fills, so this compares the erosion,
+    the boxes, the opaque test and the two Gaussian filters alone."""
+    a, prep, labels, fills = _prepared(path)
+    h, w = a.shape[:2]
+    corr = topology._local_corrections(labels, prep.rgb, lambda lab, qx, qy: fills[lab].evaluate(qx, qy))
+    py = []
+    for lab in sorted(corr):
+        r0, c0, img = corr[lab]
+        py += [float(lab), float(r0), float(c0), float(img.shape[0]), float(img.shape[1]), *img.ravel().tolist()]
+    rs = vexel_rs._stage_local_fills(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), *_fill_args(fills))
+    return np.array(py, dtype=np.float64), np.array(rs, dtype=np.float64)
+
+
+@stage
+def placed(path):
+    """Where the placement puts every vertex, before any node is placed: the
+    coverage against the local fills (with its contrast gate), the crossing
+    search and the lone-vertex rule. Both are given one label map (extended
+    once, as `arcs` is) and the Python's fills, so the only differences left
+    are the last bits of the two Gaussian filters and of the fills' arithmetic
+    — and any decision one of those bits tips."""
+    a, prep, labels, fills = _prepared(path)
+    h, w = a.shape[:2]
+    padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    extended, _ = topology._extend_wedges(padded, prep.rgb, prep.alpha,
+                                       lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+                                       CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
+    labels = extended[1:-1, 1:-1]
+    fills = _fills_for(prep, labels)
+    fill_at = lambda lab, qx, qy: fills[lab].evaluate(qx, qy)  # noqa: E731
+    padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
+    chains = topology._chains(padded)
+    out = topology._place(chains, padded, prep.rgb, prep.alpha, fill_at, set(),
+                          local=topology._local_fills(labels, prep.rgb, prep.alpha, fill_at))
+
+    def key(row):
+        return tuple(round(v, 6) for v in row)
+
+    rows = sorted(([float(ch["pair"][0]), float(ch["pair"][1]), float(len(pts)), *pts.ravel().tolist()]
+                   for ch, (pts, _step, _crowded) in zip(chains, out)), key=key)
+    py = np.array([v for row in rows for v in row], dtype=np.float64)
+    flat = np.asarray(vexel_rs._stage_place(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), *_fill_args(fills), False, False),
+                      dtype=np.float64)
+    rs_rows, i = [], 0
+    while i + 2 < len(flat):
+        n = int(flat[i + 2])
+        rs_rows.append(flat[i:i + 3 + 2 * n].tolist())
+        i += 3 + 2 * n
+    rs = np.array([v for row in sorted(rs_rows, key=key) for v in row], dtype=np.float64)
+    if py.shape != rs.shape:
+        print(f"  FAIL placed    {path.name}: {len(rows)} arcs / {py.size} values in Python, {len(rs_rows)} arcs / {rs.size} in Rust")
+        return np.zeros(1), np.full(1, 1e9)
+    return py, rs
+
+
+def _arc_rows(flat) -> list[list[float]]:
+    """Split a Rust stage hook's flat (pair, n, points...) answer into rows."""
+    rows, i = [], 0
+    while i + 2 < len(flat):
+        n = int(flat[i + 2])
+        rows.append(list(flat[i:i + 3 + 2 * n]))
+        i += 3 + 2 * n
+    return rows
+
+
+@stage
+def nodes(path):
+    """Where the boundary graph puts every vertex once the nodes are placed:
+    the wedge extension, the placement, symmetry and the junctions (the tip
+    hold, the revert guard) and rectangles, given one label map and the
+    Python's fills — `placed` carried through everything that moves a vertex,
+    so a difference here is a rule, not a fill. The Rust passes it only with
+    the pinholes port's tip-revert guard and the rects port in; until then it
+    names the arcs where they bite."""
+    a, prep, labels, fills = _prepared(path)
+    h, w = a.shape[:2]
+    bnd = topology.build(labels, prep.rgb, prep.alpha, lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+                         CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
+
+    def key(row):
+        return tuple(round(v, 6) for v in row)
+
+    py_rows = sorted(([float(arc.pair[0]), float(arc.pair[1]), float(len(arc.pts)), *arc.pts.ravel().tolist()]
+                      for arc in bnd.arcs), key=key)
+    flat = vexel_rs._stage_place(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), *_fill_args(fills), True, True)
+    rs_rows = sorted(_arc_rows(flat), key=key)
+    py = np.array([v for row in py_rows for v in row], dtype=np.float64)
+    rs = np.array([v for row in rs_rows for v in row], dtype=np.float64)
+    if py.shape != rs.shape:
+        print(f"  FAIL nodes     {path.name}: {len(py_rows)} arcs / {py.size} values in Python, {len(rs_rows)} arcs / {rs.size} in Rust")
+        return np.zeros(1), np.full(1, 1e9)
+    return py, rs
 
 
 @stage

@@ -2248,6 +2248,9 @@ pub fn snap_axis_lines(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment
 
 // --- corner sharpening -----------------------------------------------------
 
+/// A scatter whose two principal spreads agree this closely has no direction.
+pub const LINE_TIE: f64 = 1e-9;
+
 pub fn line_through(points: &[P]) -> (P, P) {
     let n = points.len();
     let cx = points.iter().map(|p| p[0]).sum::<f64>() / n as f64;
@@ -2261,6 +2264,12 @@ pub fn line_through(points: &[P]) -> (P, P) {
         sxx += p[0] * p[0];
         sxy += p[0] * p[1];
         syy += p[1] * p[1];
+    }
+    if (sxx - syy).hypot(2.0 * sxy) <= LINE_TIE * (sxx + syy) {
+        // isotropic: no direction of its own, so first to last (see the Python)
+        let chord = [points[n - 1][0] - points[0][0], points[n - 1][1] - points[0][1]];
+        let length = chord[0].hypot(chord[1]);
+        return ([cx, cy], if length > 0.0 { [chord[0] / length, chord[1] / length] } else { [1.0, 0.0] });
     }
     let (vals, vecs) = eigh2(sxx, sxy, syy);
     let d = if vals[1] >= vals[0] { vecs[1] } else { vecs[0] };
@@ -2608,6 +2617,17 @@ pub fn shape_svg(shape: &Shape, attrs: &str, precision: usize) -> String {
 #[cfg(test)]
 mod line_tests {
     use super::*;
+
+    #[test]
+    fn an_isotropic_scatter_runs_first_to_last() {
+        // the Python's test_an_isotropic_scatter_runs_first_to_last
+        let (c, d) = line_through(&[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]);
+        assert!((c[0] - 0.5).abs() < 1e-12 && (c[1] - 0.5).abs() < 1e-12);
+        let h = 0.5f64.sqrt();
+        assert!((d[0] - h).abs() < 1e-12 && (d[1] - h).abs() < 1e-12, "{d:?}");
+        let (_c, d) = line_through(&[[0.0, 0.0], [2.0, 0.1], [4.0, 0.0], [6.0, 0.1]]);
+        assert!(d[1].abs() < 0.05, "{d:?}");
+    }
 
     fn kinds(segs: &[Segment]) -> String {
         segs.iter().map(|s| if matches!(s, Segment::Line { .. }) { 'L' } else { 'C' }).collect()

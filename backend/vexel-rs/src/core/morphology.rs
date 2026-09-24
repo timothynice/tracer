@@ -1,5 +1,6 @@
 //! Binary morphology with the 4-connected (cross) structuring element, which
-//! is the only one the pipeline uses, plus hole filling.
+//! is what the pipeline mostly uses, the 3x3 square erosion that picks a
+//! region's pure pixels for the local fills, and hole filling.
 
 use super::grid::{Grid, Mask};
 
@@ -44,6 +45,34 @@ pub fn erode_cross(m: &Mask, border_value: bool) -> Mask {
             let lf = if c > 0 { m.data[r * w + c - 1] } else { border_value };
             let rt = if c + 1 < w { m.data[r * w + c + 1] } else { border_value };
             out.data[r * w + c] = up && dn && lf && rt;
+        }
+    }
+    out
+}
+
+/// `scipy.ndimage.binary_erosion(mask, np.ones((3, 3)), border_value=b)`: a
+/// pixel stays only if it and all eight neighbours are set, with anything
+/// outside the grid reading as `border_value`.
+pub fn erode_square(m: &Mask, border_value: bool) -> Mask {
+    let (h, w) = (m.h as isize, m.w as isize);
+    let mut out = m.clone();
+    for r in 0..h {
+        for c in 0..w {
+            if !m.data[(r * w + c) as usize] {
+                continue;
+            }
+            let mut keep = true;
+            'around: for dr in -1..=1isize {
+                for dc in -1..=1isize {
+                    let (rr, cc) = (r + dr, c + dc);
+                    let v = if rr < 0 || cc < 0 || rr >= h || cc >= w { border_value } else { m.data[(rr * w + cc) as usize] };
+                    if !v {
+                        keep = false;
+                        break 'around;
+                    }
+                }
+            }
+            out.data[(r * w + c) as usize] = keep;
         }
     }
     out
@@ -179,4 +208,36 @@ fn point_in_hull(hull: &[(f64, f64)], x: f64, y: f64) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn square_erosion_keeps_only_pixels_whose_eight_neighbours_are_set() {
+        // a 4x5 block in a 6x7 grid, touching the right edge
+        let mut m = Mask::new(6, 7);
+        for r in 1..5 {
+            for c in 2..7 {
+                m.set(r, c, true);
+            }
+        }
+        let inner = erode_square(&m, false);
+        let framed = erode_square(&m, true);
+        for r in 0..6 {
+            for c in 0..7 {
+                // scipy: binary_erosion(m, np.ones((3, 3)), border_value=b)
+                let want_inner = (2..=3).contains(&r) && (3..=5).contains(&c);
+                let want_framed = (2..=3).contains(&r) && (3..=6).contains(&c);
+                assert_eq!(*inner.get(r, c), want_inner, "border 0 at ({r}, {c})");
+                assert_eq!(*framed.get(r, c), want_framed, "border 1 at ({r}, {c})");
+            }
+        }
+        // a diagonal neighbour missing is enough to drop a pixel, unlike the cross
+        let mut notch = m.clone();
+        notch.set(1, 2, false);
+        assert!(!*erode_square(&notch, true).get(2, 3));
+        assert!(*erode_cross(&notch, true).get(2, 3));
+    }
 }

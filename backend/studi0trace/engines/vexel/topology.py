@@ -151,6 +151,9 @@ NODE_UNCERTAINTY = 0.6
 # ordinary node: the label map ends the wedge where the last whole pixel was.
 TIP_LIMIT = 4.0
 TIP_AHEAD = 1.5  # px a held tip may sit beyond the end of its sliver (see `_junctions`)
+# Two unit directions this close to square cannot orient one another; a line
+# whose sign is to be read from another is then read from its own window.
+ORIENT_TIE = 1e-9
 # Vertices this close to a node are not believed. A junction's pixels mix three
 # fills, and the two-fill projection that places a vertex is biased there by
 # whatever the third fill is doing; the fit then followed that bias faithfully,
@@ -475,6 +478,31 @@ def _local_fills(labels: np.ndarray, rgb: np.ndarray, alpha: np.ndarray, fill_at
     stroke's own moved the stroke's edges (three new pinholes on
     studi0mail-logo-dark, a worse sawtooth on thin-mark-512-ds).
     """
+    corr = _local_corrections(labels, rgb, fill_at, sigma, support)
+
+    def local(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
+        base = fill_at(lab, qx, qy)
+        found = corr.get(int(lab))
+        if found is None:
+            return base
+        r0, c0, img = found
+        col = np.floor(qx).astype(int) - c0
+        row = np.floor(qy).astype(int) - r0
+        inside = (row >= 0) & (row < img.shape[0]) & (col >= 0) & (col < img.shape[1])
+        out = base.copy()
+        out[inside, :3] += img[row[inside], col[inside]]
+        return out
+
+    return local
+
+
+def _local_corrections(labels: np.ndarray, rgb: np.ndarray, fill_at: FillAt,
+                       sigma: float = LOCAL_SIGMA, support: float = LOCAL_SUPPORT) -> dict[int, tuple[int, int, np.ndarray]]:
+    """Per region, the RGB correction `_local_fills` adds to its fitted fill:
+    (first row, first column, grid of shape rows x columns x 3) over the
+    region's box widened by the Gaussian's radius. Regions with no pure pixels,
+    and transparent fields, have none. `tools/diffcheck.py local_fills` holds
+    the Rust `LocalFills` to these grids."""
     h, w = labels.shape
     radius = int(math.floor(LOCAL_TRUNCATE * sigma + 0.5))
     corr: dict[int, tuple[int, int, np.ndarray]] = {}
@@ -505,21 +533,7 @@ def _local_fills(labels: np.ndarray, rgb: np.ndarray, alpha: np.ndarray, fill_at
         num = np.stack([ndimage.gaussian_filter(res[..., k], sigma, mode="constant", truncate=LOCAL_TRUNCATE)
                         for k in range(3)], axis=-1)
         corr[lab] = (r0, c0, num / (den[..., None] + support))
-
-    def local(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
-        base = fill_at(lab, qx, qy)
-        found = corr.get(int(lab))
-        if found is None:
-            return base
-        r0, c0, img = found
-        col = np.floor(qx).astype(int) - c0
-        row = np.floor(qy).astype(int) - r0
-        inside = (row >= 0) & (row < img.shape[0]) & (col >= 0) & (col < img.shape[1])
-        out = base.copy()
-        out[inside, :3] += img[row[inside], col[inside]]
-        return out
-
-    return local
+    return corr
 
 
 def _coverage(pad_rgba: np.ndarray, pix: np.ndarray, lab: int, other: int, fill_at: FillAt,
@@ -1317,7 +1331,19 @@ def _junctions(
                 again = _approach(arcs[i].pts, k == 0, TIP_TRIM + reach, TIP_TRIM, grow_to=2.0 * APPROACH_MAX, exclude=arcs[i].sliver)
                 if again is not None:
                     lines[key] = again
-                    flip = float(np.dot(again[1], away[key])) < 0.0
+                    lean = float(np.dot(again[1], away[key]))
+                    if abs(lean) < ORIENT_TIE:
+                        # On a stair-stepped side the line read beyond the
+                        # trim can run square to the first one (45 degrees one
+                        # way, then the other), and against it the dot is zero:
+                        # the answer was then the sign the line fit happens to
+                        # return, which is the solver's own (the Python's SVD
+                        # and the Rust's differ) — the wrong way on
+                        # cutout-512-ds, and a held tip pulled 2.7 px back
+                        # along the carrying edge. The window lies along the
+                        # arc away from its end, so the line points towards it.
+                        lean = float(np.dot(again[1], again[0] - arcs[i].pts[k]))
+                    flip = lean < 0.0
                     away[key] = _normalize(-again[1] if flip else again[1])
                     tangents[key] = away[key]
             plain = target

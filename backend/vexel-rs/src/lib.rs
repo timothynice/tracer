@@ -428,6 +428,118 @@ mod python {
         rows.concat()
     }
 
+    /// Fills handed over from the Python as (label, kind, numbers), the numbers
+    /// laid out as `_fit_fill` returns them, so a stage can be fed the Python's
+    /// own fills and compare what it does with them alone.
+    fn _fills_from(labels: &[i32], kinds: &[String], vals: &[Vec<f64>]) -> std::collections::HashMap<i32, fills::Fill> {
+        let stops = |rest: &[f64]| -> Vec<fills::Stop> {
+            rest.chunks_exact(5).map(|s| fills::Stop { offset: s[0], rgba: [s[1], s[2], s[3], s[4]] }).collect()
+        };
+        labels
+            .iter()
+            .zip(kinds.iter().zip(vals.iter()))
+            .map(|(lab, (kind, v))| {
+                let f = match kind.as_str() {
+                    "solid" => fills::Fill::Solid { rgba: [v[0], v[1], v[2], v[3]] },
+                    "linear" => fills::Fill::Linear { x1: v[0], y1: v[1], x2: v[2], y2: v[3], stops: stops(&v[4..]) },
+                    _ => fills::Fill::Radial { cx: v[0], cy: v[1], r: v[2], stops: stops(&v[3..]) },
+                };
+                (*lab, f)
+            })
+            .collect()
+    }
+
+    /// Every region's local colour correction (`topology::LocalFills`) given
+    /// one label map and the Python's fills, for `tools/diffcheck.py`: per
+    /// region with a grid, in label order, [label, r0, c0, rows, cols] and
+    /// then the grid's RGB values row by row.
+    #[pyfunction]
+    #[allow(clippy::too_many_arguments)]
+    fn _stage_local_fills(
+        rgba: Vec<u8>,
+        h: usize,
+        w: usize,
+        labels: Vec<i32>,
+        fill_labels: Vec<i32>,
+        fill_kinds: Vec<String>,
+        fill_vals: Vec<Vec<f64>>,
+    ) -> Vec<f64> {
+        use crate::core::grid::Grid;
+        let prep = prepare::prepare(&rgba, h, w);
+        let labels: Grid<i32> = Grid::from_vec(h, w, labels);
+        let fills = _fills_from(&fill_labels, &fill_kinds, &fill_vals);
+        let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+            match fills.get(&lab) {
+                Some(f) => f.evaluate(qx, qy),
+                None => vec![[0.0; 4]; qx.len()],
+            }
+        };
+        let local = topology::LocalFills::build(&labels, &prep.rgb, &fill_at);
+        let mut ids: Vec<i32> = local.grids.keys().copied().collect();
+        ids.sort_unstable();
+        let mut out = Vec::new();
+        for lab in ids {
+            let g = &local.grids[&lab];
+            out.extend_from_slice(&[lab as f64, g.r0 as f64, g.c0 as f64, g.h as f64, g.w as f64]);
+            for c in &g.corr {
+                out.extend_from_slice(c);
+            }
+        }
+        out
+    }
+
+    /// The placed vertices of every arc (as `_stage_arcs`), given one label map
+    /// and the Python's own fills, so that what is compared is the placement
+    /// alone — coverage, the local fills, the crossing search and the rules
+    /// applied to its answers — or, with `snap`, the placement and everything
+    /// after it that moves a vertex; with `extend`, the wedge extension first.
+    #[pyfunction]
+    #[allow(clippy::too_many_arguments)]
+    fn _stage_place(
+        rgba: Vec<u8>,
+        h: usize,
+        w: usize,
+        labels: Vec<i32>,
+        fill_labels: Vec<i32>,
+        fill_kinds: Vec<String>,
+        fill_vals: Vec<Vec<f64>>,
+        snap: bool,
+        extend: bool,
+    ) -> Vec<f64> {
+        use crate::core::grid::Grid;
+        let prep = prepare::prepare(&rgba, h, w);
+        let labels: Grid<i32> = Grid::from_vec(h, w, labels);
+        let fills = _fills_from(&fill_labels, &fill_kinds, &fill_vals);
+        let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+            match fills.get(&lab) {
+                Some(f) => f.evaluate(qx, qy),
+                None => vec![[0.0; 4]; qx.len()],
+            }
+        };
+        let cp = curves::CurveParams {
+            corner_threshold: 60.0,
+            tol: 0.4,
+            shape_fitting: true,
+            snap_axis_deg: 1.5,
+            kind_tol: curves::KIND_TOL,
+        };
+        let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, snap, extend);
+        let mut rows: Vec<Vec<f64>> = bnd
+            .arcs
+            .iter()
+            .map(|a| {
+                let mut row = vec![a.pair.0 as f64, a.pair.1 as f64, a.pts.len() as f64];
+                for q in &a.pts {
+                    row.push(q[0]);
+                    row.push(q[1]);
+                }
+                row
+            })
+            .collect();
+        rows.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+        rows.concat()
+    }
+
     /// The label map after cut-off regions have been handed back the pixels
     /// their ink still runs through, for `tools/diffcheck.py`.
     #[pyfunction]
@@ -518,6 +630,8 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_under, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_wedges, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_local_fills, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_place, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_edge_mix, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;
         m.add_function(wrap_pyfunction!(_rng_choice, m)?)?;

@@ -415,3 +415,16 @@ def test_a_two_point_cubic_is_held_inside_its_tangents():
     t2s = curves._normalize(np.array([-1.0, -0.3]))
     (s,) = curves.fit_cubics(np.vstack([p0, p1]), t1, t2s, 0.4)
     assert np.allclose(s.c2, p1 + t2s * 1.0)
+
+
+def test_an_isotropic_scatter_runs_first_to_last():
+    """Four staircase vertices at the corners of a square fit every direction
+    equally; the solver's own pick (the SVD's horizontal, the Rust's vertical)
+    moved a node 0.6 px between the engines. They run the way they were given."""
+    pts = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    centre, direction = curves._line_through(pts)
+    assert np.allclose(centre, [0.5, 0.5])
+    assert np.allclose(direction, [math.sqrt(0.5), math.sqrt(0.5)])
+    # an ordinary scatter keeps its principal direction
+    _c, d = curves._line_through(np.array([[0.0, 0.0], [2.0, 0.1], [4.0, 0.0], [6.0, 0.1]]))
+    assert abs(d[1]) < 0.05
