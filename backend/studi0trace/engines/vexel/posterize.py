@@ -71,6 +71,16 @@ FOLLOW_MIN = 64
 # noise.
 SMOOTH_SIGMA = 1.5
 
+# ...but only where those crossings are well defined. In a textured ramp (an
+# AI-drawn sheen) the pixels' level lines wander with the texture, and a cut
+# along them wobbles where the model's straight lines at least stayed clean.
+# The cut at SMOOTH_SIGMA is compared with one at SETTLED_SIGMA: when the band
+# edges move by more than SETTLED_PX on average (pixels changing band per
+# pixel of band edge), the pixels' lines are the texture's and the model's are
+# kept.
+SETTLED_SIGMA = 3.0
+SETTLED_PX = 0.25
+
 
 @dataclass(frozen=True)
 class Levels:
@@ -255,6 +265,18 @@ def follows(ramp: Fill, t: np.ndarray, features: np.ndarray, core: np.ndarray, l
     return not any(n[k] >= FOLLOW_MIN and spread[k] / n[k] > bar for k in range(levels.size + 1))
 
 
+def settled(t_fine: np.ndarray, t_coarse: np.ndarray, levels: np.ndarray, m: np.ndarray) -> bool:
+    """Do the band edges of a cut at the pixels' own t (`t_fine`, row-major
+    over the region `m`) stay put when the smoothing doubles (`t_coarse`)? See
+    SETTLED_PX."""
+    k = np.full(m.shape, -1, np.int64)
+    k[m] = np.searchsorted(levels, t_fine, side="right")
+    moved = int((k[m] != np.searchsorted(levels, t_coarse, side="right")).sum())
+    edge = int(((k[:, 1:] != k[:, :-1]) & (k[:, 1:] >= 0) & (k[:, :-1] >= 0)).sum()
+               + ((k[1:] != k[:-1]) & (k[1:] >= 0) & (k[:-1] >= 0)).sum())
+    return edge > 0 and moved <= SETTLED_PX * edge
+
+
 def _premultiplied(c: np.ndarray) -> np.ndarray:
     a = c[..., 3:4] / 255.0
     return np.concatenate([c[..., :3] * a, c[..., 3:4]], axis=-1)
@@ -434,9 +456,12 @@ def posterize_fills(
             continue
         _, core = interior(labels == lab)
         lo, hi = min(max(float(t.min()), 0.0), 1.0), min(max(float(t.max()), 0.0), 1.0)
-        free = not follows(fill, t, features[box][m], core, levels, step)
+        free = False
+        if not follows(fill, t, features[box][m], core, levels, step):
+            fine = observed_t(fill, lo, hi, rgba255[box], m)
+            free = settled(fine, observed_t(fill, lo, hi, rgba255[box], m, sigma=SETTLED_SIGMA), levels, m)
         if free:
-            t = observed_t(fill, lo, hi, rgba255[box], m)
+            t = fine
             grid = np.full(m.shape, np.nan)
             grid[m] = t
             seen_of[lab] = (box[0].start, box[1].start, grid)
