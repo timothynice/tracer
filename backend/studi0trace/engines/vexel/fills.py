@@ -30,6 +30,13 @@ CORE_GRADIENT_MIN = 24
 # Fewest pixels between two gradient stops (see `ramp_fit`).
 KNOT_GAP = 3.0
 
+# A region whose alpha, averaged with its interior weights, is at most this is
+# not painted: the transparent canvas, a hole (the engine's `visible`). Its fill
+# is never drawn; it is only the level that its neighbours' edges are placed
+# against and that the rescue measures ink against, and for that it is solid
+# (see `fit_fill`).
+INVISIBLE_ALPHA = 0.04
+
 
 # --- fill models ------------------------------------------------------------------
 
@@ -253,6 +260,16 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
       so a real gradient reaches the edge: over the band its ends are the
       core's ramp carried on, not the band's colour;
     - a radial's centre is geometry and is searched over every pixel.
+
+    A region that will not be painted (alpha averaged with `weights` at most
+    INVISIBLE_ALPHA) is solid. Nothing draws its gradient, and a gradient
+    there is worse than none: a drop shadow on a transparent canvas lies in
+    the canvas's region, and a radial fitted to the canvas's core took up the
+    shadow's outer falloff — so the rescue, measuring the canvas's pixels
+    against that radial, saw only two scraps of the shadow and promoted
+    those, and the edge placement read the unpainted canvas as grey ink
+    beside the shape. A faint thin ring in an empty field was taken up the
+    same way.
     """
     xs = np.asarray(xs, dtype=float).ravel()
     ys = np.asarray(ys, dtype=float).ravel()
@@ -260,6 +277,8 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
     w_all = 0.3 + 0.7 * (col[:, 3] / 255.0)  # transparent pixels count less for colour, but their alpha still matters
     if weights is not None:
         w_all = w_all * np.asarray(weights, dtype=float).ravel()
+    painted = float(np.average(col[:, 3] / 255.0, weights=weights)) > INVISIBLE_ALPHA
+    import os; painted = painted or bool(os.environ.get("VX_NOINV"))  # DEBUG-REMOVE
 
     rng = np.random.default_rng(1234)
     sel = _subsample(xs.size, rng)
@@ -273,7 +292,7 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
     solid = Solid(rgba=mean)
     rms_solid = _rms(solid.evaluate(x, y), c, w)
     too_few = x.size < 8 if k is None else int(k.sum()) < CORE_GRADIENT_MIN
-    if not params.gradients or rms_solid <= params.tol or too_few:
+    if not params.gradients or not painted or rms_solid <= params.tol or too_few:
         return solid
     full = None  # every pixel, for the ramps' "good enough" test
     if k is not None:
@@ -361,6 +380,7 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
     # --- choose: a gradient must buy a real improvement over solid ---------------------
     penalty = {"solid": 0.0, "linear": 0.35 * params.tol, "radial": 0.5 * params.tol}
     best_rms, best = min(candidates, key=lambda cr: cr[0] + penalty[cr[1].kind])
+    import builtins; getattr(builtins, "_FDEBUG", []).append((candidates, rms_solid, mean))  # DEBUG-REMOVE
     if best.kind != "solid":
         if rms_solid - best_rms < 0.25 * params.tol:
             return solid

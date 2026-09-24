@@ -5,7 +5,7 @@ use crate::core::grid::{Grid, Image, Mask};
 use crate::core::labels::{self, LabelIndex, Labels};
 use crate::core::morphology::dilate_cross;
 use crate::curves::{fit_shape, CurveParams, Shape};
-use crate::fills::{fit_fill, Fill, FitParams};
+use crate::fills::{fit_fill, Fill, FitParams, INVISIBLE_ALPHA};
 use crate::merge::{adjacency, merge_regions, MergeParams};
 use crate::order::{enclosure, paint_order, shape_labels, shape_mask, Enclosure};
 use crate::topology::{self, Boundary};
@@ -188,7 +188,7 @@ fn fit_regions(
                 num += alpha.data[*i as usize] * w[k];
                 den += w[k];
             }
-            (*lab, fill, num / den.max(1e-12) > 0.04, core)
+            (*lab, fill, num / den.max(1e-12) > INVISIBLE_ALPHA, core)
         })
         .collect();
     let mut fills = HashMap::new();
@@ -424,7 +424,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                     num += prep.alpha.data[*i as usize] * w[k];
                     den += w[k];
                 }
-                (*lab, num / den.max(1e-12) > 0.04)
+                (*lab, num / den.max(1e-12) > INVISIBLE_ALPHA)
             })
             .collect();
         for (lab, v) in vis {
@@ -472,6 +472,27 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                 let (x, y, c) = mask_pixels(&m, &xs, &ys, &corrected);
                 fills.insert(lab, fit_fill(&x, &y, &c, &fit_params, Some(&w), Some(&core)));
             }
+        }
+        if let (Some(canvas), false) = (shadow_plan.canvas, shadow_plan.absorbed.is_empty()) {
+            // On a transparent canvas the bands a filter explains are canvas
+            // with the shadow drawn over it: they join it, and the caster's
+            // edge there is placed against the canvas like the rest of its
+            // outline. See the Python.
+            let gone: HashSet<i32> = std::mem::take(&mut shadow_plan.absorbed);
+            for v in l.data.iter_mut() {
+                if gone.contains(v) {
+                    *v = canvas;
+                }
+            }
+            for lab in &gone {
+                fills.remove(lab);
+                visible.remove(lab);
+                order.retain(|x| x != lab);
+                invisible.remove(lab);
+            }
+            index = LabelIndex::build(&l);
+            ids = labels::unique_ids(&l);
+            enc = enclosure(&l);
         }
     }
 

@@ -26,6 +26,25 @@ pub const CORE_GRADIENT_MIN: usize = 24;
 /// Fewest pixels between two gradient stops (see `ramp_fit`).
 pub const KNOT_GAP: f64 = 3.0;
 
+/// A region whose alpha, averaged with its interior weights, is at most this
+/// is not painted: the transparent canvas, a hole (the engine's `visible`).
+/// Its fill is only the level its neighbours' edges are placed against and
+/// the rescue measures ink against, and for that it is solid.
+/// `fills.INVISIBLE_ALPHA` in the Python.
+pub const INVISIBLE_ALPHA: f64 = 0.04;
+
+/// Is a region with these colours and interior weights painted at all?
+/// The engine's visibility test; `fit_fill` fits an unpainted region solid.
+pub fn painted(rgba255: &[[f64; 4]], weights: Option<&[f64]>) -> bool {
+    let (mut num, mut den) = (0.0, 0.0);
+    for (i, c) in rgba255.iter().enumerate() {
+        let w = weights.map_or(1.0, |w| w[i]);
+        num += c[3] / 255.0 * w;
+        den += w;
+    }
+    num / den.max(1e-12) > INVISIBLE_ALPHA
+}
+
 #[derive(Clone, Debug)]
 pub struct Stop {
     pub offset: f64,
@@ -403,7 +422,11 @@ pub fn fit_fill(
         None => x.len() < 8,
         Some(k) => k.iter().filter(|v| **v).count() < CORE_GRADIENT_MIN,
     };
-    if !params.gradients || rms_solid <= params.tol || too_few {
+    // A region that will not be painted is solid: nothing draws its gradient,
+    // and a gradient there took up a drop shadow on a transparent canvas (or a
+    // faint ring in an empty field) that the rescue should have promoted.
+    // See `fills.fit_fill`.
+    if !params.gradients || !painted(rgba255, weights) || rms_solid <= params.tol || too_few {
         return solid;
     }
     // every pixel, for the ramps' "good enough" test

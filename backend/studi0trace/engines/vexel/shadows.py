@@ -42,6 +42,9 @@ MIN_PEAK = 5.0  # a darkening smaller than this is not worth a filter
 # within a fraction of a colour level; a fit that merely ties is the shape of a
 # fit that renders worse.
 WIN_MARGIN = 0.75
+# On a transparent canvas, a region whose mean alpha is under this may be a
+# shadow's band; the opaque rest of the ink are the casters.
+CLEAR_BAND_ALPHA = 0.9
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,7 @@ class ShadowPlan:
     absorbed: set[int] = field(default_factory=set)  # regions the shadows explain
     refit: set[int] = field(default_factory=set)  # backdrops to refit on `corrected`
     corrected: np.ndarray | None = None  # rgba255 with the accepted shadows removed
+    canvas: int | None = None  # the transparent canvas the shadows fall on (`_detect_clear`), if they do
 
     @property
     def empty(self) -> bool:
@@ -188,7 +192,8 @@ def _is_sharp(observed: np.ndarray, sil: np.ndarray) -> bool:
     step = float(np.linalg.norm(observed[inner].mean(axis=0) - observed[outer].mean(axis=0)))
     if step < 8.0:
         return False
-    grad = np.sqrt(sum(ndimage.sobel(observed[..., c], axis=0) ** 2 + ndimage.sobel(observed[..., c], axis=1) ** 2 for c in range(3))) / 4.0
+    grad = np.sqrt(sum(ndimage.sobel(observed[..., c], axis=0) ** 2 + ndimage.sobel(observed[..., c], axis=1) ** 2
+                       for c in range(observed.shape[-1]))) / 4.0
     return float(np.percentile(grad[edge], 90)) > 0.30 * step
 
 
@@ -254,6 +259,13 @@ def detect_shadows(
     border[0, :] = border[-1, :] = border[:, 0] = border[:, -1] = True
     on_border = set(np.unique(labels[border]).tolist())
     backdrop = max((lab for lab in vis if lab in on_border), key=lambda l: areas[l], default=None)
+    # Artwork on a transparent canvas: the canvas is the unpainted region on
+    # the border, and when it is the larger ground a shadow on it is ink of its
+    # own (`_detect_clear`), not a darkening of a backdrop colour.
+    canvas = max((lab for lab in ids if not visible.get(lab) and lab in on_border), key=lambda l: areas[l], default=None)
+    if canvas is not None and areas[canvas] >= 0.05 * total and (backdrop is None or areas[canvas] > areas[backdrop]):
+        _detect_clear(plan, labels, fills, visible, silhouette, prep, xs, ys, areas, vis, canvas, min_region, total)
+        return plan
     if backdrop is None or areas[backdrop] < 0.05 * total:
         return plan
 
@@ -394,6 +406,112 @@ def detect_shadows(
     if inset and not plan.shadows:
         _detect_inset(plan, labels, fills, visible, silhouette, prep, xs, ys, areas, means, vis, min_region, total, sl, step)
     return plan
+
+
+def _premultiplied(rgb: np.ndarray, alpha01: np.ndarray) -> np.ndarray:
+    """(…, 4): colour times alpha, and alpha, both 0–255 — what a pixel adds
+    over nothing, which is the only thing a transparent canvas can show."""
+    return np.concatenate([rgb * alpha01[..., None], (alpha01 * 255.0)[..., None]], axis=-1)
+
+
+def _detect_clear(plan, labels, fills, visible, silhouette, prep, xs, ys, areas, vis, canvas, min_region, total) -> None:
+    """A drop shadow or glow on a transparent canvas.
+
+    There is no backdrop colour for the shadow to darken: the shadow is ink of
+    its own, colour C at alpha o·g, and the observable is alpha. So the blur is
+    fitted to the alpha over the canvas side of each caster, the colour is the
+    shadow pixels' own (alpha-weighted), and the filter is judged against the
+    bands in premultiplied colour, where the unpainted canvas is zero. The
+    bands are the translucent regions (CLEAR_BAND_ALPHA) on that side; the
+    casters are the rest of the ink. Without this a transparent canvas never
+    had a shadow rebuilt: its shadow came out as one hard-edged band, or — when
+    the canvas's own fill took the falloff up — as a few scraps of it.
+    """
+    alpha = prep.alpha
+    rgb = prep.rgb
+    height, width = labels.shape
+    seen = {lab: float(alpha[labels == lab].mean()) for lab in vis}
+    bands = {lab for lab in vis if lab != canvas and seen[lab] < CLEAR_BAND_ALPHA and areas[lab] < 0.4 * total}
+    ink = [lab for lab in vis if lab != canvas and lab not in bands and areas[lab] >= max(4 * min_region, 0.004 * total)]
+    if not bands or not ink:
+        return
+    sils = {lab: silhouette(lab) for lab in ink}
+    ink = [lab for lab in ink if not any(o != lab and sils[o][sils[lab]].mean() > 0.9 for o in ink)]
+    if not ink:
+        return
+    painted = np.zeros(labels.shape, bool)
+    for lab in ink:
+        painted |= sils[lab]
+    if len(ink) > 1:
+        dist = np.stack([ndimage.distance_transform_edt(~sils[lab]) for lab in ink])
+        owner = np.argmin(dist, axis=0)
+    else:
+        owner = np.zeros(labels.shape, np.intp)
+
+    observed = _premultiplied(rgb, alpha)
+    step = max(1, int(round(max(height, width) / FIT_EDGE)))
+    sl = (slice(None, None, step), slice(None, None, step))
+    small_alpha = alpha[sl] * 255.0
+    fitted: list[tuple[int, float, float, float, float, np.ndarray, set[int]]] = []
+    for i, caster in enumerate(ink):
+        sil = sils[caster]
+        if not _is_sharp(observed, sil):
+            continue
+        cell = ~painted & (owner == i)
+        if cell.sum() < 64:
+            continue
+        group = {lab for lab in sorted(bands) if cell[labels == lab].mean() > 0.9}
+        if not group:
+            continue
+        cell_small = cell[sl]
+        target = np.zeros(cell_small.shape)
+        target[cell_small] = small_alpha[cell_small]
+        if float(target.max()) < MIN_PEAK:
+            continue
+        src = sil[sl].astype(np.float64)
+        if src.sum() < 16:
+            continue
+        gy, gx = np.nonzero(cell_small & (target > 0.35 * target.max()))
+        sy, sx = np.nonzero(src > 0.5)
+        seed = (float(gx.mean() - sx.mean()), float(gy.mean() - sy.mean())) if gy.size and sy.size else (0.0, 0.0)
+        dx, dy, sigma, k, _ = _fit_blur(src, target, cell_small, seed, False)
+        opacity = min(k / 255.0, 1.0)
+        if not 0.02 <= opacity:
+            continue
+        ink_px = np.isin(labels, sorted(group))
+        colour = np.average(rgb[ink_px], axis=0, weights=np.maximum(alpha[ink_px], 1e-6))
+        fitted.append((caster, dx * step, dy * step, sigma * step, float(opacity), colour, group))
+    if not fitted:
+        return
+
+    # Composed as the renderer will, over nothing; the bands as they would be
+    # painted, the canvas and anything else unpainted as nothing.
+    domain = ~painted
+    obs = observed[domain]
+    model = np.zeros_like(obs)
+    blurs = {}
+    for caster, dx, dy, sigma, opacity, colour, _group in fitted:
+        g = _blur_shift(sils[caster].astype(np.float64), dx, dy, sigma)
+        blurs[caster] = g
+        a = (opacity * g[domain])[:, None]
+        model = model * (1.0 - a) + np.concatenate([np.clip(colour, 0, 255) * a, 255.0 * a], axis=1)
+    band = np.zeros_like(obs)
+    labs = labels[domain]
+    for lab in np.unique(labs).tolist():
+        if not visible.get(int(lab)) or int(lab) == canvas or int(lab) not in fills:
+            continue
+        m = labs == lab
+        f = fills[int(lab)].evaluate(xs[domain][m], ys[domain][m])
+        band[m] = _premultiplied(f[:, :3], f[:, 3] / 255.0)
+    rms = float(np.sqrt(np.mean((obs - model) ** 2)))
+    band_rms = float(np.sqrt(np.mean((obs - band) ** 2)))
+    if rms >= WIN_MARGIN * band_rms:
+        return
+    plan.canvas = canvas
+    for caster, dx, dy, sigma, opacity, colour, group in fitted:
+        plan.shadows[caster] = Shadow(caster, dx, dy, sigma, np.clip(colour, 0, 255), opacity, False, rms,
+                                      _filter_region(sils[caster], dx, dy, sigma))
+        plan.absorbed |= group
 
 
 def _detect_inset(plan, labels, fills, visible, silhouette, prep, xs, ys, areas, means, vis, min_region, total, sl, step) -> None:
