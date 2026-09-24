@@ -3020,6 +3020,7 @@ mod under_tests {
             trim1: NODE_TRIM,
             sliver: None,
             mirror: None,
+            rect: None,
         }
     }
 
