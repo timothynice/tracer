@@ -367,6 +367,76 @@ mod python {
         topology::extend_wedges(&padded, &prep.rgb, &prep.alpha, &fill_at).0.data
     }
 
+    /// The posterised label map and every band's colour and levels
+    /// (`posterize::posterize_fills`), given one label map and one set of
+    /// fills (`kinds[i]`/`vals[i]` for label `labs[i]`, in the layout
+    /// `_fit_fill` returns), for `tools/diffcheck.py`. The rows are, per new
+    /// label ascending, `[label, group, band, r, g, b, a]` (group 0 and band −1
+    /// for a label that is no band), then per group ascending `[group, n,
+    /// levels…]`.
+    #[pyfunction]
+    #[allow(clippy::too_many_arguments)]
+    fn _stage_posterize(
+        rgba: Vec<u8>,
+        h: usize,
+        w: usize,
+        labels: Vec<i32>,
+        labs: Vec<i32>,
+        kinds: Vec<String>,
+        vals: Vec<Vec<f64>>,
+        step: f64,
+        min_region: usize,
+    ) -> (Vec<i32>, Vec<f64>) {
+        use crate::core::grid::Grid;
+        use crate::fills::{Fill, Stop};
+        let prep = prepare::prepare(&rgba, h, w);
+        let labels: Grid<i32> = Grid::from_vec(h, w, labels);
+        let stops = |rest: &[f64]| -> Vec<Stop> {
+            rest.chunks(5).map(|c| Stop { offset: c[0], rgba: [c[1], c[2], c[3], c[4]] }).collect()
+        };
+        let mut fills = std::collections::HashMap::new();
+        let mut visible = std::collections::HashMap::new();
+        for ((lab, kind), v) in labs.iter().zip(kinds.iter()).zip(vals.iter()) {
+            let f = match kind.as_str() {
+                "solid" => Fill::Solid { rgba: [v[0], v[1], v[2], v[3]] },
+                "linear" => Fill::Linear { x1: v[0], y1: v[1], x2: v[2], y2: v[3], stops: stops(&v[4..]) },
+                _ => Fill::Radial { cx: v[0], cy: v[1], r: v[2], stops: stops(&v[3..]) },
+            };
+            fills.insert(*lab, f);
+            visible.insert(*lab, true);
+        }
+        let xs = Grid::from_vec(h, w, (0..h * w).map(|i| (i % w) as f64 + 0.5).collect());
+        let ys = Grid::from_vec(h, w, (0..h * w).map(|i| (i / w) as f64 + 0.5).collect());
+        let rgba255: Vec<[f64; 4]> = (0..h * w)
+            .map(|i| {
+                let px = prep.rgb.px(i);
+                [px[0], px[1], px[2], prep.alpha.data[i] * 255.0]
+            })
+            .collect();
+        let (out, new_fills, _, lv) =
+            posterize::posterize_fills(&labels, &fills, &visible, &xs, &ys, &rgba255, step, min_region);
+        let mut ids: Vec<i32> = new_fills.keys().copied().collect();
+        ids.sort_unstable();
+        let mut rows = Vec::new();
+        for k in ids {
+            let (group, band) = lv.band.get(&k).map(|(g, b)| (*g as f64, *b as f64)).unwrap_or((0.0, -1.0));
+            let rgba = match &new_fills[&k] {
+                Fill::Solid { rgba } => *rgba,
+                _ => [f64::NAN; 4],
+            };
+            rows.extend_from_slice(&[k as f64, group, band]);
+            rows.extend_from_slice(&rgba);
+        }
+        let mut groups: Vec<i32> = lv.levels.keys().copied().collect();
+        groups.sort_unstable();
+        for g in groups {
+            rows.push(g as f64);
+            rows.push(lv.levels[&g].len() as f64);
+            rows.extend_from_slice(&lv.levels[&g]);
+        }
+        (out.data, rows)
+    }
+
     /// Which of the `at` pixels a nearby edge explains (`rescue::edge_mix`),
     /// given one label map, colours, fills-at-each-pixel and alpha, for
     /// `tools/diffcheck.py`.
@@ -434,6 +504,7 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_wedges, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_edge_mix, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_posterize, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;
         m.add_function(wrap_pyfunction!(_rng_choice, m)?)?;
         m.add_function(wrap_pyfunction!(_fit_fill, m)?)?;

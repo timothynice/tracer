@@ -82,6 +82,10 @@ TOLERANCE = {
     # handful of pixels in a frame. `arcs` is then given one extended map so that
     # what it compares is the graph, not this.
     "wedges": ("max", 0.0, 0.002),
+    # Fed one label map and one set of fitted fills, the posterise is a band
+    # index from each pixel centre's ramp parameter and a deterministic absorb
+    # of the grazing slivers: the two agree to the pixel.
+    "posterize": ("max", 0.0, 0.0),
     # Fed one label map, one set of fills and one residual, the two decide
     # alike to the pixel: the test is a handful of products per neighbour and
     # an "any neighbour explains it", which no visiting order can change.
@@ -324,6 +328,64 @@ def wedges(path):
     rs = np.asarray(vexel_rs._stage_wedges(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist()),
                     dtype=np.int32).reshape(h + 2, w + 2)
     return py.astype(np.int32), rs
+
+
+def _fill_vals(f) -> tuple[str, list[float]]:
+    """A Python fill in the layout `vexel_rs._fit_fill` returns (see `_rust_fill`)."""
+    if isinstance(f, Solid):
+        return "solid", [float(v) for v in f.rgba]
+    head = [f.x1, f.y1, f.x2, f.y2] if isinstance(f, Linear) else [f.cx, f.cy, f.r]
+    return f.kind, [float(v) for v in head] + [float(v) for st in f.stops for v in (st.offset, *st.rgba)]
+
+
+@stage
+def posterize(path):
+    """The label map `gradients=False` hands the boundary build: every fitted
+    ramp cut into bands along its own level lines (`posterize.posterize_fills`).
+
+    Both sides are given one label map and one set of fitted fills, at the Flat
+    preset's detail and min_region, so what is compared is the cut: which band
+    each pixel falls in, how the slivers where a level grazes the outline are
+    absorbed, the levels themselves and each band's colour. The labels must
+    match to the pixel; the levels and colours are arithmetic on the same
+    fills, and are held to 1e-6.
+    """
+    from studi0trace.engines.vexel.posterize import posterize_fills
+
+    a = load(path)
+    h, w = a.shape[:2]
+    prep = prepare(a)
+    g = discontinuity(prep.features)
+    labels = merge_regions(initial_labels(g, prep.features, min_region=16), prep.features,
+                           MergeParams(detail=14.0, gradients=True), g)
+    ys, xs = np.mgrid[0:h, 0:w]
+    xs = xs.astype(np.float64) + 0.5
+    ys = ys.astype(np.float64) + 0.5
+    rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
+    params = FitParams(gradients=True, max_stops=4, tol=7.0)
+    fills = {}
+    for lab in (int(i) for i in np.unique(labels) if i):
+        m = labels == lab
+        wt, core = interior(m)
+        fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], params, weights=wt, core=core)
+    py_labels, py_fills, _, lv = posterize_fills(labels, fills, {lab: True for lab in fills}, xs, ys, rgba255, 14.0, 16)
+    rows: list[float] = []
+    for k in sorted(py_fills):
+        group, band = lv.band.get(k, (0, -1))
+        rows += [float(k), float(group), float(band), *[float(v) for v in py_fills[k].rgba]]
+    for grp in sorted(lv.levels):
+        rows += [float(grp), float(lv.levels[grp].size), *lv.levels[grp].tolist()]
+    labs = sorted(fills)
+    packed = [_fill_vals(fills[lab]) for lab in labs]
+    rs_labels, rs_rows = vexel_rs._stage_posterize(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), labs,
+                                                   [k for k, _ in packed], [v for _, v in packed], 14.0, 16)
+    rs_labels = np.asarray(rs_labels, dtype=np.int32).reshape(h, w)
+    py_rows, rs_rows = np.array(rows), np.array(rs_rows)
+    if py_rows.shape != rs_rows.shape or not np.allclose(py_rows, rs_rows, rtol=0.0, atol=1e-6):
+        bad = "shape" if py_rows.shape != rs_rows.shape else f"max |Δ| {np.abs(py_rows - rs_rows).max():.3e}"
+        print(f"  FAIL posterize {path.name}: bands/levels differ ({bad}; {py_rows.size} vs {rs_rows.size} values)")
+        return np.zeros(1, np.int32), np.ones(1, np.int32)
+    return py_labels.astype(np.int32), rs_labels
 
 
 @stage
