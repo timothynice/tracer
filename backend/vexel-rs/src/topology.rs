@@ -1593,13 +1593,6 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
                 }
                 let side_lines: Vec<Option<(P, P, f64)>> = tips.iter().map(|s| lines[*s]).collect();
                 let mut tip_at = node_estimate(&side_lines, mean, TIP_LIMIT);
-                if let Ok(v) = std::env::var("VEXEL_DEBUG_TIP") {
-                    let xy: Vec<f64> = v.split(',').map(|s| s.parse().unwrap()).collect();
-                    if (mean[0] - xy[0]).hypot(mean[1] - xy[1]) < 6.0 {
-                        eprintln!("DEBUG tip mean {mean:?} est {tip_at:?} tips {:?} lines {:?} through {:?} carry {:?} away {away:?}",
-                            tips.iter().map(|s| incident[*s]).collect::<Vec<_>>(), side_lines, incident[long[through]], lines[long[through]]);
-                    }
-                }
                 if tips.iter().any(|s| {
                     let (i, at_start) = incident[*s];
                     sliver_at(&arcs[i], at_start)
@@ -1668,12 +1661,6 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
                         }
                     }
                 }
-            }
-        }
-        if let Ok(v) = std::env::var("VEXEL_DEBUG_NODE") {
-            let xy: Vec<f64> = v.split(',').map(|s| s.parse().unwrap()).collect();
-            if (mean[0] - xy[0]).hypot(mean[1] - xy[1]) < 6.0 {
-                eprintln!("DEBUGNODE mean {mean:?} target {target:?} inc {:?} lines {:?} pinned {pinned:?} tips {tips:?}", incident.iter().map(|(i, s)| (arcs[*i].pair, arcs[*i].pts.len(), *s, short[*i])).collect::<Vec<_>>(), lines);
             }
         }
         moves.push((incident, target, pinned, tips));
