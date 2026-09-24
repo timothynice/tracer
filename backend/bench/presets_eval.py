@@ -2,6 +2,11 @@
 
     python -m bench.presets_eval --out DIR [--ablate] [--forward] [--workers N] [--classes a,b] [--ids x,y]
 
+The preset list's `detail` lines are written by this, in one command, from a
+run over the whole corpus with the engine as built:
+
+    VEXEL_BACKEND=rust RAYON_NUM_THREADS=1 python -m bench.presets_eval --out DIR --fast --workers 3 --write-details
+
 For each configuration — a preset as shipped; with `--ablate`, the preset
 with one of its parameters put back to the default (`logo-detail` is `logo`
 with `detail` at its default); with `--forward`, the defaults with one
@@ -9,7 +14,10 @@ preset's parameter applied (`+detail=10`) — every corpus item is traced and
 scored with the standard bench metrics plus the scorecard
 (`bench.artifacts`). Writes DIR/records.jsonl (one line per item and
 configuration), DIR/svgs/<config>/<item>.svg and DIR/summary.json
-(means per configuration and class), and prints the table.
+(means per configuration and class), and prints the table. Auto is not traced
+again: its record for an item is the candidate `studi0trace.auto.choose`
+picks from the candidates' own records (`bench.presets_report.auto_records`).
+`--write-details` then writes `studi0trace/engines/preset_details.json`.
 """
 from __future__ import annotations
 
@@ -32,10 +40,10 @@ TABLE_KEYS = ("score", "delta_e_mean", "ssim", "edge_f1", "seam_ppm", "paths", "
 
 def configs(ablate: bool, forward: bool) -> list[tuple[str, str, dict]]:
     """(name, preset it derives from, params)."""
-    from studi0trace.engines.presets import all_presets
+    from studi0trace.engines.presets import fixed_presets
 
     out: list[tuple[str, str, dict]] = []
-    presets = [p for p in all_presets() if p.engine == "vexel"]
+    presets = [p for p in fixed_presets() if p.engine == "vexel"]
     for p in presets:
         out.append((p.id, p.id, dict(p.params)))
     if ablate:
@@ -131,8 +139,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--forward", action="store_true")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--no-svgs", action="store_true")
-    ap.add_argument("--fast", action="store_true", help="skip the 8x outline error against the vector truth and the per-element seam renders")
+    ap.add_argument("--fast", action="store_true", help="skip the 8x outline error against the vector truth and the seam render")
+    ap.add_argument("--write-details", action="store_true",
+                    help="write every preset's measured detail line to studi0trace/engines/preset_details.json "
+                         "(needs every preset over the whole corpus)")
     args = ap.parse_args(argv)
+    if args.write_details and (args.classes or args.ids or args.only):
+        ap.error("--write-details measures the whole corpus: drop --classes/--ids/--only")
     import yaml
 
     root = Path(args.corpus)
@@ -170,14 +183,19 @@ def main(argv: list[str] | None = None) -> int:
             fh.flush()
             if (i + 1) % 100 == 0:
                 print(f"  {i + 1}/{len(tasks)}  {time.time() - t0:.0f}s", flush=True)
+    from bench.presets_report import auto_records, write_details
+
+    records = [r for r in records if r["config"] != "auto"] + auto_records(records)
     summary = summarize(records)
-    order = [c[0] for c in configs(True, True)]
+    order = ["auto"] + [c[0] for c in configs(True, True)]
     summary = {k: summary[k] for k in order if k in summary}
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     errors = [r for r in records if "error" in r]
     if errors:
         print(f"{len(errors)} errors, e.g. {errors[0]['config']} {errors[0]['id']}: {errors[0]['error']}")
     print_table(summary)
+    if args.write_details:
+        write_details(records, len(entries))
     return 0
 
 

@@ -104,7 +104,7 @@ RECT_BOW = 0.25        # px a rect-like contour's side may bow off its line
 RECT_SKEW = 1.0        # degrees its sides may be off parallel / perpendicular
 RECT_SIDE_DEG = 30.0   # a side turning more than this is not a side
 RECT_GRID = 6.0        # sides further than this off a right-angle grid make a trapezoid, not a rect
-ID_SCALE = 4           # render scale of the element-id map
+ID_SCALE = 2           # render scale of the element-id map (4x reads the same to ~1% at 3x the cost)
 VIS_OFFSET = 0.35      # px either side of an outline sample that must both be painted over to hide it
 COVER_ALPHA = 0.5      # an element this opaque (opacity × fill-opacity) hides what it is painted over
 
