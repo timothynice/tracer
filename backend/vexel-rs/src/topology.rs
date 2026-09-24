@@ -2700,6 +2700,35 @@ mod under_tests {
         assert_eq!(side(&b), -1.0);
     }
 
+    /// Twin of `test_a_bled_copy_does_not_turn_on_the_last_bit_of_a_smooth_join`:
+    /// the silverpeak badge's arc (26, 138), whose copy this engine split 2 px
+    /// from the Python's while each smooth join was handed to the fit as two
+    /// vertices a rounding error apart.
+    #[test]
+    fn a_bled_copy_does_not_turn_on_the_last_bit_of_a_smooth_join() {
+        let c = |p0: P, c1: P, c2: P, p1: P| Segment::Cubic { p0, c1, c2, p1 };
+        let segs = vec![
+            c([600.6582867801136, 381.58124894983234], [599.3829822291585, 383.34094833479594], [597.8606221538046, 386.2687495606855], [595.5, 386.92069397275225]),
+            c([595.5, 386.92069397275225], [593.8630926138252, 387.3727665849522], [592.1336850978171, 386.68693044693777], [590.5, 386.980469877491]),
+            c([590.5, 386.980469877491], [589.410881879614, 387.17616188281715], [587.2672882785189, 388.4513126638197], [587.0, 388.5]),
+            c([587.0, 388.5], [586.7744474487237, 388.5410850522558], [586.656932260966, 387.8605751794979], [586.5, 388.02771045517073]),
+            c([586.5, 388.02771045517073], [585.4884668520069, 389.10500884175764], [584.9976496271961, 390.5978658107586], [584.0035466733675, 391.6912689570962]),
+        ];
+        let mut pts: Vec<P> = segs.iter().map(|s| s.start()).collect();
+        pts.push(segs[segs.len() - 1].end());
+        let a = arc((26, 138), pts, [-0.6, -0.8], Some(0), Some(1), segs);
+        let loose = CurveParams { tol: 0.6, kind_tol: f64::INFINITY, ..params() };
+        let (copy, jog) = under(&a, 1.0, &loose, &[]);
+        assert_eq!(jog, (true, true));
+        let kinds: String = copy.iter().map(|s| match s { Segment::Line { .. } => 'L', Segment::Cubic { .. } => 'C', Segment::Arc { .. } => 'A' }).collect();
+        assert_eq!(kinds, "LCCCCCL");
+        let want: [P; 7] = [[599.849, 380.994], [595.729, 385.769], [590.61, 385.953], [587.483, 387.159], [585.771, 387.343], [583.264, 391.019], [584.004, 391.691]];
+        for (s, w) in copy.iter().zip(want) {
+            let e = s.end();
+            assert!((e[0] - w[0]).abs() < 2e-3 && (e[1] - w[1]).abs() < 2e-3, "copy ends at {e:?}, the Python's at {w:?}");
+        }
+    }
+
     #[test]
     fn ring_bridges_an_arc_with_no_segments() {
         // three arcs around label 1; the middle one is too short to carry both
