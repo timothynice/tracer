@@ -16,6 +16,10 @@ use crate::core::rng::{choice_without_replacement, Pcg64};
 /// levels. Rust can afford an order of magnitude more, and the extra samples
 /// buy a measurably better fit rather than a different one.
 pub const MAX_FIT_SAMPLES: usize = 25_000;
+/// Candidate knots whose fits leave errors within this fraction of the ramp's
+/// weighted colour energy are tied and the lower is taken (see the Python
+/// `RAMP_TIE`).
+pub const RAMP_TIE: f64 = 1e-9;
 
 /// Fewest core pixels a gradient is fitted from (`fit_fill`'s `core`): a few
 /// pixels in the middle of a band-wide region leave the ramp's stops to be
@@ -266,6 +270,7 @@ pub fn ramp_fit(
     let mut knots: Vec<f64> = vec![0.0, 1.0];
     let (mut coef, mut pred) = solve(&knots);
     let mut current = sse(&pred);
+    let tie = RAMP_TIE * (0..n).map(|i| w[i] * colours[i].iter().map(|c| c * c).sum::<f64>()).sum::<f64>();
     let candidates: Vec<f64> = (1..16).map(|i| i as f64 / 16.0).collect();
     while knots.len() < max_stops {
         let good = match check {
@@ -290,7 +295,8 @@ pub fn ramp_fit(
             trial.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let (tc, tp) = solve(&trial);
             let s = sse(&tp);
-            if best.as_ref().is_none_or(|b| s < b.0) {
+            // a tie (RAMP_TIE) keeps the lower candidate: see the Python
+            if best.as_ref().is_none_or(|b| s < b.0 - tie) {
                 best = Some((s, *c, tc, tp));
             }
         }
@@ -308,15 +314,6 @@ pub fn ramp_fit(
     knots.iter().zip(coef.iter()).map(|(k, c)| Stop { offset: *k, rgba: *c }).collect()
 }
 
-/// Which pixels of a region the fill is fitted from.
-///
-/// This is a reproducible draw from a PCG64 seeded with a constant, by Floyd's
-/// algorithm — the same scheme `numpy.random.Generator.choice(replace=False)`
-/// uses, and bit-identical to it whenever numpy takes that path. numpy switches
-/// to another algorithm once the population is more than four times the sample,
-/// and that branch is undocumented and free to change between releases, so it
-/// is deliberately not emulated: pinning Vexel's output to a private detail of
-/// one numpy version would mean an upgrade silently changing every trace.
 /// Thomas algorithm for a symmetric tridiagonal system with several
 /// right-hand sides.
 fn solve_tridiagonal(diag: &[f64], off: &[f64], rhs: &[[f64; 4]]) -> Vec<[f64; 4]> {
@@ -358,6 +355,15 @@ fn solve_tridiagonal(diag: &[f64], off: &[f64], rhs: &[[f64; 4]]) -> Vec<[f64; 4
     x
 }
 
+/// Which pixels of a region the fill is fitted from: the Python's
+/// `np.random.default_rng(1234).choice(n, MAX_FIT_SAMPLES, replace=False)`,
+/// drawn the same way (`core::rng`). numpy takes a tail shuffle of the whole
+/// range when more than a fiftieth of a population over 10000 is wanted —
+/// every region from 25000 to 1.25 M pixels here — and Floyd's algorithm
+/// otherwise; this once emulated Floyd's alone, and a large gradient was then
+/// fitted to other pixels than the Python's. Both roads are numpy's private
+/// detail: a numpy that changed either would change the Python's traces too,
+/// and `tools/diffcheck.py fills` would show the two engines parting.
 fn subsample(n: usize) -> Vec<usize> {
     let cap = MAX_FIT_SAMPLES;
     if n <= cap {

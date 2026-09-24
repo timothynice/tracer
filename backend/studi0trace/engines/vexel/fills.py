@@ -29,6 +29,15 @@ CORE_GRADIENT_MIN = 24
 
 # Fewest pixels between two gradient stops (see `ramp_fit`).
 KNOT_GAP = 3.0
+# Two candidate knots whose fits leave errors this close are tied, and the
+# lower one is taken; the bar is this fraction of the ramp's weighted colour
+# energy, so that fits exact to rounding tie as well. Where the stops can fit a
+# small region's few pixels as well from anywhere in one gap between them,
+# several candidates tie to the last bit, and a strict `<` let the rounding of
+# two solvers (numpy's SVD, the Rust's tridiagonal normal equations) choose:
+# a 282-pixel ramp on silverpeak-badge put its fifth stop at 0.875 in one
+# engine and 0.6875 in the other, 112 levels apart at the far end.
+RAMP_TIE = 1e-9
 
 # A region whose alpha, averaged with its interior weights, is at most this is
 # not painted: the transparent canvas, a hole (the engine's `visible`). Its fill
@@ -202,6 +211,7 @@ def ramp_fit(t: np.ndarray, colours: np.ndarray, w: np.ndarray, max_stops: int, 
 
     coef, pred = solve(knots)
     current = sse(pred)
+    tie = RAMP_TIE * float(np.sum(w * (colours ** 2).sum(axis=1)))
     candidates = np.linspace(0.0, 1.0, 17)[1:-1]
     while len(knots) < max_stops:
         if check is None:
@@ -221,7 +231,7 @@ def ramp_fit(t: np.ndarray, colours: np.ndarray, w: np.ndarray, max_stops: int, 
             trial = sorted(knots + [float(c)])
             tc, tp = solve(trial)
             s = sse(tp)
-            if best is None or s < best[0]:
+            if best is None or s < best[0] - tie:
                 best = (s, float(c), tc, tp)
         if best is None or best[0] > current * 0.98:
             break
