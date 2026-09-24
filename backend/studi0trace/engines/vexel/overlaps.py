@@ -32,6 +32,7 @@ class Decomposition:
     fills: dict[int, Solid] = field(default_factory=dict)  # top shapes: true colour + opacity
     removed: set[int] = field(default_factory=set)  # blended regions that are no longer drawn
     above: list[tuple[int, int]] = field(default_factory=list)  # (top, below) ordering constraints
+    over_backdrop: set[int] = field(default_factory=set)  # opaque regions made tops, solved over the opaque backdrop
 
     @property
     def empty(self) -> bool:
@@ -174,6 +175,10 @@ def decompose_overlaps(
     for c, (t, x, alpha, tc) in accepted.items():
         if t not in accepted:
             dec.fills[t] = Solid(np.array([tc[0], tc[1], tc[2], alpha * 255.0]))
+            # An opaque region read as a translucent shape over the backdrop:
+            # its own area is its colour with the backdrop beneath it.
+            if fills[t].rgba[3] >= 250 and bg_colour is not None:
+                dec.over_backdrop.add(t)
         top_owner = resolve(t, 0)
         under = resolve(x, 1)
         if top_owner != under and top_owner not in accepted and under not in accepted:

@@ -45,9 +45,12 @@ def _apart(a: float, b: float) -> float:
 def test_parallel_and_perpendicular_edges_of_one_logo_come_out_exactly_so():
     """A JPEG'd tilted square fits as four lines whose directions disagree by a
     few hundredths of a degree (0.10° on the 5° square). Across the graph they
-    are one pair of directions, exactly a right angle apart."""
+    are one pair of directions, exactly a right angle apart. Read at four
+    decimals: at the default two, the endpoints' rounding alone moves a 120 px
+    line's direction by up to 1.4 steps, and the test was measuring where the
+    corners happened to fall against the rounding grid."""
     for ang in (5, 38, 50):
-        svg = trace(jpeg(tilted_square_png(ang), quality=75))
+        svg = trace(jpeg(tilted_square_png(ang), quality=75), path_precision=4)
         dirs = [d for d in line_directions(svg) if _apart(d, 0.0) > 0.01 and _apart(d, 90.0) > 0.01]
         assert len(dirs) == 4, (ang, dirs)
         for a in dirs:

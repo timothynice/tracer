@@ -19,7 +19,7 @@ from skimage.segmentation import relabel_sequential
 
 from studi0trace.engines import registry
 from studi0trace.engines.base import TraceInput, TraceResult, finish
-from studi0trace.engines.vexel.boundary import contours, coverage_field, thin_coverage
+from studi0trace.engines.vexel.boundary import thin_coverage
 from studi0trace.engines.vexel import dump, refine_render, reuse
 from studi0trace.engines.vexel.curves import CurveParams, PathShape, Shape, fit_shape, shape_svg
 from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
@@ -235,7 +235,7 @@ def _shape_from_rings(bnd, rings, member, params: CurveParams):
     reuses them and nothing is described twice.
     """
     if len(rings) == 1 and params.shape_fitting:
-        primitive = fit_shape([bnd.polyline(rings[0])], params)
+        primitive = bnd.primitive(rings[0]) or fit_shape([bnd.polyline(rings[0])], params)
         if not isinstance(primitive, PathShape):
             return primitive
     return PathShape(contours=[bnd.segments(r, member) for r in rings])
@@ -251,6 +251,29 @@ def _emit(pending: list, precision: int, defs: list[str]) -> list[str]:
     for ((_shape, _attrs), k), markup in zip(shapes, use_elements):
         out[k] = markup
     return out
+
+
+def _is_opaque(fill) -> bool:
+    if isinstance(fill, Solid):
+        return fill.rgba[3] >= 250.0
+    return bool(fill.stops) and all(s.rgba[3] >= 250.0 for s in fill.stops)
+
+
+def _holes_to_fill(labels: np.ndarray, member: frozenset[int], rank: dict[int, int], opaque: set[int]) -> frozenset[int]:
+    """The labels in every hole of `member` that holds only opaque regions
+    painted after the shape (whose own rank is the lowest of its members)."""
+    own = min(rank.get(m, -1) for m in member)
+    outside = ~np.isin(labels, list(member))
+    comp, n = ndimage.label(outside, structure=np.ones((3, 3), bool))
+    border = np.unique(np.concatenate([comp[0], comp[-1], comp[:, 0], comp[:, -1]]))
+    out: set[int] = set()
+    for k in range(1, n + 1):
+        if k in border:
+            continue
+        labs = np.unique(labels[comp == k])
+        if all(int(v) in opaque and rank.get(int(v), -1) > own for v in labs):
+            out.update(int(v) for v in labs)
+    return frozenset(out)
 
 
 def _is_invisible(fill) -> bool:
@@ -405,6 +428,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions
     # that touch and share an ink colour are grouped and stroked together.
     stroke_of: dict[int, tuple[str, str]] = {}  # first member label -> (colour, svg)
+    stroked: dict[int, int] = {}  # label painted by a stroke along its middle -> the stroke's first member
     skip: set[int] = set(shadow_plan.absorbed)
     if p.strokes:
         thin_labels = [lab for lab in order if lab not in invisible and is_thin(labels == lab)]
@@ -486,15 +510,18 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 first = min(members, key=order.index)
                 stroke_of[first] = (colour, el)
                 skip.update(members)
+                stroked.update({m: first for m in members})
 
     # Overlaps: a region whose colour is a blend of two neighbours, and whose
     # union with the top neighbour is a simpler shape, is two overlapping shapes
     # with the top one semi-transparent. The overlap region itself is dropped.
     mask_override: dict[int, np.ndarray] = {}
     fill_override: dict[int, Solid] = {}
+    over_backdrop: set[int] = set()
     if p.overlaps and stacked:
         dec = decompose_overlaps(labels, fills, visible, curve_params, tol=fit_params.tol)
         if not dec.empty and not (dec.removed & skip):
+            over_backdrop = set(dec.over_backdrop)
             skip |= dec.removed
             mask_override.update(dec.masks)
             fill_override.update(dec.fills)
@@ -509,15 +536,25 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 if not moved:
                     break
 
-    def fill_at_visible(q_lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
-        """Colour actually visible at (qx, qy) when q_lab's footprint was extended:
-        the fill of whichever original region lies under each pixel."""
-        under = labels[np.clip(qy.astype(int), 0, height - 1), np.clip(qx.astype(int), 0, width - 1)]
-        out = np.empty((qx.size, 4))
-        for lab_u in np.unique(under):
-            sel = under == lab_u
-            out[sel] = fills[int(lab_u)].evaluate(qx[sel], qy[sel]) if int(lab_u) in fills else fill_at(q_lab, qx[sel], qy[sel])
-        return out
+    # A stroked region is painted by a line of one width along its middle, which
+    # cannot follow the region's own outline; its neighbours stop at that
+    # outline, and nothing is bled into it (the line would not hide the bleed),
+    # so wherever the line falls short of it the canvas showed through. The
+    # earliest neighbour painted before the line fills the region underneath,
+    # as a designer draws a line over the ground it sits on.
+    underlay: dict[int, set[int]] = {}
+    if stacked and stroked:
+        nbrs: dict[int, set[int]] = {}
+        for a, b in adjacency(labels):
+            nbrs.setdefault(a, set()).add(b)
+            nbrs.setdefault(b, set()).add(a)
+        for t in sorted(stroked):
+            if t not in order:
+                continue
+            cands = [n for n in nbrs.get(t, ()) if n in order and n not in skip and n not in invisible
+                     and order.index(n) < order.index(stroked[t])]
+            if cands:
+                underlay.setdefault(min(cands, key=order.index), set()).add(t)
 
     # The boundary, once: every edge between two regions is placed sub-pixel and
     # fitted a single time, so the two regions that share it are handed the same
@@ -532,8 +569,21 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     bnd = topology.build(
         labels, prep.rgb, prep.alpha, fill_at, curve_params,
         rank={lab: i for i, lab in enumerate(order)} if stacked else None,
+        # Nothing bleeds under paint that does not hide it: a top an overlap
+        # made translucent, or a region drawn as a line along its middle.
+        see_through={lab for lab in fill_override if fill_override[lab].rgba[3] < 250} | set(stroked),
+        painted_by={t: owner for owner, ts in underlay.items() for t in ts},
     )
     dump.arcs("arcs", bnd)
+
+    rank_of = {lab: i for i, lab in enumerate(order)}
+    # Regions a shape may be laid under without being seen through them: an
+    # opaque fill; a top an overlap made translucent over the backdrop (its
+    # colour was solved over that backdrop, which is what then lies beneath);
+    # and a region painted some other way (a stroke along its middle, a blend
+    # an overlap explains, a shadow band), which wants paint under it.
+    opaque = {lab for lab in order if lab not in invisible and _is_opaque(fill_override.get(lab, fills[lab]))}
+    opaque |= over_backdrop | (skip - invisible)
 
     # Every shape as it stands in the graph, fitted once: a record holds the
     # labels it paints, a whole-shape primitive or the rings whose fitted arcs
@@ -553,26 +603,33 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         if shadow is not None:
             defs.append(shadow_filter_svg(shadow, f"s{i + 1}", p.path_precision))
             extra = f' filter="url(#s{i + 1})"'
+        member = shape_labels(lab, enc, stacked, invisible) | frozenset(underlay.get(lab, ()))
         if lab in mask_override:
-            mask = mask_override[lab]
-            field = coverage_field(mask, lab, labels, prep.rgb, prep.alpha, fill_at_visible)
-            polys = contours(field)
-            if not polys:
-                continue
-            polys.sort(key=lambda c: -abs(0.5 * (np.dot(c[:, 0], np.roll(c[:, 1], -1)) - np.dot(c[:, 1], np.roll(c[:, 0], -1)))))
-            d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
-            if d:
-                defs.append(d)
-            records.append(_Record(frozenset([lab]), fit_shape(polys, curve_params), [], attrs + extra))
-            continue
-        member = shape_labels(lab, enc, stacked, invisible)
+            # An overlap's shape is the union of its own region and the blends
+            # it explains: those are labels in the one graph, so its outline is
+            # the graph's too and tiles with every neighbour, instead of a
+            # separate trace of the union that nothing else shared.
+            member = member | frozenset(int(v) for v in np.unique(labels[mask_override[lab]]))
         rings = [r for r in bnd.rings(member) if r]
+        if stacked and len(rings) > 1:
+            # A hole whose every region is painted later, opaquely, is not cut:
+            # this shape paints on underneath them, as a designer lays a shape
+            # down and puts the others on top. Cut, the hole's outline was a
+            # second copy of theirs, bled to meet it, and every flaw in that
+            # copy (a hairpin, a bleed that turned a sliver's ring inside out
+            # under even-odd) was a pinhole where nothing painted at all.
+            filled = _holes_to_fill(labels, member, rank_of, opaque)
+            if filled:
+                member = member | filled
+                rings = [r for r in bnd.rings(member) if r]
         if not rings:
             continue
         rings.sort(key=lambda r: -_ring_area(bnd.polyline(r)))
         primitive = None
         if len(rings) == 1 and curve_params.shape_fitting:
-            candidate = fit_shape([bnd.polyline(rings[0])], curve_params)
+            # a ring `topology._rectify` made a rectangle is one already; the
+            # arcs carry the same outline, so a neighbour's edge agrees with it
+            candidate = bnd.primitive(rings[0]) or fit_shape([bnd.polyline(rings[0])], curve_params)
             if not isinstance(candidate, PathShape):
                 primitive = candidate
         d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
