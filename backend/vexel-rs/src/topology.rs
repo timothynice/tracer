@@ -86,6 +86,27 @@ pub const SHORT_ARC: f64 = 2.1;
 pub const SMOOTH_SPAN: f64 = 10.1;
 pub const SMOOTH_TOL: f64 = 0.75;
 pub const SMOOTH_MAX_TURN: f64 = 90.0;
+/// A held wedge tip may sit at most this far beyond the end of its sliver
+/// (see `junctions`).
+pub const TIP_AHEAD: f64 = 1.5;
+/// Two unit directions this close to square cannot orient one another.
+pub const ORIENT_TIE: f64 = 1e-9;
+/// The sub-pixel placement reads each side's colour as the fitted fill plus the
+/// fill's residual, averaged over the region's pure pixels with a Gaussian of
+/// LOCAL_SIGMA px (cut at LOCAL_TRUNCATE sigma, scipy's default, which
+/// `core::filters::gaussian_filter` twins). LOCAL_SUPPORT is the Gaussian mass
+/// of pure pixels at which the correction counts half. See `LocalFills`.
+pub const LOCAL_SIGMA: f64 = 2.0;
+pub const LOCAL_TRUNCATE: f64 = 4.0;
+pub const LOCAL_SUPPORT: f64 = 0.05;
+/// A region whose fitted alpha is under this is a transparent field: its colour
+/// is inpainting and gets no correction.
+pub const LOCAL_OPAQUE_ALPHA: f64 = 128.0;
+/// The corrected fills are believed in full where they keep at least
+/// LOCAL_KEEP1 of the fitted fills' contrast across the edge, not at all below
+/// LOCAL_KEEP0, linearly between (see `coverage`).
+pub const LOCAL_KEEP0: f64 = 0.25;
+pub const LOCAL_KEEP1: f64 = 0.5;
 
 const RIGHT: u8 = 0;
 const DOWN: u8 = 1;
@@ -298,7 +319,138 @@ fn chains(padded: &Labels, e: &Edges) -> Vec<Chain> {
     out
 }
 
+/// One region's colour correction: the fill's own RGB residual smoothed over
+/// the region's pure pixels, on the region's box widened by the kernel radius.
+pub struct LocalGrid {
+    pub r0: usize,
+    pub c0: usize,
+    pub h: usize,
+    pub w: usize,
+    /// Row-major, RGB per cell.
+    pub corr: Vec<[f64; 3]>,
+}
+
+/// Each region's fill as it actually is near a point: the fitted model plus the
+/// model's own residual there, smoothed over the region's pure pixels.
+///
+/// A region's fill is one gradient fitted to all of it, and on shaded artwork
+/// that model can be a dozen levels off near one of the region's edges. The
+/// placement projects an edge pixel onto the segment between the two fills, so
+/// an error of that size put the region's own pixels at a coverage near a half
+/// and a straight edge between two shaded regions came out wavy. The residual,
+/// read from pixels whose eight neighbours are all the region's and averaged
+/// with a Gaussian of LOCAL_SIGMA px, is what the model misses locally; where a
+/// region has no pure pixels nearby the correction fades out with the support.
+/// Colour only: alpha is the coverage itself. See `_local_fills` in the Python.
+pub struct LocalFills {
+    pub grids: HashMap<i32, LocalGrid>,
+}
+
+impl LocalFills {
+    pub fn build(labels: &Labels, rgb: &Image, fill_at: FillAt) -> LocalFills {
+        use crate::core::filters::{Mode, gaussian_filter};
+        let (h, w) = (labels.h, labels.w);
+        let radius = (LOCAL_TRUNCATE * LOCAL_SIGMA + 0.5).floor() as usize;
+        // `ndimage.find_objects`: each positive label's bounding box
+        let mut boxes: HashMap<i32, (usize, usize, usize, usize)> = HashMap::new();
+        for r in 0..h {
+            for c in 0..w {
+                let lab = *labels.get(r, c);
+                if lab <= 0 {
+                    continue;
+                }
+                let b = boxes.entry(lab).or_insert((r, r + 1, c, c + 1));
+                b.0 = b.0.min(r);
+                b.1 = b.1.max(r + 1);
+                b.2 = b.2.min(c);
+                b.3 = b.3.max(c + 1);
+            }
+        }
+        let mut ids: Vec<i32> = boxes.keys().copied().collect();
+        ids.sort_unstable();
+        let mut grids = HashMap::new();
+        for lab in ids {
+            let (br0, br1, bc0, bc1) = boxes[&lab];
+            let (r0, r1) = (br0.saturating_sub(radius), (br1 + radius).min(h));
+            let (c0, c1) = (bc0.saturating_sub(radius), (bc1 + radius).min(w));
+            let (gh, gw) = (r1 - r0, c1 - c0);
+            let mut m = Grid::<bool>::new(gh, gw);
+            for r in 0..gh {
+                for c in 0..gw {
+                    m.set(r, c, *labels.get(r + r0, c + c0) == lab);
+                }
+            }
+            // pure: all eight neighbours are the region's own (the canvas frame counts as own)
+            let pure = crate::core::morphology::erode_square(&m, true);
+            let mut xs = Vec::new();
+            let mut ys = Vec::new();
+            let mut at = Vec::new();
+            for r in 0..gh {
+                for c in 0..gw {
+                    if *pure.get(r, c) {
+                        xs.push((c + c0) as f64 + 0.5);
+                        ys.push((r + r0) as f64 + 0.5);
+                        at.push((r, c));
+                    }
+                }
+            }
+            if at.is_empty() {
+                continue;
+            }
+            let model = fill_at(lab, &xs, &ys);
+            let mean_alpha = model.iter().map(|v| v[3]).sum::<f64>() / model.len() as f64;
+            if mean_alpha < LOCAL_OPAQUE_ALPHA {
+                // a transparent field's colour is inpainting, not ink: see the Python
+                continue;
+            }
+            let den = gaussian_filter(&pure.map(|v| if *v { 1.0 } else { 0.0 }), LOCAL_SIGMA, Mode::Constant, 0.0);
+            let mut num = Vec::with_capacity(3);
+            for ch in 0..3 {
+                let mut res = Grid::<f64>::new(gh, gw);
+                for (k, (r, c)) in at.iter().enumerate() {
+                    res.set(*r, *c, rgb.at(r + r0, c + c0)[ch] - model[k][ch]);
+                }
+                num.push(gaussian_filter(&res, LOCAL_SIGMA, Mode::Constant, 0.0));
+            }
+            let corr: Vec<[f64; 3]> = (0..gh * gw)
+                .map(|i| {
+                    let d = den.data[i] + LOCAL_SUPPORT;
+                    [num[0].data[i] / d, num[1].data[i] / d, num[2].data[i] / d]
+                })
+                .collect();
+            grids.insert(lab, LocalGrid { r0, c0, h: gh, w: gw, corr });
+        }
+        LocalFills { grids }
+    }
+
+    /// The fill of `lab` at each point, corrected inside the region's grid.
+    pub fn at(&self, fill_at: FillAt, lab: i32, qx: &[f64], qy: &[f64]) -> Vec<[f64; 4]> {
+        let mut out = fill_at(lab, qx, qy);
+        let Some(g) = self.grids.get(&lab) else {
+            return out;
+        };
+        for (k, v) in out.iter_mut().enumerate() {
+            let col = qx[k].floor() as i64 - g.c0 as i64;
+            let row = qy[k].floor() as i64 - g.r0 as i64;
+            if row < 0 || col < 0 || row >= g.h as i64 || col >= g.w as i64 {
+                continue;
+            }
+            let c = &g.corr[row as usize * g.w + col as usize];
+            v[0] += c[0];
+            v[1] += c[1];
+            v[2] += c[2];
+        }
+        out
+    }
+}
+
 /// How much of each pixel is `lab` rather than `other`, read from its colour.
+///
+/// Given `local`, the reference colours are the fills as they are beside the
+/// edge, where those still differ by LOCAL_KEEP1 of what the fitted fills
+/// differ by; where the two sides' local colours meet there is no edge in the
+/// colour to place, and the fitted fills place it as before. See the Python.
+#[allow(clippy::too_many_arguments)]
 fn coverage(
     rgb: &Image,
     alpha: &Grid<f64>,
@@ -306,12 +458,30 @@ fn coverage(
     lab: i32,
     other: i32,
     fill_at: FillAt,
+    local: Option<&LocalFills>,
 ) -> Vec<f64> {
     // Padded pixel (r, c) is image pixel (r-1, c-1), centred at (c-0.5, r-0.5).
     let qx: Vec<f64> = pix.iter().map(|p| p.1 as f64 - 0.5).collect();
     let qy: Vec<f64> = pix.iter().map(|p| p.0 as f64 - 0.5).collect();
-    let f_a = fill_at(lab, &qx, &qy);
-    let f_b = fill_at(other, &qx, &qy);
+    let mut f_a = fill_at(lab, &qx, &qy);
+    let mut f_b = fill_at(other, &qx, &qy);
+    if let Some(local) = local {
+        let l_a = local.at(fill_at, lab, &qx, &qy);
+        let l_b = local.at(fill_at, other, &qx, &qy);
+        for k in 0..pix.len() {
+            let (mut kept2, mut fitted2) = (0.0, 0.0);
+            for ch in 0..4 {
+                kept2 += (l_a[k][ch] - l_b[k][ch]).powi(2);
+                fitted2 += (f_a[k][ch] - f_b[k][ch]).powi(2);
+            }
+            let kept = kept2.sqrt() / fitted2.sqrt().max(1e-9);
+            let wt = ((kept - LOCAL_KEEP0) / (LOCAL_KEEP1 - LOCAL_KEEP0)).clamp(0.0, 1.0);
+            for ch in 0..4 {
+                f_a[k][ch] += wt * (l_a[k][ch] - f_a[k][ch]);
+                f_b[k][ch] += wt * (l_b[k][ch] - f_b[k][ch]);
+            }
+        }
+    }
     pix.iter()
         .enumerate()
         .map(|(k, p)| {
@@ -358,10 +528,11 @@ fn crossing(
     a: i32,
     b: i32,
     fill_at: FillAt,
-) -> Vec<f64> {
+    local: Option<&LocalFills>,
+) -> (Vec<f64>, Vec<i8>) {
     let n = p_in.len();
-    let here_raw = coverage(rgb, alpha, p_in, a, b, fill_at);
-    let there_raw = coverage(rgb, alpha, p_out, a, b, fill_at);
+    let here_raw = coverage(rgb, alpha, p_in, a, b, fill_at, local);
+    let there_raw = coverage(rgb, alpha, p_out, a, b, fill_at, local);
     let here: Vec<f64> = here_raw.iter().map(|v| if v.is_finite() { *v } else { 1.0 }).collect();
     let there: Vec<f64> = there_raw.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
 
@@ -379,7 +550,7 @@ fn crossing(
             valid.push(ok);
             pix.push(if ok { (r as usize, c as usize) } else { from[k] });
         }
-        let cov = coverage(rgb, alpha, &pix, a, b, fill_at);
+        let cov = coverage(rgb, alpha, &pix, a, b, fill_at, local);
         (0..n).map(|k| if valid[k] && cov[k].is_finite() { cov[k] } else { near[k] }).collect()
     };
     let before = outward(p_in, p_out, a, &here);
@@ -409,9 +580,22 @@ fn crossing(
             // the label edge: see the Python.
             let trust = ((slope - 0.15) / 0.35).clamp(0.0, 1.0);
             let over = t.clamp(0.0, 1.0);
-            (over + (t - over) * trust).clamp(-REACH, 1.0 + REACH)
+            let placed = (over + (t - over) * trust).clamp(-REACH, 1.0 + REACH);
+            // Where no crossing was found, which way the samples say the edge
+            // lies: -1 all four read as `b`, so it is beyond the `a` pixel; +1
+            // all read as `a`, beyond the `b` pixel; 0 found, or they disagree.
+            let side = if best.is_finite() {
+                0
+            } else if level.iter().all(|v| *v < 0.5) {
+                -1
+            } else if level.iter().all(|v| *v >= 0.5) {
+                1
+            } else {
+                0
+            };
+            (placed, side)
         })
-        .collect()
+        .unzip()
 }
 
 /// Sub-pixel position, and the side-to-side step, for every lattice edge of every arc.
@@ -423,6 +607,7 @@ fn place(
     alpha: &Grid<f64>,
     fill_at: FillAt,
     handed_back: &std::collections::HashSet<(usize, usize)>,
+    local: Option<&LocalFills>,
 ) -> Vec<(Vec<P>, Vec<P>, Vec<bool>)> {
     chains
         .iter()
@@ -440,16 +625,17 @@ fn place(
                     p_out.push(pa);
                 }
             }
-            let t = if a != 0 && b != 0 {
-                crossing(padded, rgb, alpha, &p_in, &p_out, a, b, fill_at)
+            let (t, side) = if a != 0 && b != 0 {
+                crossing(padded, rgb, alpha, &p_in, &p_out, a, b, fill_at, local)
             } else {
-                vec![0.5; ch.edges.len()]
+                (vec![0.5; ch.edges.len()], vec![0i8; ch.edges.len()])
             };
             let crowded: Vec<bool> = (0..ch.edges.len())
                 .map(|k| handed_back.contains(&p_in[k]) || handed_back.contains(&p_out[k]))
                 .collect();
             let mut pts: Vec<P> = Vec::with_capacity(ch.edges.len());
             let mut normal = Vec::with_capacity(ch.edges.len());
+            let mut placed_t = Vec::with_capacity(ch.edges.len());
             for k in 0..ch.edges.len() {
                 let c_in = [p_in[k].1 as f64 - 0.5, p_in[k].0 as f64 - 0.5];
                 let c_out = [p_out[k].1 as f64 - 0.5, p_out[k].0 as f64 - 0.5];
@@ -463,6 +649,23 @@ fn place(
                 let tk = if crowded[k] { t[k].clamp(0.0, 1.0) } else { t[k] };
                 pts.push([c_in[0] + tk * step[0], c_in[1] + tk * step[1]]);
                 normal.push(step);
+                placed_t.push(tk);
+            }
+            if pts.len() >= 3 {
+                // A vertex with no crossing within reach along its own step,
+                // whose neighbours both found the edge beyond the label edge on
+                // the side its samples point to, takes their midpoint: left at
+                // the label edge it is a spike. See the Python.
+                let beyond_a = |k: usize| placed_t[k] < 0.0 && side[k] == 0;
+                let beyond_b = |k: usize| placed_t[k] > 1.0 && side[k] == 0;
+                let before = pts.clone();
+                for k in 1..pts.len() - 1 {
+                    let lone = (side[k] == -1 && beyond_a(k - 1) && beyond_a(k + 1))
+                        || (side[k] == 1 && beyond_b(k - 1) && beyond_b(k + 1));
+                    if lone {
+                        pts[k] = [(before[k - 1][0] + before[k + 1][0]) / 2.0, (before[k - 1][1] + before[k + 1][1]) / 2.0];
+                    }
+                }
             }
             pts = unfold(&pts);
             if !handed_back.is_empty() {
@@ -1102,6 +1305,19 @@ fn on_border(target: P, arcs: &[Arc], incident: &[ArcEnd]) -> P {
     out
 }
 
+/// Does this end of the arc run along a handed-back sliver (its last three vertices)?
+fn sliver_at(arc: &Arc, at_start: bool) -> bool {
+    const REACH_VERTICES: usize = 3;
+    match &arc.sliver {
+        None => false,
+        Some(s) => {
+            let n = s.len();
+            let part = if at_start { &s[..REACH_VERTICES.min(n)] } else { &s[n - REACH_VERTICES.min(n)..] };
+            part.iter().any(|v| *v)
+        }
+    }
+}
+
 fn find_root(parent: &mut HashMap<u64, u64>, mut node: u64) -> u64 {
     while parent[&node] != node {
         let p = parent[&node];
@@ -1267,7 +1483,15 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
                     let (i, at_start) = incident[slot];
                     if let Some(again) = approach(&arcs[i].pts, at_start, TIP_TRIM + REACH_PX, TIP_TRIM, 2.0 * APPROACH_MAX, arcs[i].sliver.as_deref()) {
                         lines[slot] = Some(again);
-                        let flip = again.1[0] * away[k][0] + again.1[1] * away[k][1] < 0.0;
+                        let mut lean = again.1[0] * away[k][0] + again.1[1] * away[k][1];
+                        if lean.abs() < ORIENT_TIE {
+                            // square to the first line: the sign would be the
+                            // line fit's own, so orient it towards its window
+                            // (see the Python)
+                            let end = if at_start { arcs[i].pts[0] } else { arcs[i].pts[arcs[i].pts.len() - 1] };
+                            lean = again.1[0] * (again.0[0] - end[0]) + again.1[1] * (again.0[1] - end[1]);
+                        }
+                        let flip = lean < 0.0;
                         away[k] = normalize(if flip { [-again.1[0], -again.1[1]] } else { again.1 });
                         if let Some(entry) = pinned.iter_mut().find(|(s, _)| *s == slot) {
                             entry.1 = away[k];
@@ -1275,7 +1499,44 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
                     }
                 }
                 let side_lines: Vec<Option<(P, P, f64)>> = tips.iter().map(|s| lines[*s]).collect();
-                target = on_border(node_estimate(&side_lines, mean, TIP_LIMIT), arcs, &incident);
+                let mut tip_at = node_estimate(&side_lines, mean, TIP_LIMIT);
+                if let Ok(v) = std::env::var("VEXEL_DEBUG_TIP") {
+                    let xy: Vec<f64> = v.split(',').map(|s| s.parse().unwrap()).collect();
+                    if (mean[0] - xy[0]).hypot(mean[1] - xy[1]) < 6.0 {
+                        eprintln!("DEBUG tip mean {mean:?} est {tip_at:?} tips {:?} lines {:?} through {:?} carry {:?} away {away:?}",
+                            tips.iter().map(|s| incident[*s]).collect::<Vec<_>>(), side_lines, incident[long[through]], lines[long[through]]);
+                    }
+                }
+                if tips.iter().any(|s| {
+                    let (i, at_start) = incident[*s];
+                    sliver_at(&arcs[i], at_start)
+                }) {
+                    // The handed-back sliver is the colour's own evidence of
+                    // how far the wedge reaches, and the arcs end where it
+                    // ends. The tip may move across the wedge and at most
+                    // TIP_AHEAD further out, never back into it. See the Python.
+                    let side_away: Vec<P> = (0..3).filter(|k| *k != through).map(|k| away[k]).collect();
+                    let inward = [side_away[0][0] + side_away[1][0], side_away[0][1] + side_away[1][1]];
+                    let length = inward[0].hypot(inward[1]);
+                    if length > 1e-9 {
+                        let inward = [inward[0] / length, inward[1] / length];
+                        let along = (tip_at[0] - mean[0]) * inward[0] + (tip_at[1] - mean[1]) * inward[1];
+                        let excess = along - along.clamp(-TIP_AHEAD, 0.0);
+                        tip_at = [tip_at[0] - excess * inward[0], tip_at[1] - excess * inward[1]];
+                    }
+                    // ...and it sits on the boundary that carries on through
+                    // it, so that boundary stays one line.
+                    if let Some((c, d, _)) = lines[long[through]] {
+                        let s = (tip_at[0] - c[0]) * d[0] + (tip_at[1] - c[1]) * d[1];
+                        tip_at = [c[0] + d[0] * s, c[1] + d[1] * s];
+                    }
+                    // Placed from the sliver, the tip no longer needs the side
+                    // lines' directions, and on a curved side they are wrong
+                    // for a tangent: the sides leave the tip along their own
+                    // vertices. See the Python.
+                    pinned.retain(|(s, _)| !tips.contains(s));
+                }
+                target = on_border(tip_at, arcs, &incident);
             }
         }
         let mut best: Option<(f64, usize, usize)> = None;
@@ -1896,7 +2157,9 @@ pub fn build_opt(
     let edges = boundary_edges(&padded);
     let chain_list = chains(&padded, &edges);
     let mut timer = crate::timing::Timer::new();
-    let placed = place(&chain_list, &edges, &padded, rgb, alpha, fill_at, &handed_back);
+    // The placement reads colour against the fills as they are beside each edge.
+    let local = LocalFills::build(labels, rgb, fill_at);
+    let placed = place(&chain_list, &edges, &padded, rgb, alpha, fill_at, &handed_back, Some(&local));
     timer.lap("topology: chains + place");
 
     let mut arcs: Vec<Arc> = chain_list
