@@ -106,7 +106,9 @@ pub fn edge_mix(l: &Labels, colour: &[[f64; 4]], pred: &[[f64; 4]], alpha: &Grid
 /// for the edge's reason, not because a stroke was swallowed. A component is
 /// only evidence of a feature if it reaches into the core; edge-band pixels may
 /// belong to one that does (the darkest band of a drop shadow runs right up to
-/// its caster). `rescue.rescue_features` in the Python.
+/// its caster). `edge_mix` covers most of the same ground but not all: at the
+/// default preset this rule changes nothing measurable, at Detailed it holds
+/// the corpus artifact index 10 % lower. `rescue.rescue_features` in the Python.
 pub fn rescue_features(
     l: &Labels,
     residual: &Grid<f64>,
