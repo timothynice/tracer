@@ -1,0 +1,25 @@
+{
+ "seed": 20260924,
+ "sets": {
+  "fluent-flat": {
+   "candidates": 1595,
+   "tried": 10,
+   "kept": 10,
+   "quota": 10
+  },
+  "fluent-color": {
+   "candidates": 1595,
+   "tried": 10,
+   "kept": 10,
+   "quota": 10
+  },
+  "noto": {
+   "candidates": 1710,
+   "tried": 20,
+   "kept": 20,
+   "quota": 20
+  }
+ },
+ "skipped": [],
+ "downloads": 40
+}

@@ -72,6 +72,29 @@ def _junction_mask(rgb: np.ndarray, edges: np.ndarray, scale: int) -> np.ndarray
     return edges & (count >= 3)
 
 
+_TRUTH_CACHE: dict = {}
+
+
+def _truth_side(truth_svg: str, width: int, height: int, scale: int):
+    """The truth's edges, the distance to them and its junction zone. Two thirds
+    of `outline_error`'s cost and the same for every engine scored against one
+    truth, so the last one is kept (one entry: the arrays are ~200 MB at 8x 512 px)."""
+    key = (truth_svg, width, height, scale)
+    hit = _TRUTH_CACHE.get(key)
+    if hit is not None:
+        return hit
+    t = to_rgb_on_white(rasterize(truth_svg, width * scale, height * scale))
+    te = _edges(t)
+    d_to_truth = ndimage.distance_transform_edt(~te) if te.any() else None
+    junction = _junction_mask(t, te, scale) if te.any() else None
+    near = None
+    if junction is not None and junction.any():
+        near = ndimage.distance_transform_edt(~junction) <= JUNCTION_REACH * scale
+    _TRUTH_CACHE.clear()
+    _TRUTH_CACHE[key] = (te, d_to_truth, near)
+    return _TRUTH_CACHE[key]
+
+
 def outline_error(truth_svg: str, out_svg: str, width: int, height: int, scale: int = 8) -> dict:
     """Symmetric Chamfer distance between the truth's edges and the output's, in source px.
 
@@ -82,20 +105,17 @@ def outline_error(truth_svg: str, out_svg: str, width: int, height: int, scale: 
     and the edge that carries on through the junction is exact, so a mean over
     the zone would hide it; the upper decile is what the eye sees at 750 %.
     """
-    t = to_rgb_on_white(rasterize(truth_svg, width * scale, height * scale))
+    te, d_to_truth, near = _truth_side(truth_svg, width, height, scale)
     o = to_rgb_on_white(rasterize(out_svg, width * scale, height * scale))
-    te, oe = _edges(t), _edges(o)
+    oe = _edges(o)
     if not te.any() or not oe.any():
         return {"outline_px": None, "outline_p99_px": None, "junction_px": None}
     d_to_out = ndimage.distance_transform_edt(~oe)
-    d_to_truth = ndimage.distance_transform_edt(~te)
     forward = d_to_out[te] / scale
     backward = d_to_truth[oe] / scale
     both = np.concatenate([forward, backward])
-    junction = _junction_mask(t, te, scale)
     junction_px = None
-    if junction is not None and junction.any():
-        near = ndimage.distance_transform_edt(~junction) <= JUNCTION_REACH * scale
+    if near is not None:
         sel = np.concatenate([near[te], near[oe]])
         if sel.any():
             junction_px = float(np.percentile(both[sel], 90))

@@ -46,13 +46,14 @@ def cmd_run(args) -> int:
         registry.load_builtin()
         engines = registry.ids()
     out_dir = Path(args.out) if args.out else None
-    results_path = run(items, engines, params=params, label=args.label, out_dir=out_dir, media=not args.no_media)
+    results_path = run(items, engines, params=params, label=args.label, out_dir=out_dir, media=not args.no_media,
+                       workers=args.workers)
     results = json.loads(results_path.read_text())
     _print_summary(results)
     print(f"\nresults: {results_path}\nreport:  {results_path.with_name('index.html')}")
     if args.update_baseline:
         BASELINES.mkdir(exist_ok=True)
-        for eid in engines:
+        for eid in results["engines"]:
             single = {**results, "engines": {eid: results["engines"][eid]},
                       "items": [r for r in results["items"] if r["engine"] == eid],
                       "summary": {eid: results["summary"].get(eid, {})}}
@@ -226,7 +227,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.set_defaults(fn=cmd_generate)
 
     r = sub.add_parser("run", help="score engines over the corpus")
-    r.add_argument("--engines", default="", help="comma list; default every registered engine")
+    r.add_argument("--engines", default="", help="comma list; default every engine the service registers "
+                   "(bench-only adapters such as autotrace, imagetracer, vexel-auto are opt-in by name)")
     r.add_argument("--classes", help="comma list, default all")
     r.add_argument("--ids", help="comma list of item ids")
     r.add_argument("--params", help='JSON keyed by engine id, e.g. \'{"vtracer": {"color_precision": 8}}\'')
@@ -234,6 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--out", help="output directory (default bench/reports/<ts>-<label>)")
     r.add_argument("--corpus", default=str(CORPUS))
     r.add_argument("--no-media", action="store_true", help="skip thumbnails (faster)")
+    r.add_argument("--workers", type=int, default=1, help="score in this many processes (default 1)")
     r.add_argument("--update-baseline", action="store_true", help="write bench/baselines/<engine>.json")
     r.set_defaults(fn=cmd_run)
 

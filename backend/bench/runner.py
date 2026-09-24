@@ -4,8 +4,10 @@ from __future__ import annotations
 import base64
 import io
 import json
+import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +66,8 @@ def score_item(item: Item, engine_id: str, params: dict, weights: Weights, media
     truth_svg = item.truth_svg.read_text(encoding="utf-8") if item.truth_svg and item.truth_svg.exists() else None
     m = metrics.all_metrics(src_rgba, out_rgba, result.svg, result.elapsed_ms, item.truth_paths, weights, truth_svg=truth_svg)
     record["metrics"] = m
+    if getattr(result, "notes", None):  # e.g. which preset vexel-auto picked
+        record["notes"] = result.notes
     if media is not None:
         de = metrics.delta_e_map(to_rgb_on_white(src_rgba), to_rgb_on_white(out_rgba))
         media[f"{item.id}|{engine_id}"] = {
@@ -98,6 +102,20 @@ def summarize(records: list[dict]) -> dict:
     return summary
 
 
+def _load_engines() -> dict[str, str]:
+    """The service's engines plus the bench-only adapters; {id: why missing} for adapters that are not installed."""
+    from bench.adapters import load
+
+    return load()
+
+
+def _score_task(args: tuple) -> tuple[dict, dict | None]:
+    item, eid, p, weights, media = args
+    _load_engines()
+    store: dict | None = {} if media else None
+    return score_item(item, eid, p, weights, store), store
+
+
 def run(
     items: list[Item],
     engine_ids: list[str],
@@ -106,11 +124,21 @@ def run(
     out_dir: Path | None = None,
     weights: Weights = DEFAULT_WEIGHTS,
     media: bool = True,
+    workers: int = 1,
 ) -> Path:
-    """Score every engine on every item. Returns the results.json path."""
+    """Score every engine on every item. Returns the results.json path.
+
+    A bench-only adapter (`bench.adapters`) whose tool is not installed is
+    dropped from the run with a message rather than failing every item.
+    `workers` > 1 scores (item, engine) pairs in that many processes; engines
+    registered by hand in this process (tests) are only seen with workers=1.
+    """
     from bench.report import write_html  # local import: report needs no engines
 
-    registry.load_builtin()
+    missing = _load_engines()
+    for eid in [e for e in engine_ids if e in missing]:
+        print(f"skipping {eid}: {missing[eid]}", file=sys.stderr)
+    engine_ids = [e for e in engine_ids if e not in missing]
     params = params or {}
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = out_dir or Path("bench/reports") / f"{stamp}-{label}"
@@ -119,9 +147,16 @@ def run(
     media_store: dict | None = {} if media else None
     records: list[dict] = []
     started = time.perf_counter()
-    for item in items:
-        for eid in engine_ids:
-            records.append(score_item(item, eid, params.get(eid, {}), weights, media_store))
+    tasks = [(item, eid, params.get(eid, {}), weights, media) for item in items for eid in engine_ids]
+    if workers > 1:
+        with ProcessPoolExecutor(workers) as pool:
+            for record, store in pool.map(_score_task, tasks):
+                records.append(record)
+                if media_store is not None and store:
+                    media_store.update(store)
+    else:
+        for item, eid, p, w, _m in tasks:
+            records.append(score_item(item, eid, p, w, media_store))
 
     results = {
         "label": label,

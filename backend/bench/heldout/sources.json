@@ -1,0 +1,533 @@
+{
+ "seed": 20260924,
+ "repos": {
+  "fluent": {
+   "repo": "microsoft/fluentui-emoji",
+   "sha": "1ffb34c752ecf5d402f04cfb4b392c77f57c54bc",
+   "license": "MIT",
+   "copyright": "Copyright (c) Microsoft Corporation.",
+   "project": "Microsoft Fluent Emoji \u2014 https://github.com/microsoft/fluentui-emoji"
+  },
+  "noto": {
+   "repo": "googlefonts/noto-emoji",
+   "sha": "06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4",
+   "license": "Apache-2.0",
+   "copyright": "Copyright Google LLC and the Noto Emoji authors (AUTHORS, CONTRIBUTORS in the project)",
+   "project": "Google Noto Emoji \u2014 https://github.com/googlefonts/noto-emoji"
+  }
+ },
+ "files": [
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Fleur-de-lis",
+   "upstream_path": "assets/Fleur-de-lis/Flat/fleur-de-lis_flat.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Fleur-de-lis/Flat/fleur-de-lis_flat.svg",
+   "sha256": "cbd926ba87154222854e1cc30ae0c9ad4ccc3960b199e6c9cd1298562eecd73e",
+   "bytes": 1815,
+   "truth_svg": "fluent-flat/fleur-de-lis.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Woman elf",
+   "upstream_path": "assets/Woman elf/Default/Flat/woman_elf_flat_default.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Woman%20elf/Default/Flat/woman_elf_flat_default.svg",
+   "sha256": "1877ea392797cb404b7c7c92228a1b9d2a136e9a99374ac68fde72cd2db42568",
+   "bytes": 6883,
+   "truth_svg": "fluent-flat/woman-elf.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Fireworks",
+   "upstream_path": "assets/Fireworks/Flat/fireworks_flat.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Fireworks/Flat/fireworks_flat.svg",
+   "sha256": "317e235cc20b99cb06f2c5f28ba30292e9eadfd2093b97903d2c4a5cfc551125",
+   "bytes": 5898,
+   "truth_svg": "fluent-flat/fireworks.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Mx claus",
+   "upstream_path": "assets/Mx claus/Default/Flat/mx_claus_flat_default.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Mx%20claus/Default/Flat/mx_claus_flat_default.svg",
+   "sha256": "0d0501f2e31fb9fe02c658532f7bdb9b8a3546e35b54c5c3cfd1e325736f229d",
+   "bytes": 8338,
+   "truth_svg": "fluent-flat/mx-claus.svg",
+   "features": [
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Open mailbox with raised flag",
+   "upstream_path": "assets/Open mailbox with raised flag/Flat/open_mailbox_with_raised_flag_flat.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Open%20mailbox%20with%20raised%20flag/Flat/open_mailbox_with_raised_flag_flat.svg",
+   "sha256": "36a1c3d3f97d10e281d1254a731cda7f33e4ab518476a81c4f208f77cd94cdd3",
+   "bytes": 1965,
+   "truth_svg": "fluent-flat/open-mailbox-with-raised-flag.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Taurus",
+   "upstream_path": "assets/Taurus/Flat/taurus_flat.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Taurus/Flat/taurus_flat.svg",
+   "sha256": "ae73daddf1d4026cac5031014f91f5f9ca4d35d57e5b94fb531edf69b523bfa0",
+   "bytes": 788,
+   "truth_svg": "fluent-flat/taurus.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Mobile phone",
+   "upstream_path": "assets/Mobile phone/Flat/mobile_phone_flat.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Mobile%20phone/Flat/mobile_phone_flat.svg",
+   "sha256": "46d491e10b70419637c10823d55a5af38f504a8e0e1d0f6ac4ff44de80b12e05",
+   "bytes": 1771,
+   "truth_svg": "fluent-flat/mobile-phone.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Old key",
+   "upstream_path": "assets/Old key/Flat/old_key_flat.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Old%20key/Flat/old_key_flat.svg",
+   "sha256": "3f56f32f9f3658bc30750907d90dc72f03f8cb68deac9bc46adb6f1f2198991f",
+   "bytes": 1830,
+   "truth_svg": "fluent-flat/old-key.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Face with rolling eyes",
+   "upstream_path": "assets/Face with rolling eyes/Flat/face_with_rolling_eyes_flat.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Face%20with%20rolling%20eyes/Flat/face_with_rolling_eyes_flat.svg",
+   "sha256": "ac8c83118a36ad3fb3dc41a4e730f73c913572af3e6b89f0972426d25bd1abf5",
+   "bytes": 1338,
+   "truth_svg": "fluent-flat/face-with-rolling-eyes.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-flat",
+   "repo_key": "fluent",
+   "subject": "Cloud with lightning and rain",
+   "upstream_path": "assets/Cloud with lightning and rain/Flat/cloud_with_lightning_and_rain_flat.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Cloud%20with%20lightning%20and%20rain/Flat/cloud_with_lightning_and_rain_flat.svg",
+   "sha256": "dc06173d40b52560e974054adc6ac4f50dda4ccb1ddb139878a06c3454f11455",
+   "bytes": 1756,
+   "truth_svg": "fluent-flat/cloud-with-lightning-and-rain.svg",
+   "features": []
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Nail polish",
+   "upstream_path": "assets/Nail polish/Default/Color/nail_polish_color_default.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Nail%20polish/Default/Color/nail_polish_color_default.svg",
+   "sha256": "614d9c00465de69a50c40e4c18e347de511be256d2b863f7d8edacc756815517",
+   "bytes": 15935,
+   "truth_svg": "fluent-color/nail-polish.svg",
+   "features": [
+    "has:gradient",
+    "has:filter",
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Cherries",
+   "upstream_path": "assets/Cherries/Color/cherries_color.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Cherries/Color/cherries_color.svg",
+   "sha256": "4d4185addb937a58cc9b890ea7d14d350fa36ba679547abb0836b0bb473f9abe",
+   "bytes": 7581,
+   "truth_svg": "fluent-color/cherries.svg",
+   "features": [
+    "has:gradient",
+    "has:filter",
+    "has:opacity",
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Black medium-small square",
+   "upstream_path": "assets/Black medium-small square/Color/black_medium-small_square_color.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Black%20medium-small%20square/Color/black_medium-small_square_color.svg",
+   "sha256": "e99d8da0dc724bd097dacb296913e20dae81523c139950e23a79eca1c84a0e32",
+   "bytes": 2740,
+   "truth_svg": "fluent-color/black-medium-small-square.svg",
+   "features": [
+    "has:gradient",
+    "has:filter"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Black nib",
+   "upstream_path": "assets/Black nib/Color/black_nib_color.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Black%20nib/Color/black_nib_color.svg",
+   "sha256": "08941784bb960f5b4081c59d9572d94a121d4ec561c65efea398f26b22aeddfa",
+   "bytes": 13028,
+   "truth_svg": "fluent-color/black-nib.svg",
+   "features": [
+    "has:gradient",
+    "has:filter",
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Man in motorized wheelchair facing right",
+   "upstream_path": "assets/Man in motorized wheelchair facing right/Default/Color/man_in_motorized_wheelchair_facing_right_color_default.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Man%20in%20motorized%20wheelchair%20facing%20right/Default/Color/man_in_motorized_wheelchair_facing_right_color_default.svg",
+   "sha256": "6a82016f1cc33dac906878d1e4a776c0f7ecae40cbd2e78b167279795a1bb587",
+   "bytes": 66526,
+   "truth_svg": "fluent-color/man-in-motorized-wheelchair-facing-right.svg",
+   "features": [
+    "has:gradient",
+    "has:filter",
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Smiling face with heart-eyes",
+   "upstream_path": "assets/Smiling face with heart-eyes/Color/smiling_face_with_heart-eyes_color.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Smiling%20face%20with%20heart-eyes/Color/smiling_face_with_heart-eyes_color.svg",
+   "sha256": "523228d8d1ec0814fd16f6660a50198cdc0dfeca5672ffc9e96c952946bec3f0",
+   "bytes": 8415,
+   "truth_svg": "fluent-color/smiling-face-with-heart-eyes.svg",
+   "features": [
+    "has:gradient",
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Speech balloon",
+   "upstream_path": "assets/Speech balloon/Color/speech_balloon_color.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Speech%20balloon/Color/speech_balloon_color.svg",
+   "sha256": "3166b258bd24468e8fff08c2bc8215d11f2b819f8ff6b2349b3ffddc9e6935e9",
+   "bytes": 6765,
+   "truth_svg": "fluent-color/speech-balloon.svg",
+   "features": [
+    "has:gradient",
+    "has:filter",
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Cityscape at dusk",
+   "upstream_path": "assets/Cityscape at dusk/Color/cityscape_at_dusk_color.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Cityscape%20at%20dusk/Color/cityscape_at_dusk_color.svg",
+   "sha256": "c4e839fac5289bd03ac002df5dabd771e0a340b7b0379db59a63258095e9841b",
+   "bytes": 25314,
+   "truth_svg": "fluent-color/cityscape-at-dusk.svg",
+   "features": [
+    "has:gradient",
+    "has:filter",
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Spiral notepad",
+   "upstream_path": "assets/Spiral notepad/Color/spiral_notepad_color.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Spiral%20notepad/Color/spiral_notepad_color.svg",
+   "sha256": "2778d6620fdb5accec45cd319f23391b586c1ac46e9e6f5d300c1844766d5dd2",
+   "bytes": 20802,
+   "truth_svg": "fluent-color/spiral-notepad.svg",
+   "features": [
+    "has:gradient",
+    "has:filter",
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "fluent-color",
+   "repo_key": "fluent",
+   "subject": "Man feeding baby",
+   "upstream_path": "assets/Man feeding baby/Default/Color/man_feeding_baby_color_default.svg",
+   "url": "https://raw.githubusercontent.com/microsoft/fluentui-emoji/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/assets/Man%20feeding%20baby/Default/Color/man_feeding_baby_color_default.svg",
+   "sha256": "2e84de51ae2f7ee3b7a6e7ab2cd3a13f1b36d23cd3c86ebb4b47ec6a6ac652da",
+   "bytes": 78669,
+   "truth_svg": "fluent-color/man-feeding-baby.svg",
+   "features": [
+    "has:gradient",
+    "has:filter",
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Diamond Shape With A Dot Inside",
+   "upstream_path": "2D/svg/emoji_u1f4a0.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f4a0.svg",
+   "sha256": "6affb57a0899f69950a72e1fcfa10611b59a49d05462e6c996095e7167efd3d5",
+   "bytes": 3247,
+   "truth_svg": "noto/u1f4a0.svg",
+   "features": [
+    "has:gradient"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Face With Stuck-Out Tongue",
+   "upstream_path": "2D/svg/emoji_u1f61b.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f61b.svg",
+   "sha256": "1bbb67aa2201116386ca441f1e2c06492a353e1fc22aea09f6bbc38d155f7c28",
+   "bytes": 3310,
+   "truth_svg": "noto/u1f61b.svg",
+   "features": [
+    "has:gradient",
+    "has:clip",
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Black Sun With Rays",
+   "upstream_path": "2D/svg/emoji_u2600.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u2600.svg",
+   "sha256": "822abba4f2e39d9059d85964116b1f9300e04320ee1a9e5af09831bf2f8c82df",
+   "bytes": 2548,
+   "truth_svg": "noto/u2600.svg",
+   "features": []
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Sunset Over Buildings",
+   "upstream_path": "2D/svg/emoji_u1f307.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f307.svg",
+   "sha256": "88340b3e6d867115be7f7a33a613996512a8fbdd9b8a594d312abbfdd86fee67",
+   "bytes": 72906,
+   "truth_svg": "noto/u1f307.svg",
+   "features": [
+    "has:gradient",
+    "has:clip",
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Man + Woman + Girl + Boy",
+   "upstream_path": "2D/svg/emoji_u1f468_200d_1f469_200d_1f467_200d_1f466.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f468_200d_1f469_200d_1f467_200d_1f466.svg",
+   "sha256": "21ff55dfe0fedc3ddd0d9bdda06393dace4a4fda65d27be7991fa6aaa530fc14",
+   "bytes": 3782,
+   "truth_svg": "noto/u1f468-200d-1f469-200d-1f467-200d-1f466.svg",
+   "features": []
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Exclamation Question Mark",
+   "upstream_path": "2D/svg/emoji_u2049.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u2049.svg",
+   "sha256": "e33b3ec9c545be108cd15aa09ba11e2c937a5b59009e8d5a43a928e5562298b9",
+   "bytes": 3189,
+   "truth_svg": "noto/u2049.svg",
+   "features": [
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Sleeping Accommodation",
+   "upstream_path": "2D/svg/emoji_u1f6cc.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f6cc.svg",
+   "sha256": "95e232b017b0396f3fb6611233b5660dc15ac9e7e729b0f9565c4030844a820d",
+   "bytes": 4243,
+   "truth_svg": "noto/u1f6cc.svg",
+   "features": [
+    "has:gradient"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Pick",
+   "upstream_path": "2D/svg/emoji_u26cf.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u26cf.svg",
+   "sha256": "c104967c09dfcb736e95e9c59a2117cd107f6b0d9424a1aeb5c407fcec27cdb1",
+   "bytes": 1529,
+   "truth_svg": "noto/u26cf.svg",
+   "features": []
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Woman + Ear Of Rice",
+   "upstream_path": "2D/svg/emoji_u1f469_200d_1f33e.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f469_200d_1f33e.svg",
+   "sha256": "7262124206085cdec658c6dfe52aa79206c693f677e3576e57b80d0e818f2ae9",
+   "bytes": 10064,
+   "truth_svg": "noto/u1f469-200d-1f33e.svg",
+   "features": [
+    "has:gradient",
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Man + Girl + Boy",
+   "upstream_path": "2D/svg/emoji_u1f468_200d_1f467_200d_1f466.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f468_200d_1f467_200d_1f466.svg",
+   "sha256": "5ea9a37e5235adfdaac8c1653543469e81b91447f39e120c909f1660bce655de",
+   "bytes": 2588,
+   "truth_svg": "noto/u1f468-200d-1f467-200d-1f466.svg",
+   "features": []
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Man + Rocket",
+   "upstream_path": "2D/svg/emoji_u1f468_200d_1f680.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f468_200d_1f680.svg",
+   "sha256": "e0ff0117a7bff0e3763178d312a2aff7a27cbb8668d9ddb1f557ae4a774d58b3",
+   "bytes": 8873,
+   "truth_svg": "noto/u1f468-200d-1f680.svg",
+   "features": [
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Leafy Green",
+   "upstream_path": "2D/svg/emoji_u1f96c.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f96c.svg",
+   "sha256": "9ebccb784a5c9408509297c7141f40147a9ac509a436f3605d9b90df4332cf06",
+   "bytes": 4242,
+   "truth_svg": "noto/u1f96c.svg",
+   "features": [
+    "has:gradient"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Police Car",
+   "upstream_path": "2D/svg/emoji_u1f693.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f693.svg",
+   "sha256": "7579fb445fbe2b79dfc4f0ae462e03518a03a50cbf54b0f230937be2e0b1db32",
+   "bytes": 3927,
+   "truth_svg": "noto/u1f693.svg",
+   "features": []
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Heavy Black Heart + Adhesive Bandage",
+   "upstream_path": "2D/svg/emoji_u2764_200d_1fa79.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u2764_200d_1fa79.svg",
+   "sha256": "8686cc4b21aa810a00924a80dfa81f879bbb35db617ad8aecbab6928d6f137ec",
+   "bytes": 4814,
+   "truth_svg": "noto/u2764-200d-1fa79.svg",
+   "features": []
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Digit Zero",
+   "upstream_path": "2D/svg/emoji_u0030.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u0030.svg",
+   "sha256": "27d6e2cf93cc6d02ebec8fafccaf968c381162c5551fd786403b2193c321ba72",
+   "bytes": 1158,
+   "truth_svg": "noto/u0030.svg",
+   "features": [
+    "has:gradient"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Female Sign",
+   "upstream_path": "2D/svg/emoji_u2640.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u2640.svg",
+   "sha256": "1cdd686ad89b8367110a02d195927bf289be819d3326036dece5bac56ee5e7d3",
+   "bytes": 2308,
+   "truth_svg": "noto/u2640.svg",
+   "features": [
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Full Moon Symbol",
+   "upstream_path": "2D/svg/emoji_u1f315.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f315.svg",
+   "sha256": "e4cf3abb1ce4147dc336e07bf3cd7b6017c43f214986c6d5def978fc6d8a1e00",
+   "bytes": 4059,
+   "truth_svg": "noto/u1f315.svg",
+   "features": []
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Waving White Flag + Male With Stroke And Male And Female Sign",
+   "upstream_path": "2D/svg/emoji_u1f3f3_200d_26a7.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f3f3_200d_26a7.svg",
+   "sha256": "b2b7ab04a4e7f97c8228569391c79aad880e0499213d710ab9b7f8700a24299d",
+   "bytes": 5963,
+   "truth_svg": "noto/u1f3f3-200d-26a7.svg",
+   "features": [
+    "has:opacity"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Hiking Boot",
+   "upstream_path": "2D/svg/emoji_u1f97e.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u1f97e.svg",
+   "sha256": "c013714f6511da3fd145ce18fc4a709453e6fa7721f86df8ac6e72d2de6fc9cb",
+   "bytes": 8226,
+   "truth_svg": "noto/u1f97e.svg",
+   "features": [
+    "has:stroke"
+   ]
+  },
+  {
+   "set": "noto",
+   "repo_key": "noto",
+   "subject": "Ophiuchus",
+   "upstream_path": "2D/svg/emoji_u26ce.svg",
+   "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/06121655d0e82f9cae6e7ba6feed4fa6fdbfc2a4/2D/svg/emoji_u26ce.svg",
+   "sha256": "74153e429fc5c10a26a5be22b1929b4c26a5c758647be87d9492771f3ef072f6",
+   "bytes": 1571,
+   "truth_svg": "noto/u26ce.svg",
+   "features": [
+    "has:opacity"
+   ]
+  }
+ ]
+}
