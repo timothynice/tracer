@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { UploadedImage } from "./useUpload";
 import { ApiError, vectorize, type EngineResult, type ParamValues, type VectorizeResponse } from "@/lib/api";
@@ -26,18 +26,33 @@ export interface VectorizeState {
   stale: boolean;
   error: Error | null;
   refetch: () => void;
+  /**
+   * Store `response` as the answer for this image traced with `params`, so that
+   * asking for those parameters later shows it at once instead of tracing
+   * again (each Auto candidate is a trace some preset would have asked for).
+   * An answer already cached is kept.
+   */
+  seed: (params: Record<string, ParamValues>, response: VectorizeResponse) => void;
+}
+
+type Key =
+  | { hash: string; engines: string; auto: true }
+  | { hash: string; engines: string; params: Record<string, string> };
+
+function paramsQueryKey(hash: string, engines: string[], params: Record<string, ParamValues>): Key {
+  return { hash, engines: engines.join(","), params: Object.fromEntries(engines.map((e) => [e, paramsKey(params[e] ?? {})])) };
 }
 
 /** Debounces parameter changes, cancels superseded requests, caches per (image, engines, params | auto). */
 export function useVectorize({ image, engines, params, auto = false, enabled = true, reupload, debounceMs = 250 }: UseVectorizeArgs): VectorizeState {
   const client = useQueryClient();
   const engineList = useMemo(() => [...engines].sort(), [engines]);
-  const liveKey = useMemo(
+  const liveKey = useMemo<Key | null>(
     () =>
       image
         ? auto
           ? { hash: image.hash, engines: engineList.join(","), auto: true }
-          : { hash: image.hash, engines: engineList.join(","), params: Object.fromEntries(engineList.map((e) => [e, paramsKey(params[e] ?? {})])) }
+          : paramsQueryKey(image.hash, engineList, params)
         : null,
     [image, engineList, params, auto],
   );
@@ -46,17 +61,19 @@ export function useVectorize({ image, engines, params, auto = false, enabled = t
   // Debounce: the query only sees the key after it has been stable for
   // debounceMs — unless its answer is already cached (Auto, or settings seen
   // before), which is shown at once: there is nothing to wait for.
-  const [settled, setSettled] = useState(liveKeyString);
+  const [debounced, setSettled] = useState(liveKeyString);
+  const liveCached = liveKey !== null && client.getQueryData(["vectorize", liveKey]) !== undefined;
+  const settled = liveCached ? liveKeyString : debounced;
   useEffect(() => {
-    if (settled === liveKeyString) return;
-    if (client.getQueryData(["vectorize", JSON.parse(liveKeyString)]) !== undefined) {
+    if (debounced === liveKeyString) return;
+    if (liveCached) {
       setSettled(liveKeyString);
       return;
     }
     const t = setTimeout(() => setSettled(liveKeyString), debounceMs);
     return () => clearTimeout(t);
-  }, [liveKeyString, settled, debounceMs, client]);
-  const settledKey = useMemo(() => JSON.parse(settled) as typeof liveKey, [settled]);
+  }, [liveKeyString, debounced, debounceMs, liveCached]);
+  const settledKey = useMemo(() => JSON.parse(settled) as Key | null, [settled]);
   const settledAuto = !!(settledKey && "auto" in settledKey && settledKey.auto);
 
   const query = useQuery({
@@ -89,6 +106,16 @@ export function useVectorize({ image, engines, params, auto = false, enabled = t
   // image is a picture of something else, so it is dropped.
   const data = query.data?.hash === image?.hash ? query.data : undefined;
 
+  const hash = image?.hash;
+  const seed = useCallback(
+    (forParams: Record<string, ParamValues>, response: VectorizeResponse) => {
+      if (!hash) return;
+      const key = ["vectorize", paramsQueryKey(hash, engineList, forParams)];
+      if (client.getQueryData(key) === undefined) client.setQueryData(key, { ...response, hash });
+    },
+    [client, hash, engineList],
+  );
+
   return {
     results: data?.results,
     data,
@@ -96,5 +123,6 @@ export function useVectorize({ image, engines, params, auto = false, enabled = t
     stale: query.isPlaceholderData || settled !== liveKeyString,
     error: query.error,
     refetch: () => void query.refetch(),
+    seed,
   };
 }

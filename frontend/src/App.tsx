@@ -16,7 +16,7 @@ import { useHealth } from "./hooks/useHealth";
 import { useParams } from "./hooks/useParams";
 import { useUpload } from "./hooks/useUpload";
 import { useVectorize } from "./hooks/useVectorize";
-import { ApiError, getEngines, getPresets } from "./lib/api";
+import { ApiError, getEngines, getPresets, type AutoResult, type Preset } from "./lib/api";
 import { parseSvg } from "./lib/svgdoc";
 
 const ENGINE_KEY = "studi0trace.engine";
@@ -43,14 +43,75 @@ export default function App() {
 
   const active = shown.find((e) => e.id === engine);
   const engineIds = useMemo(() => (active ? [active.id] : []), [active]);
+  const enginePresets = useMemo(() => (presets.data ?? []).filter((p) => p.engine === active?.id), [presets.data, active?.id]);
+  const autoAvailable = enginePresets.some((p) => p.kind === "auto");
+
+  // Every new image starts on Auto: which preset suits an image is not
+  // something anyone can tell by looking at it. Picking a preset or moving a
+  // control leaves Auto until the next image, or until Auto is picked again.
+  const [autoMode, setAutoMode] = useState(true);
+  const newFile = upload.preview?.file;
+  useEffect(() => {
+    if (newFile) setAutoMode(true);
+  }, [newFile]);
+  const auto = autoMode && autoAvailable;
 
   const trace = useVectorize({
     image: upload.image,
     engines: engineIds,
     params: params.values,
-    enabled: ready && !!active,
+    auto,
+    // Wait for the preset list: it decides whether the first trace is Auto.
+    enabled: ready && !!active && !presets.isPending,
     reupload: upload.reupload,
   });
+
+  // The last Auto run on this image: every candidate's trace and scores. Each
+  // is also stored as the answer for that preset's settings, so picking a
+  // candidate afterwards shows its trace at once, with nothing traced again.
+  const [autoRun, setAutoRun] = useState<{ hash: string; result: AutoResult } | null>(null);
+  const autoResponse = trace.data?.auto ? trace.data : undefined;
+  const { seed } = trace;
+  const { resolve, apply } = params;
+  useEffect(() => {
+    const result = active && autoResponse?.auto?.[active.id];
+    if (!active || !autoResponse || !result) return;
+    setAutoRun((prev) => (prev?.hash === autoResponse.hash && prev.result === result ? prev : { hash: autoResponse.hash, result }));
+    for (const c of result.candidates) {
+      const preset = enginePresets.find((p) => p.id === c.preset);
+      if (!preset || !c.svg) continue;
+      seed(
+        { [active.id]: resolve(active.id, preset.params) },
+        {
+          ...autoResponse,
+          results: { [active.id]: { svg: c.svg, elapsed_ms: c.elapsed_ms, stats: c.stats } },
+          parameters_used: { [active.id]: c.parameters ?? {} },
+          auto: null,
+        },
+      );
+    }
+  }, [autoResponse, active, enginePresets, seed, resolve]);
+  const autoHere = autoRun && autoRun.hash === upload.image?.hash && autoRun.result.engine === active?.id ? autoRun.result : null;
+
+  // The panel follows Auto's choice, so a control moved afterwards starts
+  // from the trace on screen.
+  const pickedPreset = autoHere?.pick ? enginePresets.find((p) => p.id === autoHere.pick) : undefined;
+  useEffect(() => {
+    if (auto && active && pickedPreset) apply(active.id, pickedPreset.params);
+  }, [auto, active, pickedPreset, apply]);
+
+  const pickPreset = useCallback(
+    (p: Preset) => {
+      if (!active) return;
+      if (p.kind === "auto") {
+        setAutoMode(true);
+        return;
+      }
+      setAutoMode(false);
+      apply(active.id, p.params);
+    },
+    [active, apply],
+  );
 
   useEffect(() => {
     if (upload.error) toast.error(upload.error.message);
@@ -74,7 +135,9 @@ export default function App() {
   // the upload and the trace are still in flight.
   const view = upload.preview;
   const busy = upload.uploading || (!!view && !upload.error && trace.updating);
-  const busyLabel = upload.uploading ? "Uploading…" : "Tracing…";
+  const autoCandidates = enginePresets.filter((p) => p.auto_candidate).length;
+  const autoRunning = auto && trace.updating && !autoHere;
+  const busyLabel = upload.uploading ? "Uploading…" : autoRunning ? `Trying ${autoCandidates} presets…` : "Tracing…";
   // A request that never returned a result (502, network, timeout) has to reach
   // the canvas; a toast alone leaves it sitting on "No vector yet".
   const failure = result?.error
@@ -161,13 +224,16 @@ export default function App() {
             <aside aria-label="Controls" className="motion-rise card flex min-h-0 flex-col overflow-hidden [animation-delay:120ms]">
               {engines.data && active ? (
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                  {presets.data && presets.data.some((p) => p.engine === active.id) && (
+                  {enginePresets.length > 0 && (
                     <div className="border-b pb-4">
                       <Presets
-                        presets={presets.data.filter((p) => p.engine === active.id)}
+                        presets={enginePresets}
                         defaults={active.defaults}
                         values={params.values[active.id] ?? active.defaults}
-                        onPick={(p) => params.apply(active.id, p.params)}
+                        onPick={pickPreset}
+                        active={auto ? "auto" : undefined}
+                        auto={autoHere}
+                        autoRunning={autoRunning}
                       />
                     </div>
                   )}
@@ -182,7 +248,10 @@ export default function App() {
                     engine={active.id}
                     specs={params.specs[active.id] ?? []}
                     values={params.values[active.id] ?? active.defaults}
-                    onChange={(name, value) => params.set(active.id, name, value)}
+                    onChange={(name, value) => {
+                      setAutoMode(false);
+                      params.set(active.id, name, value);
+                    }}
                     invalidField={invalidField}
                   />
                 </div>

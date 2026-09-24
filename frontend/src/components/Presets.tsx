@@ -105,8 +105,12 @@ export function Presets({ presets, defaults, values, onPick, disabled, active: a
             {on && <Check className="h-3 w-3 shrink-0 text-brand" aria-hidden="true" />}
             <span className={`truncate text-xs ${on ? "font-semibold" : "font-medium"}`}>{p.label}</span>
             {chosen === p.id && (
-              <span className="dot-brand shrink-0" title="Auto's choice for this image">
-                <span className="sr-only"> (Auto's choice)</span>
+              <span
+                className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-secondary px-1 text-[10px] font-medium leading-4 text-secondary-foreground"
+                title="Auto's choice for this image"
+              >
+                <span className="dot-brand" aria-hidden="true" />
+                Auto's pick
               </span>
             )}
           </span>
