@@ -31,6 +31,8 @@ pub const BLUR_K: f64 = 1.86 * 1.86;
 pub const READ_C: f64 = 0.58;
 pub const SHARP_SHAPE_R: f64 = 1.1;
 pub const MERGE_LEVEL: f64 = 0.3;
+/// px; a run vertex this far from the run's median is not on the side
+pub const LEVEL_STRAY: f64 = 0.3;
 pub const CORNER_READ: i64 = 2;
 pub const RADIUS_ITER: usize = 60;
 pub const MOVE_SHARE: f64 = 0.5;
@@ -309,6 +311,20 @@ pub fn outline_distance(pts: &[P], m: &Model) -> Vec<f64> {
 
 /// The four sides of the axis-aligned rectangle through a closed ring, or
 /// None. See the Python `fit_sides`.
+/// A side's level from its run's vertices (`along` the side's normal axis): the
+/// run's own mean unless some vertex is more than LEVEL_STRAY from the run's
+/// median, and then the mean of the others. At a hard corner the crack walk can
+/// give the corner pixel's two edges out of order, and the one belonging to the
+/// next side lands inside this run, half a pixel off it (see the Python).
+fn side_level(along: &[f64], mean: f64) -> f64 {
+    let med = np_median(along);
+    let kept: Vec<f64> = along.iter().copied().filter(|v| (v - med).abs() <= LEVEL_STRAY).collect();
+    if kept.len() == along.len() {
+        return mean;
+    }
+    np_sum(&kept) / kept.len() as f64
+}
+
 pub fn fit_sides(poly: &[P], snap_axis_deg: f64) -> Option<Model> {
     let n = poly.len();
     if n < 16 {
@@ -339,10 +355,11 @@ pub fn fit_sides(poly: &[P], snap_axis_deg: f64) -> Option<Model> {
     let mut sides: Vec<(i64, i64, usize, f64)> = Vec::new();
     for run in &runs {
         let ang = py_mod(run.d[1].atan2(run.d[0]).to_degrees(), 180.0);
+        let along = |axis: usize| rolled[run.i..=run.j].iter().map(|p| p[axis]).collect::<Vec<f64>>();
         let (axis, level) = if ang.min(180.0 - ang) <= snap_axis_deg {
-            (0usize, run.c[1])
+            (0usize, side_level(&along(1), run.c[1]))
         } else if (ang - 90.0).abs() <= snap_axis_deg {
-            (1usize, run.c[0])
+            (1usize, side_level(&along(0), run.c[0]))
         } else {
             return None;
         };
@@ -874,6 +891,17 @@ mod tests {
         let mut sizes: Vec<usize> = groups.iter().map(|g| g.1.len()).collect();
         sizes.sort();
         assert_eq!(sizes, vec![1, 3]);
+    }
+
+    #[test]
+    fn a_stray_corner_vertex_does_not_move_a_side() {
+        // the corner pixel's other edge, half a pixel off, second from the end
+        let mut along = vec![36.0; 32];
+        along[30] = 35.5;
+        assert_eq!(side_level(&along, 35.984375), 36.0);
+        // a clean run keeps the mean its line was fitted through, to the bit
+        let clean = [36.02, 35.97, 36.01, 36.0];
+        assert_eq!(side_level(&clean, 36.000_000_1), 36.000_000_1);
     }
 
     #[test]

@@ -62,6 +62,7 @@ BLUR_K = 1.86 ** 2
 READ_C = 0.58
 SHARP_SHAPE_R = 1.1
 MERGE_LEVEL = 0.3       # px; two runs of one side on one level are one side
+LEVEL_STRAY = 0.3       # px; a run vertex this far from the run's median is not on the side
 CORNER_READ = 2         # run-end vertices either side of a gap that its radius is also read from
 RADIUS_ITER = 60        # golden-section steps for a corner radius
 # How far a regularity snap may move the outline, as a share of the curve
@@ -196,6 +197,19 @@ def outline_distance(pts: np.ndarray, m: Model) -> np.ndarray:
     return best
 
 
+def _level(along: np.ndarray, mean: float) -> float:
+    """A side's level from its run's vertices (`along` the side's normal axis):
+    the run's own mean, `mean`, unless some vertex is more than LEVEL_STRAY
+    from the run's median, and then the mean of the others. At a hard corner
+    the crack walk can give the corner pixel's two edges out of order, and the
+    one belonging to the next side then lands inside this run, half a pixel off
+    it: a 32 x 24 rectangle on whole pixels came out 23.98 tall."""
+    keep = np.abs(along - np.median(along)) <= LEVEL_STRAY
+    if keep.all():
+        return mean
+    return float(np.mean(along[keep]))
+
+
 def fit_sides(poly: np.ndarray, snap_axis_deg: float) -> Model | None:
     """The four sides of the axis-aligned rectangle through a closed ring, or
     None: four straight runs (`curves.line_runs`) on alternating axes, at
@@ -210,14 +224,15 @@ def fit_sides(poly: np.ndarray, snap_axis_deg: float) -> Model | None:
     start = int(np.argmax(np.linalg.norm(poly - poly.mean(axis=0), axis=1)))
     order = np.concatenate([np.arange(start, n), np.arange(0, start)])
     rolled = poly[order]
-    runs = line_runs(np.vstack([rolled, rolled[:1]]))
+    closed = np.vstack([rolled, rolled[:1]])
+    runs = line_runs(closed)
     sides: list[tuple[int, int, int, float]] = []  # (i, j, axis, level): axis 0 = horizontal
     for i, j, c, d in runs:
         ang = math.degrees(math.atan2(d[1], d[0])) % 180.0
         if min(ang, 180.0 - ang) <= snap_axis_deg:
-            axis, level = 0, float(c[1])
+            axis, level = 0, _level(closed[i:j + 1, 1], float(c[1]))
         elif abs(ang - 90.0) <= snap_axis_deg:
-            axis, level = 1, float(c[0])
+            axis, level = 1, _level(closed[i:j + 1, 0], float(c[0]))
         else:
             return None
         if sides and sides[-1][2] == axis and abs(sides[-1][3] - level) <= MERGE_LEVEL:

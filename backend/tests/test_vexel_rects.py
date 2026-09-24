@@ -196,3 +196,23 @@ def test_two_rounded_corners_that_meet_at_a_node_mirror_each_other():
     # the bar's corner at the node: an arc of the square's radius, not a hook of cubics
     assert any(abs(r - sq_r[0]) < 0.25 for r in bar_r), (bar_r, bar.group(1))
     assert seam_index(svg, rgba(png)) < 200.0
+
+
+def test_a_hard_rectangle_keeps_its_pixel_exact_size():
+    """At a hard corner the crack walk can give the corner pixel's two edges out
+    of order, so one vertex of the next side sits inside this side's straight
+    run, half a pixel off it. The side's level is the run's median, which one
+    stray does not move: a 32 x 24 rectangle on whole pixels is 32 x 24, not
+    23.98 tall (vexel-rs/tests/pipeline.rs has the same case)."""
+    import io
+
+    from PIL import Image
+
+    for r0, r1, c0, c1 in ((12, 36, 8, 40), (10, 30, 10, 31), (5, 40, 7, 20)):
+        buf = np.zeros((48, 48, 4), np.uint8)
+        buf[r0:r1, c0:c1] = [0x45, 0x7B, 0x9D, 255]
+        png = io.BytesIO()
+        Image.fromarray(buf).save(png, format="PNG")
+        svg = trace(png.getvalue())
+        want = f'<rect x="{c0}" y="{r0}" width="{c1 - c0}" height="{r1 - r0}" fill="#457b9d"/>'
+        assert want in svg, svg
