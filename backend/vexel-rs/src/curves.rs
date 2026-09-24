@@ -2244,6 +2244,9 @@ pub fn snap_axis_lines(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment
 
 // --- corner sharpening -----------------------------------------------------
 
+/// A scatter whose two principal spreads agree this closely has no direction.
+pub const LINE_TIE: f64 = 1e-9;
+
 pub fn line_through(points: &[P]) -> (P, P) {
     let n = points.len();
     let cx = points.iter().map(|p| p[0]).sum::<f64>() / n as f64;
@@ -2257,6 +2260,12 @@ pub fn line_through(points: &[P]) -> (P, P) {
         sxx += p[0] * p[0];
         sxy += p[0] * p[1];
         syy += p[1] * p[1];
+    }
+    if (sxx - syy).hypot(2.0 * sxy) <= LINE_TIE * (sxx + syy) {
+        // isotropic: no direction of its own, so first to last (see the Python)
+        let chord = [points[n - 1][0] - points[0][0], points[n - 1][1] - points[0][1]];
+        let length = chord[0].hypot(chord[1]);
+        return ([cx, cy], if length > 0.0 { [chord[0] / length, chord[1] / length] } else { [1.0, 0.0] });
     }
     let (vals, vecs) = eigh2(sxx, sxy, syy);
     let d = if vals[1] >= vals[0] { vecs[1] } else { vecs[0] };

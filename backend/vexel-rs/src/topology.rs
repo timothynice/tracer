@@ -1577,6 +1577,12 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
                 }
             }
         }
+        if let Ok(v) = std::env::var("VEXEL_DEBUG_NODE") {
+            let xy: Vec<f64> = v.split(',').map(|s| s.parse().unwrap()).collect();
+            if (mean[0] - xy[0]).hypot(mean[1] - xy[1]) < 6.0 {
+                eprintln!("DEBUGNODE mean {mean:?} target {target:?} inc {:?} lines {:?} pinned {pinned:?} tips {tips:?}", incident.iter().map(|(i, s)| (arcs[*i].pair, arcs[*i].pts.len(), *s, short[*i])).collect::<Vec<_>>(), lines);
+            }
+        }
         moves.push((incident, target, pinned, tips));
     }
 

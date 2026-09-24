@@ -1612,12 +1612,32 @@ def snap_axis_lines(segments: list[Segment], snap_deg: float) -> list[Segment]:
 # --- top level -------------------------------------------------------------------------
 
 
+# A scatter whose two principal spreads agree this closely (relative to their
+# sum) has no direction of its own: see `_line_through`.
+LINE_TIE = 1e-9
+
+
 def _line_through(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Total-least-squares line: (point, unit direction)."""
+    """Total-least-squares line: (point, unit direction).
+
+    Where the scatter is isotropic — four vertices of a staircase at the
+    corners of a square — every direction fits it equally, and the one the
+    solver hands back is its own (the Python's SVD said horizontal, the Rust's
+    eigen solve vertical, and a node on studi0clip-mark-light moved 0.6 px).
+    The points then run the way they were given: first to last.
+    """
     c = points.mean(axis=0)
     if len(points) < 2:
         return c, np.array([1.0, 0.0])
-    _, _, vt = np.linalg.svd(points - c, full_matrices=False)
+    cen = points - c
+    sxx = float(np.sum(cen[:, 0] * cen[:, 0]))
+    sxy = float(np.sum(cen[:, 0] * cen[:, 1]))
+    syy = float(np.sum(cen[:, 1] * cen[:, 1]))
+    if math.hypot(sxx - syy, 2.0 * sxy) <= LINE_TIE * (sxx + syy):
+        chord = points[-1] - points[0]
+        length = float(np.hypot(chord[0], chord[1]))
+        return c, (chord / length if length > 0.0 else np.array([1.0, 0.0]))
+    _, _, vt = np.linalg.svd(cen, full_matrices=False)
     return c, vt[0]
 
 
