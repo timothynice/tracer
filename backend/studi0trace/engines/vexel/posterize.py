@@ -260,16 +260,17 @@ def _premultiplied(c: np.ndarray) -> np.ndarray:
     return np.concatenate([c[..., :3] * a, c[..., 3:4]], axis=-1)
 
 
-def observed_t(ramp: Fill, lo: float, hi: float, rgba: np.ndarray, m: np.ndarray) -> np.ndarray:
+def observed_t(ramp: Fill, lo: float, hi: float, rgba: np.ndarray, m: np.ndarray,
+               sigma: float = SMOOTH_SIGMA) -> np.ndarray:
     """Each of the region's pixels' own position t along the ramp (row-major
     over `m`, the region in the crop `rgba`): the nearest point of the ramp's
     colour curve over [lo, hi] to the pixel's colour after a Gaussian of
     SMOOTH_SIGMA within the region, both premultiplied, so a transparent pixel's
     inpainted colour counts for nothing."""
     inside = m.astype(np.float64)
-    den = ndimage.gaussian_filter(inside, SMOOTH_SIGMA, mode="constant")
+    den = ndimage.gaussian_filter(inside, sigma, mode="constant")
     pm = _premultiplied(rgba.astype(np.float64)) * inside[..., None]
-    num = np.stack([ndimage.gaussian_filter(pm[..., k], SMOOTH_SIGMA, mode="constant") for k in range(4)], axis=-1)
+    num = np.stack([ndimage.gaussian_filter(pm[..., k], sigma, mode="constant") for k in range(4)], axis=-1)
     c = num[m] / den[m][:, None]
     ts = lo + (hi - lo) * np.arange(RAMP_SAMPLES + 1) / RAMP_SAMPLES
     curve = _premultiplied(_interp_stops(ts, ramp.stops))
