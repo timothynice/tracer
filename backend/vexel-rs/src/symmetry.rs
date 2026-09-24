@@ -8,6 +8,12 @@ pub const SYM_CAP: f64 = 1.0;
 pub const MIN_VERTICES: usize = 24;
 pub const ORDERS: [usize; 7] = [8, 7, 6, 5, 4, 3, 2];
 pub const AXIS_SNAP_DEG: f64 = 1.5;
+/// Two vertices this close to equally near an image are equally near, and the
+/// lower index is its match (see the Python `NEAR_TIE`).
+pub const NEAR_TIE: f64 = 1e-9;
+/// A covariance this close to isotropic has no principal direction (see the
+/// Python `ISOTROPIC`).
+pub const ISOTROPIC: f64 = 1e-9;
 
 fn sub(a: P, b: P) -> P {
     [a[0] - b[0], a[1] - b[1]]
@@ -89,11 +95,14 @@ impl Grid {
             return (limit, 0);
         }
         let mut best = (f64::INFINITY, 0usize);
+        // every vertex found within NEAR_TIE of the nearest so far: the lowest
+        // index among those within NEAR_TIE of the nearest wins
+        let mut near: Vec<(f64, usize)> = Vec::new();
         let max_ring = self.nx.max(self.ny);
         for ring in 0..=max_ring {
             // a vertex in a cell `ring` away is at least (ring - 1) cells off
             let floor = if ring > 0 { ((ring - 1) as f64) * self.cell } else { 0.0 };
-            if floor > best.0 {
+            if floor > best.0 + NEAR_TIE {
                 break;
             }
             if best.0 > limit && floor.max(ox.max(oy)) >= limit {
@@ -110,8 +119,11 @@ impl Grid {
                     }
                     for &i in &self.bins[(gy * self.nx + gx) as usize] {
                         let d = norm(sub(self.pts[i], q));
-                        if d < best.0 {
-                            best = (d, i);
+                        if d <= best.0 + NEAR_TIE {
+                            if d < best.0 {
+                                best = (d, i);
+                            }
+                            near.push((d, i));
                         }
                     }
                 }
@@ -120,7 +132,8 @@ impl Grid {
         if best.0 > limit {
             return (limit, 0);
         }
-        best
+        let i = near.iter().filter(|(d, _)| *d <= best.0 + NEAR_TIE).map(|(_, i)| *i).min().unwrap_or(best.1);
+        (best.0, i)
     }
 }
 
@@ -185,10 +198,13 @@ pub fn mirror_axes(poly: &[P]) -> Vec<(P, P)> {
     a /= n;
     b /= n;
     cc /= n;
-    let theta = 0.5 * (2.0 * b).atan2(a - cc);
-    let d1 = [theta.cos(), theta.sin()];
-    let d2 = [-theta.sin(), theta.cos()];
-    let mut dirs: Vec<P> = vec![d1, d2, [d1[0] + d2[0], d1[1] + d2[1]], [d1[0] - d2[0], d1[1] - d2[1]]];
+    let mut dirs: Vec<P> = Vec::new();
+    if (a - cc).hypot(2.0 * b) > ISOTROPIC * (a + cc) {
+        let theta = 0.5 * (2.0 * b).atan2(a - cc);
+        let d1 = [theta.cos(), theta.sin()];
+        let d2 = [-theta.sin(), theta.cos()];
+        dirs = vec![d1, d2, [d1[0] + d2[0], d1[1] + d2[1]], [d1[0] - d2[0], d1[1] - d2[1]]];
+    }
     for k in 0..12 {
         let ang = (15.0 * k as f64).to_radians();
         dirs.push([ang.cos(), ang.sin()]);

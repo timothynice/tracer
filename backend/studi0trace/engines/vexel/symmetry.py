@@ -28,16 +28,42 @@ SYM_CAP = 1.0        # px; but nothing may be further off than this
 MIN_VERTICES = 24    # a ring shorter than this is too little to judge
 ORDERS = (8, 7, 6, 5, 4, 3, 2)
 AXIS_SNAP_DEG = 1.5  # a mirror axis this close to vertical or horizontal is exactly so
+# Two vertices this close to equally near an image are equally near: the one
+# with the lower index is its match. On a ring placed on the pixel lattice an
+# image often lands exactly between two vertices, and which one a k-d tree (or
+# the Rust grid) found first decided where the averaged vertex went.
+NEAR_TIE = 1e-9
+# A ring whose covariance is this close to isotropic (relative to its trace)
+# has no principal direction: every direction is an eigenvector, and the one
+# an eigensolver hands back is decided by the last bits of the sums (a square
+# made exactly four-fold symmetric is one). Its candidates are the 15° grid's.
+ISOTROPIC = 1e-9
 
 
 def _centroid(poly: np.ndarray) -> np.ndarray:
     return poly.mean(axis=0)
 
 
+def _nearest(poly: np.ndarray, images: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(distance, index) of the nearest vertex to every image, a tie (within
+    NEAR_TIE) going to the lower index."""
+    tree = cKDTree(poly)
+    k = min(3, len(poly))
+    dist, idx = tree.query(images, k=k)
+    if k == 1:
+        return dist, idx
+    tied = dist <= dist[:, :1] + NEAR_TIE
+    best = np.where(tied, idx, len(poly)).min(axis=1)
+    # all k returned are tied: there may be more beyond them
+    for j in np.nonzero(tied[:, -1])[0]:
+        best[j] = min(tree.query_ball_point(images[j], float(dist[j, 0]) + NEAR_TIE))
+    return dist[:, 0], best
+
+
 def _match(poly: np.ndarray, images: np.ndarray) -> tuple[float, float, np.ndarray]:
     """(mean, worst, index of nearest vertex) for every image; `worst` is the
     99th percentile with the absolute maximum folded in through SYM_CAP."""
-    dist, idx = cKDTree(poly).query(images)
+    dist, idx = _nearest(poly, images)
     p99 = float(np.percentile(dist, 99))
     worst = p99 if float(dist.max()) <= SYM_CAP else float(dist.max())
     return float(dist.mean()), worst, idx
@@ -51,10 +77,17 @@ def mirror_axes(poly: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
     """Candidate mirror axes as (point on axis, unit direction)."""
     c = _centroid(poly)
     q = poly - c
-    cov = q.T @ q / max(len(q), 1)
-    _w, v = np.linalg.eigh(cov)
-    d1, d2 = v[:, 1], v[:, 0]
-    dirs = [d1, d2, d1 + d2, d1 - d2]
+    n = max(len(q), 1)
+    a, b, cc = float(q[:, 0] @ q[:, 0]) / n, float(q[:, 0] @ q[:, 1]) / n, float(q[:, 1] @ q[:, 1]) / n
+    dirs: list[np.ndarray] = []
+    # the principal directions in closed form, the major one first, with the
+    # minor one a quarter turn anticlockwise of it (an eigensolver's signs are
+    # its own, and they decided which diagonal came first)
+    if math.hypot(a - cc, 2.0 * b) > ISOTROPIC * (a + cc):
+        theta = 0.5 * math.atan2(2.0 * b, a - cc)
+        d1 = np.array([math.cos(theta), math.sin(theta)])
+        d2 = np.array([-math.sin(theta), math.cos(theta)])
+        dirs = [d1, d2, d1 + d2, d1 - d2]
     dirs += [np.array([math.cos(math.radians(a)), math.sin(math.radians(a))]) for a in range(0, 180, 15)]
     out: list[tuple[np.ndarray, np.ndarray]] = []
     for d in dirs:
