@@ -326,7 +326,7 @@ mod python {
             snap_axis_deg: 1.5,
             kind_tol: curves::KIND_TOL,
         };
-        let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, snap, extend);
+        let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, snap, extend, None);
 
         let mut rows: Vec<Vec<f64>> = bnd
             .arcs

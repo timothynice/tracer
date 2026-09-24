@@ -96,11 +96,15 @@ class Linear:
     y2: float
     stops: list[Stop] = field(default_factory=list)
 
-    def evaluate(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    def param(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+        """The ramp position t at (xs, ys), unclamped: 0 at (x1, y1), 1 at (x2, y2)."""
         dx, dy = self.x2 - self.x1, self.y2 - self.y1
         denom = dx * dx + dy * dy
         t = ((xs - self.x1) * dx + (ys - self.y1) * dy) / denom if denom > 0 else np.zeros_like(xs, dtype=float)
-        return _interp_stops(np.asarray(t, dtype=float).ravel(), self.stops)
+        return np.asarray(t, dtype=float).ravel()
+
+    def evaluate(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+        return _interp_stops(self.param(xs, ys), self.stops)
 
     def svg(self, gid: str, precision: int) -> tuple[str, str]:
         p = precision
@@ -123,9 +127,12 @@ class Radial:
     r: float
     stops: list[Stop] = field(default_factory=list)
 
+    def param(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+        """The ramp position t at (xs, ys), unclamped: distance from the centre over r."""
+        return np.asarray(np.hypot(xs - self.cx, ys - self.cy) / max(self.r, 1e-9), dtype=float).ravel()
+
     def evaluate(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-        t = np.hypot(xs - self.cx, ys - self.cy) / max(self.r, 1e-9)
-        return _interp_stops(np.asarray(t, dtype=float).ravel(), self.stops)
+        return _interp_stops(self.param(xs, ys), self.stops)
 
     def svg(self, gid: str, precision: int) -> tuple[str, str]:
         p = precision

@@ -11,7 +11,7 @@ use crate::order::{enclosure, paint_order, shape_labels, shape_mask, Enclosure};
 use crate::topology::{self, Boundary};
 use crate::overlaps::decompose_overlaps;
 use crate::partition::{discontinuity, initial_labels};
-use crate::posterize::posterize_regions;
+use crate::posterize::{posterize_fills, Levels};
 use crate::prepare::{prepare, Prepared};
 use crate::refine::refine_merge;
 use crate::rescue::rescue_features;
@@ -23,6 +23,8 @@ use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 const SVG_NS: &str = "xmlns=\"http://www.w3.org/2000/svg\"";
+/// Further `refine_merge` passes before a ramp is posterised (see the Python).
+const POSTERIZE_JOIN_ROUNDS: usize = 3;
 
 #[derive(Clone)]
 pub struct VexelParams {
@@ -281,17 +283,16 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     t.lap("discontinuity");
     let labels0 = initial_labels(&grad, &prep.features, p.min_region, 1.5);
     t.lap("initial_labels");
+    // With gradients off the trace still finds and fits every ramp as one
+    // region, and `posterize` cuts the fitted ramps into flat bands below.
     let mut l = merge_regions(
         &labels0,
         &prep.features,
-        MergeParams { detail: p.detail, gradients: p.gradients, edge_veto: 0.6 },
+        MergeParams { detail: p.detail, gradients: true, edge_veto: 0.6 },
         Some(&grad),
     );
     t.lap("merge_regions");
     crate::dump::labels("labels_merge", &l);
-    if !p.gradients {
-        l = posterize_regions(&l, &prep.features, p.detail, p.min_region, &grad);
-    }
 
     let mut xs = Grid::<f64>::new(height, width);
     let mut ys = Grid::<f64>::new(height, width);
@@ -308,8 +309,8 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         })
         .collect();
 
-    let fit_params = FitParams {
-        gradients: p.gradients,
+    let mut fit_params = FitParams {
+        gradients: true,
         max_stops: p.max_stops,
         tol: (p.detail / 2.0).max(2.0),
     };
@@ -409,6 +410,22 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     );
     l = refined;
     fills = refit_fills;
+    if !p.gradients {
+        // Posterised, a region boundary through one smooth field is a visible
+        // step, so the ramps are joined as far as one fill explains them.
+        let mut again = changed;
+        for _ in 0..POSTERIZE_JOIN_ROUNDS {
+            if !again {
+                break;
+            }
+            let (refined, refit_fills, more) = refine_merge(
+                &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60,
+            );
+            l = refined;
+            fills = refit_fills;
+            again = more;
+        }
+    }
     if changed {
         index = LabelIndex::build(&l);
         ids = labels::unique_ids(&l);
@@ -434,6 +451,21 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
 
     t.lap("refine_merge");
     crate::dump::labels("labels_refine", &l);
+    // Gradients off: every fitted ramp is cut into flat bands along its own
+    // level lines, and the band edges are placed on those lines (`posterize`).
+    let mut levels = Levels::default();
+    if !p.gradients {
+        let (banded, band_fills, band_visible, lv) =
+            posterize_fills(&l, &fills, &visible, &xs, &ys, &rgba255, p.detail, p.min_region);
+        l = banded;
+        fills = band_fills;
+        visible = band_visible;
+        levels = lv;
+        crate::dump::labels("labels_posterize", &l);
+        index = LabelIndex::build(&l);
+        ids = labels::unique_ids(&l);
+        fit_params.gradients = false;
+    }
     let mut enc = enclosure(&l);
     let mut order = paint_order(&enc);
     t.lap("enclosure");
@@ -483,16 +515,19 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     let mut skip: HashSet<i32> = shadow_plan.absorbed.clone();
     if p.strokes {
         let fills_snapshot = fills.clone();
+        let levels_snapshot = levels.clone();
+        // A band's outline is anti-aliased against the ramp it was cut from.
         let fill_at = move |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
-            match fills_snapshot.get(&lab) {
+            match levels_snapshot.model(lab).or_else(|| fills_snapshot.get(&lab)) {
                 Some(f) => f.evaluate(qx, qy),
                 None => vec![[0.0; 4]; qx.len()],
             }
         };
+        // A band of a posterised ramp is as thin as the ramp is steep: never a line.
         let mut thin_labels: Vec<i32> = order
             .iter()
             .copied()
-            .filter(|lab| !invisible.contains(lab) && is_thin_at(height, width, index.pixels(*lab)))
+            .filter(|lab| !invisible.contains(lab) && !levels.band.contains_key(lab) && is_thin_at(height, width, index.pixels(*lab)))
             .collect();
 
         // A thin region that matches the colour of an adjacent large region is
@@ -659,7 +694,10 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     let mut mask_override: HashMap<i32, Mask> = HashMap::new();
     let mut fill_override: HashMap<i32, Fill> = HashMap::new();
     if p.overlaps && stacked {
-        let dec = decompose_overlaps(&l, &fills, &visible, &curve_params, fit_params.tol);
+        // The middle band of three is by construction a blend of the other
+        // two: bands are never read as overlaps.
+        let seen: HashMap<i32, bool> = visible.iter().map(|(k, v)| (*k, *v && !levels.band.contains_key(k))).collect();
+        let dec = decompose_overlaps(&l, &fills, &seen, &curve_params, fit_params.tol);
         if !dec.empty() && dec.removed.intersection(&skip).count() == 0 {
             skip.extend(dec.removed.iter().copied());
             mask_override.extend(dec.masks);
@@ -700,7 +738,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     }
     let svg = emit(
         &l, &enc, &order, &fills, &invisible, &skip, &stroke_of, &mask_override, &fill_override,
-        &shadow_plan, &prep, stacked, &curve_params, p, height, width, rgba,
+        &shadow_plan, &prep, stacked, &curve_params, p, height, width, rgba, &levels,
     );
     t.lap("emit");
     t.total("trace");
@@ -748,9 +786,11 @@ fn emit(
     height: usize,
     width: usize,
     src: &[u8],
+    levels: &Levels,
 ) -> String {
+    // A band's outline is anti-aliased against the ramp it was cut from.
     let fill_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
-        match fills.get(&lab) {
+        match levels.model(lab).or_else(|| fills.get(&lab)) {
             Some(f) => f.evaluate(qx, qy),
             None => vec![[0.0; 4]; qx.len()],
         }
@@ -784,6 +824,7 @@ fn emit(
         &fill_at,
         curve_params,
         if stacked { Some(&rank) } else { None },
+        Some(levels),
     );
     crate::dump::arcs("arcs", &bnd);
 

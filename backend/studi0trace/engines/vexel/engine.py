@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import ClassVar, Literal
 
 import numpy as np
@@ -29,7 +29,7 @@ from studi0trace.engines.vexel import topology
 from studi0trace.engines.vexel.overlaps import decompose_overlaps
 from studi0trace.engines.vexel.shadows import ShadowPlan, detect_shadows, shadow_filter_svg
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels
-from studi0trace.engines.vexel.posterize import posterize_regions
+from studi0trace.engines.vexel.posterize import Levels, posterize_fills
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.refine import refine_merge
 from studi0trace.engines.vexel.rescue import edge_mix, rescue_features
@@ -38,6 +38,7 @@ from studi0trace.engines.vexel.strokes import is_thin, stroke_fidelity, stroke_g
 from studi0trace.engines.vexel.weights import interior, interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
+POSTERIZE_JOIN_ROUNDS = 3  # further `refine_merge` passes before a ramp is posterised
 _CROSS = ndimage.generate_binary_structure(2, 1)
 
 try:  # pragma: no cover - exercised by whichever backend is installed
@@ -309,17 +310,17 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     prep = prepare(rgba)
     grad = discontinuity(prep.features)
     labels0 = initial_labels(grad, prep.features, min_region=p.min_region)
-    labels = merge_regions(labels0, prep.features, MergeParams(detail=p.detail, gradients=p.gradients), grad)
+    # With gradients off the trace still finds and fits every ramp as one
+    # region, and `posterize` cuts the fitted ramps into flat bands below.
+    labels = merge_regions(labels0, prep.features, MergeParams(detail=p.detail, gradients=True), grad)
     dump.labels("labels_merge", labels)
-    if not p.gradients:
-        labels = posterize_regions(labels, prep.features, p.detail, p.min_region, grad)
 
     ys, xs = np.mgrid[0:height, 0:width]
     xs = xs.astype(np.float64) + 0.5
     ys = ys.astype(np.float64) + 0.5
     rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
 
-    fit_params = FitParams(gradients=p.gradients, max_stops=p.max_stops, tol=max(2.0, p.detail / 2.0))
+    fit_params = FitParams(gradients=True, max_stops=p.max_stops, tol=max(2.0, p.detail / 2.0))
     fills: dict[int, object] = {}
     visible: dict[int, bool] = {}
 
@@ -388,6 +389,16 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
 
     # Join gradient fragments (glows, off-centre radials) that one real fill explains.
     labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
+    if not p.gradients:
+        # Posterised, a region boundary through one smooth field is a visible
+        # colour step along whatever line the partition drew, so the ramps are
+        # joined as far as one fill explains them: a join changes the regions,
+        # and a pair that did not qualify before may now.
+        again = changed
+        for _ in range(POSTERIZE_JOIN_ROUNDS):
+            if not again:
+                break
+            labels, fills, again = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
     dump.labels("labels_refine", labels)
     if changed:
         ids = [int(i) for i in np.unique(labels) if i != 0]
@@ -396,8 +407,19 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             m = labels == lab
             visible[lab] = float(np.average(prep.alpha[m], weights=interior_weights(m))) > 0.04
 
+    # Gradients off: every fitted ramp is cut into flat bands along its own
+    # level lines, and the band edges are placed on those lines (`posterize`).
+    bands = Levels()
+    if not p.gradients:
+        labels, fills, visible, bands = posterize_fills(labels, fills, visible, xs, ys, rgba255, p.detail, p.min_region)
+        dump.labels("labels_posterize", labels)
+        ids = [int(i) for i in np.unique(labels) if i != 0]
+        fit_params = replace(fit_params, gradients=False)
+
     def fill_at(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
-        return fills[lab].evaluate(qx, qy)
+        # A band's outline is anti-aliased against the ramp it was cut from,
+        # not against its flat paint.
+        return (bands.model(lab) or fills[lab]).evaluate(qx, qy)
 
     enc = enclosure(labels)
     order = paint_order(enc)
@@ -431,7 +453,8 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     stroked: dict[int, int] = {}  # label painted by a stroke along its middle -> the stroke's first member
     skip: set[int] = set(shadow_plan.absorbed)
     if p.strokes:
-        thin_labels = [lab for lab in order if lab not in invisible and is_thin(labels == lab)]
+        # A band of a posterised ramp is as thin as the ramp is steep: never a line.
+        thin_labels = [lab for lab in order if lab not in invisible and lab not in bands.band and is_thin(labels == lab)]
         # A thin region that matches the colour of an adjacent large region is that
         # region's anti-aliased rim, not a line: fold it in so its neighbour's
         # coverage contour handles it, instead of stroking a hairline around it.
@@ -519,7 +542,10 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     fill_override: dict[int, Solid] = {}
     over_backdrop: set[int] = set()
     if p.overlaps and stacked:
-        dec = decompose_overlaps(labels, fills, visible, curve_params, tol=fit_params.tol)
+        # The middle band of three is by construction a blend of the other two:
+        # bands are never read as overlaps.
+        dec = decompose_overlaps(labels, fills, {lab: v and lab not in bands.band for lab, v in visible.items()},
+                                 curve_params, tol=fit_params.tol)
         if not dec.empty and not (dec.removed & skip):
             over_backdrop = set(dec.over_backdrop)
             skip |= dec.removed
@@ -573,6 +599,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         # made translucent, or a region drawn as a line along its middle.
         see_through={lab for lab in fill_override if fill_override[lab].rgba[3] < 250} | set(stroked),
         painted_by={t: owner for owner, ts in underlay.items() for t in ts},
+        levels=bands,
     )
     dump.arcs("arcs", bnd)
 

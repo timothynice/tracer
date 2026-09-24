@@ -47,7 +47,7 @@ pub struct FitParams {
     pub tol: f64,
 }
 
-fn interp_stops(t: f64, stops: &[Stop]) -> [f64; 4] {
+pub fn interp_stops(t: f64, stops: &[Stop]) -> [f64; 4] {
     // `np.interp`: clamp outside the knot range, linear within
     let t = t.clamp(0.0, 1.0);
     if stops.is_empty() {
@@ -83,19 +83,25 @@ impl Fill {
         }
     }
 
+    /// The ramp position t at (x, y), unclamped: 0 at (x1, y1) and 1 at
+    /// (x2, y2) for a linear ramp, distance from the centre over r for a radial.
+    /// Zero for a solid.
+    pub fn param(&self, x: f64, y: f64) -> f64 {
+        match self {
+            Fill::Solid { .. } => 0.0,
+            Fill::Linear { x1, y1, x2, y2, .. } => {
+                let (dx, dy) = (x2 - x1, y2 - y1);
+                let denom = dx * dx + dy * dy;
+                if denom > 0.0 { ((x - x1) * dx + (y - y1) * dy) / denom } else { 0.0 }
+            }
+            Fill::Radial { cx, cy, r, .. } => ((x - cx).hypot(y - cy)) / r.max(1e-9),
+        }
+    }
+
     pub fn evaluate_one(&self, x: f64, y: f64) -> [f64; 4] {
         match self {
             Fill::Solid { rgba } => *rgba,
-            Fill::Linear { x1, y1, x2, y2, stops } => {
-                let (dx, dy) = (x2 - x1, y2 - y1);
-                let denom = dx * dx + dy * dy;
-                let t = if denom > 0.0 { ((x - x1) * dx + (y - y1) * dy) / denom } else { 0.0 };
-                interp_stops(t, stops)
-            }
-            Fill::Radial { cx, cy, r, stops } => {
-                let t = ((x - cx).hypot(y - cy)) / r.max(1e-9);
-                interp_stops(t, stops)
-            }
+            Fill::Linear { stops, .. } | Fill::Radial { stops, .. } => interp_stops(self.param(x, y), stops),
         }
     }
 

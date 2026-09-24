@@ -640,9 +640,15 @@ def _place(
     fill_at: FillAt,
     handed_back: set[tuple[int, int]] | None = None,
     local: FillAt | None = None,
+    levels=None,
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """Sub-pixel position for every lattice edge of every arc, the step across
-    the edge, and which vertices sit on a pixel handed back to a wedge."""
+    the edge, and which vertices sit on a pixel handed back to a wedge.
+
+    `levels` (`posterize.Levels`) places an edge between two bands of one
+    posterised ramp where the ramp crosses their level, not from colour: the
+    pixels there are the ramp's, and show no edge to read.
+    """
     pad_rgba = np.concatenate(
         [np.pad(rgb, ((1, 1), (1, 1), (0, 0))), (np.pad(alpha, 1) * 255.0)[..., None]], axis=-1
     )
@@ -662,6 +668,11 @@ def _place(
         side = np.zeros(len(ch["edges"]), dtype=np.int8)
         if a != 0 and b != 0:
             t, side = _crossing(pad_rgba, padded, p_in, p_out, a, b, fill_at, with_found=True, local=local)
+            on_level = levels.crossing(a, b, c_in, c_out) if levels else None
+            if on_level is not None:
+                exact = np.isfinite(on_level)
+                t = np.where(exact, on_level, t)
+                side = np.where(exact, 0, side).astype(np.int8)
         # `c_in` is always the centre of the pixel labelled `a` and `c_out` that of
         # the pixel labelled `b`, so this step is the direction from one side of
         # the arc to the other. It is one pixel long and axis aligned already.
@@ -1180,6 +1191,7 @@ def _junctions(
     reach: float = 4.1,
     trim: float = APPROACH_TRIM,
     limit: float = 2.0,
+    levels=None,
 ) -> None:
     """Place each node, and give arcs that run through it a shared tangent.
 
@@ -1198,6 +1210,10 @@ def _junctions(
     so moving one of its ends would change what the node at the other end is
     told — and which node went first is not something either implementation
     should be deciding.
+
+    A node where a level line of a posterised ramp (`levels`) ends is on that
+    line exactly, and is never a tip: the band on its acute side has a corner
+    there, where the level cuts the outline, and the outline runs on through.
     """
     ends: dict[int, list[tuple[int, int]]] = {}
     short: set[int] = set()
@@ -1282,7 +1298,15 @@ def _junctions(
         keys = list(away)
         plain = target
         tip = None
-        if len(keys) == 3:
+        on_level = sorted(key for key in incident if levels and levels.sibling(*arcs[key[0]].pair))
+        if on_level:
+            pair = arcs[on_level[0][0]].pair
+            moved = levels.onto(*pair, target)
+            target = _on_border(moved, [(arcs[i], k) for i, k in incident])
+            for axis in (0, 1):
+                if target[axis] != moved[axis]:  # held on the canvas edge: reach the line along it
+                    target = levels.onto(*pair, target, along=1 - axis)
+        elif len(keys) == 3:
             tip = _wedge(padded, target, [arcs[i].pair for i, _ in keys], [away[k] for k in keys])
         tips: set[tuple[int, int]] = set()
         if tip is not None:
@@ -1457,6 +1481,7 @@ def build(
     extend: bool = True,
     see_through: set[int] | None = None,
     painted_by: dict[int, int] | None = None,
+    levels=None,
 ) -> Boundary:
     """The whole boundary of the label map, placed sub-pixel and fitted once.
 
@@ -1467,7 +1492,8 @@ def build(
     which a bleed would show as a band of the wrong colour. `painted_by` names,
     for a label no fill of its own paints (a stroked region), the earlier shape
     that fills it underneath; that shape's copy then reaches under the label's
-    other neighbours.
+    other neighbours. `levels` (`posterize.Levels`) puts the edges between the
+    bands of a posterised ramp on the ramp's own level lines.
     """
     bleed = BLEED if bleed is None else bleed
     padded = np.pad(labels.astype(np.int64), 1, constant_values=0)
@@ -1476,7 +1502,8 @@ def build(
         padded, handed_back = _extend_wedges(padded, rgb, alpha, fill_at, params)
     chains = _chains(padded)
     # The placement reads colour against the fills as they are beside each edge.
-    placed = _place(chains, padded, rgb, alpha, fill_at, handed_back, local=_local_fills(labels, rgb, alpha, fill_at))
+    placed = _place(chains, padded, rgb, alpha, fill_at, handed_back, local=_local_fills(labels, rgb, alpha, fill_at),
+                    levels=levels)
 
     arcs = [
         Arc(pair=ch["pair"], pts=pts, normal=normal, n0=ch["n0"], n1=ch["n1"], sliver=(sliver if sliver.any() else None))
@@ -1490,7 +1517,7 @@ def build(
     # before its nodes are placed and its curves fitted; the vertices live in
     # the shared arcs, so the neighbour across each edge moves with it.
     _symmetrize(Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=[]))
-    _junctions(arcs, padded, params.corner_threshold, params.tol)
+    _junctions(arcs, padded, params.corner_threshold, params.tol, levels=levels)
     for arc in arcs:
         arc.segments = _fit_arc(arc, params)
     # Rounded rectangles drawn as a designer draws them: one radius per shape
