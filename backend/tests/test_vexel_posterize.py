@@ -208,7 +208,7 @@ def test_settled_lines_stay_put_when_the_smoothing_doubles_and_textured_ones_do_
     m = np.ones((60, 80), bool)
     levels = band_levels(ramp, 0.0, 1.0, 14.0)
     fine, coarse = observed_t(ramp, 0.0, 1.0, clean, m), observed_t(ramp, 0.0, 1.0, clean, m, sigma=3.0)
-    assert settled(fine, coarse, levels, m)
+    assert settled(fine, coarse, levels, m).all()
     # a sheen: blotches a few pixels across, a few levels deep
     rng = np.random.default_rng(1)
     from scipy import ndimage
@@ -217,4 +217,5 @@ def test_settled_lines_stay_put_when_the_smoothing_doubles_and_textured_ones_do_
     sheen = clean.copy()
     sheen[..., :3] = np.clip(clean[..., :3] + 60.0 * blotch[..., None], 0, 255)
     fine, coarse = observed_t(ramp, 0.0, 1.0, sheen, m), observed_t(ramp, 0.0, 1.0, sheen, m, sigma=3.0)
-    assert not settled(fine, coarse, levels, m)
+    held = settled(fine, coarse, levels, m)
+    assert 2 * int(held.sum()) < levels.size, held  # most of its lines are the texture's

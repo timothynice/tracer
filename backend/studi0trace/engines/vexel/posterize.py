@@ -72,12 +72,12 @@ FOLLOW_MIN = 64
 SMOOTH_SIGMA = 1.5
 
 # ...but only where those crossings are well defined. In a textured ramp (an
-# AI-drawn sheen) the pixels' level lines wander with the texture, and a cut
-# along them wobbles where the model's straight lines at least stayed clean.
-# The cut at SMOOTH_SIGMA is compared with one at SETTLED_SIGMA: when the band
-# edges move by more than SETTLED_PX on average (pixels changing band per
-# pixel of band edge), the pixels' lines are the texture's and the model's are
-# kept.
+# AI-drawn sheen) the pixels' level lines wander with the texture, and so does
+# a level in a ramp's faint tail, where the colour hardly changes. The cut at
+# SMOOTH_SIGMA is compared with one at SETTLED_SIGMA, level by level: a level
+# whose edge moves by more than SETTLED_PX on average (pixels crossing it per
+# pixel of its edge) is not drawn, and when fewer than half of them hold, the
+# pixels' lines are the texture's and the model's clean ones are kept.
 SETTLED_SIGMA = 3.0
 SETTLED_PX = 0.25
 
@@ -265,16 +265,23 @@ def follows(ramp: Fill, t: np.ndarray, features: np.ndarray, core: np.ndarray, l
     return not any(n[k] >= FOLLOW_MIN and spread[k] / n[k] > bar for k in range(levels.size + 1))
 
 
-def settled(t_fine: np.ndarray, t_coarse: np.ndarray, levels: np.ndarray, m: np.ndarray) -> bool:
-    """Do the band edges of a cut at the pixels' own t (`t_fine`, row-major
-    over the region `m`) stay put when the smoothing doubles (`t_coarse`)? See
-    SETTLED_PX."""
+def settled(t_fine: np.ndarray, t_coarse: np.ndarray, levels: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """Which levels of a cut at the pixels' own t (`t_fine`, row-major over the
+    region `m`) stay put when the smoothing doubles (`t_coarse`)? See
+    SETTLED_PX. A level with no edge in the cut (the band beside it is empty)
+    does not hold."""
     k = np.full(m.shape, -1, np.int64)
     k[m] = np.searchsorted(levels, t_fine, side="right")
-    moved = int((k[m] != np.searchsorted(levels, t_coarse, side="right")).sum())
-    edge = int(((k[:, 1:] != k[:, :-1]) & (k[:, 1:] >= 0) & (k[:, :-1] >= 0)).sum()
-               + ((k[1:] != k[:-1]) & (k[1:] >= 0) & (k[:-1] >= 0)).sum())
-    return edge > 0 and moved <= SETTLED_PX * edge
+    coarse = np.full(m.shape, -1, np.int64)
+    coarse[m] = np.searchsorted(levels, t_coarse, side="right")
+    lo, hi = np.minimum(k, coarse), np.maximum(k, coarse)
+    pairs = [(k[:, 1:], k[:, :-1]), (k[1:], k[:-1])]
+    held = np.zeros(levels.size, dtype=bool)
+    for j in range(levels.size):
+        moved = int(((lo <= j) & (j < hi) & m).sum())
+        edge = sum(int((((p == j) & (q == j + 1)) | ((p == j + 1) & (q == j))).sum()) for p, q in pairs)
+        held[j] = edge > 0 and moved <= SETTLED_PX * edge
+    return held
 
 
 def _premultiplied(c: np.ndarray) -> np.ndarray:
@@ -460,8 +467,10 @@ def posterize_fills(
         free = False
         if not follows(fill, t, features[box][m], core, levels, step):
             fine = observed_t(fill, lo, hi, rgba255[box], m)
-            free = settled(fine, observed_t(fill, lo, hi, rgba255[box], m, sigma=SETTLED_SIGMA), levels, m)
+            held = settled(fine, observed_t(fill, lo, hi, rgba255[box], m, sigma=SETTLED_SIGMA), levels, m)
+            free = 2 * int(held.sum()) >= levels.size and bool(held.any())
         if free:
+            levels = levels[held]
             t = fine
             grid = np.full(m.shape, np.nan)
             grid[m] = t

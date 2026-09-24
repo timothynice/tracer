@@ -36,8 +36,9 @@ pub const FOLLOW_MIN: usize = 64;
 /// A ramp whose lines are not the image's is cut where its pixels cross the
 /// levels, after a Gaussian of this sigma within the region...
 pub const SMOOTH_SIGMA: f64 = 1.5;
-/// ...but only when that cut's band edges move by at most `SETTLED_PX` (pixels
-/// changing band per pixel of band edge) when the smoothing is `SETTLED_SIGMA`.
+/// ...level by level: a level whose edge moves by more than `SETTLED_PX` (pixels
+/// crossing it per pixel of its edge) when the smoothing is `SETTLED_SIGMA` is
+/// not drawn, and when fewer than half hold, the model's lines are kept.
 pub const SETTLED_SIGMA: f64 = 3.0;
 pub const SETTLED_PX: f64 = 0.25;
 
@@ -299,38 +300,45 @@ pub fn follows(ramp: &Fill, t: &[f64], feat: &[[f64; 4]], core: &[bool], levels:
     !(0..=levels.len()).any(|k| n[k] >= FOLLOW_MIN && spread[k] / n[k] as f64 > bar)
 }
 
-/// Do the band edges of a cut at the pixels' own t (`fine`, raster order over
-/// the region `m`) stay put when the smoothing doubles (`coarse`)? See
-/// `SETTLED_PX`.
-pub fn settled(fine: &[f64], coarse: &[f64], levels: &[f64], m: &Mask) -> bool {
+/// Which levels of a cut at the pixels' own t (`fine`, raster order over the
+/// region `m`) stay put when the smoothing doubles (`coarse`)? See
+/// `SETTLED_PX`; a level with no edge in the cut does not hold.
+pub fn settled(fine: &[f64], coarse: &[f64], levels: &[f64], m: &Mask) -> Vec<bool> {
     let mut k = vec![-1i64; m.h * m.w];
+    let mut c = vec![-1i64; m.h * m.w];
     let mut j = 0;
-    let mut moved = 0usize;
     for (i, inside) in m.data.iter().enumerate() {
         if *inside {
-            let a = levels.partition_point(|v| *v <= fine[j]) as i64;
-            let b = levels.partition_point(|v| *v <= coarse[j]) as i64;
-            k[i] = a;
-            moved += (a != b) as usize;
+            k[i] = levels.partition_point(|v| *v <= fine[j]) as i64;
+            c[i] = levels.partition_point(|v| *v <= coarse[j]) as i64;
             j += 1;
         }
     }
-    let mut edge = 0usize;
+    let n = levels.len();
+    let mut moved = vec![0usize; n];
+    let mut edge = vec![0usize; n];
+    for i in 0..m.h * m.w {
+        if !m.data[i] {
+            continue;
+        }
+        for l in k[i].min(c[i])..k[i].max(c[i]) {
+            moved[l as usize] += 1;
+        }
+    }
     for r in 0..m.h {
-        for c in 0..m.w {
-            let here = k[r * m.w + c];
+        for q in 0..m.w {
+            let here = k[r * m.w + q];
             if here < 0 {
                 continue;
             }
-            if c + 1 < m.w && k[r * m.w + c + 1] >= 0 && k[r * m.w + c + 1] != here {
-                edge += 1;
-            }
-            if r + 1 < m.h && k[(r + 1) * m.w + c] >= 0 && k[(r + 1) * m.w + c] != here {
-                edge += 1;
+            for there in [if q + 1 < m.w { k[r * m.w + q + 1] } else { -1 }, if r + 1 < m.h { k[(r + 1) * m.w + q] } else { -1 }] {
+                if there >= 0 && (here - there).abs() == 1 {
+                    edge[here.min(there) as usize] += 1;
+                }
             }
         }
     }
-    edge > 0 && moved as f64 <= SETTLED_PX * edge as f64
+    (0..n).map(|l| edge[l] > 0 && moved[l] as f64 <= SETTLED_PX * edge[l] as f64).collect()
 }
 
 fn premultiplied(c: &[f64; 4]) -> [f64; 4] {
@@ -600,8 +608,11 @@ pub fn posterize_fills(
             }
             let fine = observed_t(&fill, lo, hi, &crop, &m, SMOOTH_SIGMA);
             let coarse = observed_t(&fill, lo, hi, &crop, &m, SETTLED_SIGMA);
-            if settled(&fine, &coarse, &levels, &m) {
+            let held = settled(&fine, &coarse, &levels, &m);
+            let kept = held.iter().filter(|h| **h).count();
+            if kept > 0 && 2 * kept >= levels.len() {
                 free = true;
+                levels = levels.iter().zip(held.iter()).filter(|(_, h)| **h).map(|(v, _)| *v).collect();
                 // `fine` is in raster order over the crop, which is `px`'s order
                 let mut grid = Grid::<f64>::filled(bh, bw, f64::NAN);
                 for (k, i) in px.iter().enumerate() {
