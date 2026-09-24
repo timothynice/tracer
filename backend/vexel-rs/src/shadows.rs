@@ -393,7 +393,10 @@ fn gate(
             table[*lab as usize] = Some(f);
         }
     }
-    let (filter_sq, band_sq) = idx
+    // Per pixel in parallel, summed in pixel order: a parallel `reduce` adds in
+    // an order work stealing picks, which moved the sums in the last bits from
+    // one run to the next.
+    let per_px: Vec<(f64, f64)> = idx
         .par_iter()
         .enumerate()
         .map(|(k, i)| {
@@ -416,7 +419,8 @@ fn gate(
             }
             (fs, bs)
         })
-        .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+        .collect();
+    let (filter_sq, band_sq) = per_px.iter().fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
     let m = (n * 3) as f64;
     ((filter_sq / m).sqrt(), (band_sq / m).sqrt())
 }
