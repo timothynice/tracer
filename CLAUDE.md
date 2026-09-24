@@ -156,7 +156,57 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   candidates tie to the last bit — a staircase puts two vertices at the same
   distance from a cubic — an argmax answers by arithmetic order, which the two
   languages do not share; `curves._max_error` calls anything within
-  `SPLIT_TIE` tied and takes the vertex nearest the run's middle.
+  `SPLIT_TIE` tied and takes the vertex nearest the run's middle. Paint
+  order ties go to the lower label (`order.paint_order`): a HashMap's order
+  there repainted a mosaic differently on every run. Every other choice that
+  can tie to rounding has a named tie and one rule in both engines: a length
+  that is a whole number of resampling steps (`STEP_TIE`), symmetry's nearest
+  vertex (`NEAR_TIE`, lower index) and a ring too isotropic to have principal
+  axes (`ISOTROPIC`, the 15° grid only), ramp knots that fit equally well
+  (`RAMP_TIE`, the lower candidate), a two-point cubic whose tangents meet at
+  its end (`MEET_TIE`). The Rust subsamples a region's pixels exactly as
+  numpy's `Generator.choice` does, on both of its roads (`core/rng.rs`); alpha
+  is scaled to 255 in float32 as the Python scales it (`prepare::alpha255`).
+  `tests/test_vexel_parity.py` guards each of these.
+- The artifact scorecard (`studi0trace/imaging/quality.py`, re-exported by
+  `bench/artifacts.py`; `python -m bench artifacts OUT.svg SRC.png --where`)
+  counts what a person sees and the averaging metrics hide: pinholes, slivers,
+  sub-pixel strokes, wobble, inflections, rectangles with uneven radii or
+  bowed sides. It scores only visible outline (a crisp id render decides what
+  is on top), so the copies bled under later shapes do not count. It is in
+  every `bench run`; a quality change is judged on it as well as on `score`.
+- The bled copy an earlier shape draws under a later one is an offset of the
+  drawn curve (`topology._under`), stopped half way to any wall behind which
+  its colour would show, one copy per arc into the side painted later. A
+  stacked shape paints on under the holes that hold only opaque later shapes
+  (`engine._holes_to_fill`), a stroked region is filled underneath by its
+  earliest neighbour, and overlap tops are graph unions, not coverage traces.
+  `diffcheck under` holds the two engines' copies together.
+- A region's edge band belongs to its edge. Fills are fitted on the core
+  (`weights.interior` depth > 3) and a gradient whose range over the core is
+  under 2·tol is the solid; the rescue does not promote an edge's rendering
+  (`rescue.edge_mix`); placement reads colour premultiplied, against each
+  region's fill plus its own smoothed residual (local fills, gated off where
+  the two sides' local colours converge). A shadow on a transparent canvas is
+  a filter (`shadows._detect_clear`).
+- Rounded rectangles are read under blur (`vexel/rects.py`: the blur is taken
+  out of each radius, r² ≈ r_read² − (1.86σ)² − 0.58), given one radius per
+  shape and across shapes, one size and shared edge levels, and a corner that
+  meets a neighbour becomes a cusp; a Line-curve-Line corner elsewhere is one
+  circular arc of the mark's radius (`topology._rectify`, `_fillets`;
+  `vexel-rs/src/rects.rs`, `topology/rectify.rs`; `diffcheck rects`).
+- `gradients=False` posterises the fitted model, not the pixels
+  (`posterize.posterize_fills`): each ramp is cut at equal-ΔE levels of its own
+  parameter, band edges are placed on the level line exactly, and bands are
+  never strokes or overlaps; where the model's level lines are not the image's
+  the pixels' own settled level lines are used (`diffcheck posterize`).
+- A stretch that is lines-first at `KIND_TOL` (0.4 px) stays lines at any
+  looser `curve_tolerance`: a loose tolerance buys fewer curve segments, never
+  a straight edge drawn as a bow.
+- Presets are measured, never described by hand: `bench.presets_eval
+  --write-details` rewrites `engines/preset_details.json`. Auto (`auto.py`,
+  `/vectorize auto=true`) traces the candidates concurrently and keeps the
+  cleanest within the fidelity slack of the most faithful.
 - Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`.
 - Frontend follows the Studi0 design system (semantic HSL tokens, Poppins,
   `.dark` on `<html>`, `h-10 rounded-md` buttons, sticky blurred header). Never
