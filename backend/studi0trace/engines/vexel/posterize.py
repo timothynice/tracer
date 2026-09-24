@@ -165,10 +165,14 @@ def band_levels(ramp: Fill, t_lo: float, t_hi: float, step: float) -> np.ndarray
     feat = _features(_interp_stops(ts, ramp.stops))
     length = np.concatenate([[0.0], np.cumsum(np.sqrt(((feat[1:] - feat[:-1]) ** 2).sum(axis=1)))])
     total = float(length[-1])
-    n = min(int(math.ceil(total / max(step, 1e-9) - 1e-9)), int(math.floor(span_px / BAND_MIN_PX)))
-    if n < 2:
-        return none
-    return np.array([_invert(length, ts, j * total / n) for j in range(1, n)])
+    # Bands of equal colour distance are not of equal width where the ramp is
+    # uneven in Lab, so the count comes down until the narrowest is wide enough.
+    for n in range(min(int(math.ceil(total / max(step, 1e-9) - 1e-9)), int(math.floor(span_px / BAND_MIN_PX))), 1, -1):
+        levels = np.array([_invert(length, ts, j * total / n) for j in range(1, n)])
+        edges = np.concatenate([[lo], levels, [hi]])
+        if float(np.diff(edges).min()) * reach >= BAND_MIN_PX - 1e-9:
+            return levels
+    return none
 
 
 def _absorb(pieces: np.ndarray, first: int, count: int, min_region: int) -> dict[int, int]:

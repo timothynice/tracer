@@ -347,8 +347,8 @@ def posterize(path):
     preset's detail and min_region, so what is compared is the cut: which band
     each pixel falls in, how the slivers where a level grazes the outline are
     absorbed, the levels themselves and each band's colour. The labels must
-    match to the pixel; the levels and colours are arithmetic on the same
-    fills, and are held to 1e-6.
+    match to the pixel; the levels are held to 1e-5 of the ramp and the band
+    colours (means over many pixels) to 1e-4 of a colour level.
     """
     from studi0trace.engines.vexel.posterize import posterize_fills
 
@@ -381,7 +381,16 @@ def posterize(path):
                                                    [k for k, _ in packed], [v for _, v in packed], 14.0, 16)
     rs_labels = np.asarray(rs_labels, dtype=np.int32).reshape(h, w)
     py_rows, rs_rows = np.array(rows), np.array(rs_rows)
-    if py_rows.shape != rs_rows.shape or not np.allclose(py_rows, rs_rows, rtol=0.0, atol=1e-6):
+    # a band's colour is a mean over up to a whole canvas of pixels, summed in
+    # a different order by numpy and by Rust: 1e-4 of a colour level for those.
+    # A level is where the ramp's running ΔE reaches a share of its total, and
+    # the ΔE goes through the float32 Lab conversion the two round differently
+    # in the last bit (see the note above): 1e-5 of the ramp, a hundredth of a
+    # pixel on a 512 px ramp.
+    atol = np.full(py_rows.shape, 1e-5)
+    per_label = np.arange(7 * len(py_fills))
+    atol[per_label[per_label % 7 >= 3]] = 1e-4
+    if py_rows.shape != rs_rows.shape or not (np.abs(py_rows - rs_rows) <= atol).all():
         bad = "shape" if py_rows.shape != rs_rows.shape else f"max |Δ| {np.abs(py_rows - rs_rows).max():.3e}"
         print(f"  FAIL posterize {path.name}: bands/levels differ ({bad}; {py_rows.size} vs {rs_rows.size} values)")
         return np.zeros(1, np.int32), np.ones(1, np.int32)

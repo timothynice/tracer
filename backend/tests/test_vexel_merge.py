@@ -92,11 +92,8 @@ def test_gradient_disc_over_flat_background_is_two_regions():
     ids = np.unique(merged)
     assert len(ids) == 2, f"expected background + one gradient region, got {len(ids)}"
     assert len(np.unique(merged[disc & ((xx - 48) ** 2 + (yy - 48) ** 2 < 30**2)])) == 1
-    # with gradients disabled the engine posterises smooth regions into flat bands
-    from studi0trace.engines.vexel.posterize import posterize_regions
-
-    banded = posterize_regions(merge_regions(labels0, f, MergeParams(detail=8, gradients=False), grad), f, 8.0, 6, grad)
-    assert len(np.unique(banded)) > 2
+    # with gradients disabled the ramp is still one region here: it is its
+    # fitted fill that is cut into bands (tests/test_vexel_posterize.py)
 
 
 def test_adjacency_counts_boundary_pixels():

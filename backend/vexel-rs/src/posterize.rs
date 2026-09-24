@@ -165,11 +165,21 @@ pub fn band_levels(ramp: &Fill, t_lo: f64, t_hi: f64, step: f64) -> Vec<f64> {
         length.push(acc);
     }
     let total = acc;
-    let n = ((total / step.max(1e-9) - 1e-9).ceil() as i64).min((span_px / BAND_MIN_PX).floor() as i64);
-    if n < 2 {
-        return Vec::new();
+    // Bands of equal colour distance are not of equal width where the ramp is
+    // uneven in Lab, so the count comes down until the narrowest is wide enough.
+    let most = ((total / step.max(1e-9) - 1e-9).ceil() as i64).min((span_px / BAND_MIN_PX).floor() as i64);
+    for n in (2..=most).rev() {
+        let levels: Vec<f64> = (1..n).map(|j| invert(&length, &ts, j as f64 * total / n as f64)).collect();
+        let mut edges = Vec::with_capacity(levels.len() + 2);
+        edges.push(lo);
+        edges.extend_from_slice(&levels);
+        edges.push(hi);
+        let narrowest = edges.windows(2).map(|e| e[1] - e[0]).fold(f64::INFINITY, f64::min);
+        if narrowest * reach >= BAND_MIN_PX - 1e-9 {
+            return levels;
+        }
     }
-    (1..n).map(|j| invert(&length, &ts, j as f64 * total / n as f64)).collect()
+    Vec::new()
 }
 
 /// Which band pieces (1..=count in `pieces`, a crop, 0 elsewhere) join which
@@ -421,9 +431,14 @@ mod tests {
 
     #[test]
     fn a_short_ramp_gets_bands_no_narrower_than_the_minimum() {
-        let levels = band_levels(&ramp(), 0.0, 0.1, 1.0);
-        // 10 px of ramp: at most two bands of 4 px
-        assert!(levels.len() <= 1, "{levels:?}");
+        // 20 px of ramp and a band asked for every ΔE: grey is uneven in Lab,
+        // so equal colour distances are unequal widths, and none may be a sliver
+        let levels = band_levels(&ramp(), 0.0, 0.2, 1.0);
+        assert!(!levels.is_empty());
+        let mut edges = vec![0.0];
+        edges.extend_from_slice(&levels);
+        edges.push(0.2);
+        assert!(edges.windows(2).all(|e| (e[1] - e[0]) * 100.0 >= BAND_MIN_PX - 1e-9), "{edges:?}");
     }
 
     #[test]
