@@ -68,14 +68,14 @@ lower is better):
 
 | class | Potrace | VTracer | **Vexel** |
 |---|---|---|---|
-| logo | 11.4 | 1.20 | **0.36** |
-| flat | 20.4 | 0.98 | **0.64** |
-| gradient | 23.2 | 10.40 | **0.91** |
-| shadow | 14.8 | 3.24 | **0.42** |
+| logo | 11.4 | 1.20 | **0.24** |
+| flat | 20.4 | 0.98 | **0.57** |
+| gradient | 23.2 | 10.40 | **0.81** |
+| shadow | 14.8 | 3.24 | **0.28** |
 
-Vexel has the lowest ΔE on **68 of 72** corpus items, and gets there with far
-less geometry: 9.9 paths and 11.7 KB per image on average against VTracer's 34.0
-paths and 18.0 KB.
+Vexel has the lowest ΔE on **102 of 104** corpus items, and gets there with far
+less geometry: 8.0 paths and 5.3 KB per image on average against VTracer's 25.7
+paths and 14.7 KB.
 
 `seam_ppm` is the other number to watch: parts per million of the artwork that
 the emitted shapes cover less than the source does. It is what the shared
