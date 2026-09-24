@@ -56,8 +56,9 @@ _PRESETS: list[dict[str, Any]] = [
         id="auto",
         label="Auto",
         kind="auto",
-        description="Traces your image with Balanced, Logo & icon, Detailed and Simplified, and keeps the "
-                    "cleanest result that is as faithful as the best. Start here.",
+        # "{candidates}" is filled from the candidates' own labels below, so it cannot drift from them.
+        description="Traces your image with {candidates}, and keeps the cleanest result that is as faithful "
+                    "as the best. Start here.",
         sample="auto.png",
         params={},
     ),
@@ -114,7 +115,16 @@ _PRESETS: list[dict[str, Any]] = [
     ),
 ]
 
-PRESETS: list[Preset] = [Preset(engine="vexel", detail=_DETAIL.get(p["id"], _UNMEASURED), **p) for p in _PRESETS]
+def _and(words: list[str]) -> str:
+    return words[0] if len(words) < 2 else f"{', '.join(words[:-1])} and {words[-1]}"
+
+
+_CANDIDATE_LABELS = _and([p["label"] for p in _PRESETS if p.get("auto_candidate")])
+PRESETS: list[Preset] = [
+    Preset(engine="vexel", detail=_DETAIL.get(p["id"], _UNMEASURED),
+           **{**p, "description": p["description"].replace("{candidates}", _CANDIDATE_LABELS)})
+    for p in _PRESETS
+]
 
 
 def all_presets() -> list[Preset]:

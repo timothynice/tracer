@@ -347,3 +347,10 @@ def test_presets_lead_with_auto_and_say_what_auto_tries(client):
     assert next(p for p in body if p["id"] == "dense")["label"] == "Simplified"
     detailed = next(p for p in body if p["id"] == "detailed")
     assert detailed["params"] == {"detail": 3.5, "min_region": 6, "max_stops": 6, "curve_tolerance": 0.4}
+
+
+def test_auto_names_its_candidates_by_their_own_labels(client):
+    body = client.get("/presets").json()
+    labels = [p["label"] for p in body if p["auto_candidate"]]
+    assert all(label in body[0]["description"] for label in labels), body[0]["description"]
+    assert "{candidates}" not in body[0]["description"]
