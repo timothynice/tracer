@@ -278,7 +278,6 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
     if weights is not None:
         w_all = w_all * np.asarray(weights, dtype=float).ravel()
     painted = float(np.average(col[:, 3] / 255.0, weights=weights)) > INVISIBLE_ALPHA
-    import os; painted = painted or bool(os.environ.get("VX_NOINV"))  # DEBUG-REMOVE
 
     rng = np.random.default_rng(1234)
     sel = _subsample(xs.size, rng)
@@ -380,7 +379,6 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
     # --- choose: a gradient must buy a real improvement over solid ---------------------
     penalty = {"solid": 0.0, "linear": 0.35 * params.tol, "radial": 0.5 * params.tol}
     best_rms, best = min(candidates, key=lambda cr: cr[0] + penalty[cr[1].kind])
-    import builtins; getattr(builtins, "_FDEBUG", []).append((candidates, rms_solid, mean))  # DEBUG-REMOVE
     if best.kind != "solid":
         if rms_solid - best_rms < 0.25 * params.tol:
             return solid
