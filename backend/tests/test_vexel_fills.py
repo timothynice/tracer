@@ -185,3 +185,30 @@ def test_ramp_stops_keep_a_minimum_pixel_gap():
     stops = ramp_fit(t, col, np.ones_like(t), max_stops=6, tol=0.5, span=10.0)
     offs = [s.offset for s in stops]
     assert all(b - a >= KNOT_GAP / 10.0 - 1e-9 for a, b in zip(offs, offs[1:]))
+
+
+def test_an_unpainted_region_is_solid_in_both_engines():
+    """The transparent canvas is never drawn; its fill is only what the rescue
+    measures ink against and what an edge is placed against. A radial fitted
+    to its alpha takes up a shadow's falloff (or a faint ring) that the rescue
+    should see, so a region at most INVISIBLE_ALPHA painted fits solid."""
+    import pytest
+
+    from studi0trace.engines.vexel import engine as vexel
+    from studi0trace.engines.vexel.fills import INVISIBLE_ALPHA
+
+    xs, ys = grid(96, 96)
+    r = np.hypot(xs - 48, ys - 48)
+    col = np.zeros((xs.size, 4))
+    col[:, 3] = 255.0 * 0.3 * np.exp(-((r / 14.0) ** 2))  # a faint glow, mostly nothing
+    assert col[:, 3].mean() / 255.0 <= INVISIBLE_ALPHA
+    fill = fit_fill(xs, ys, col, P)
+    assert isinstance(fill, Solid)
+    if vexel._vexel_rs is None:
+        pytest.skip("the vexel_rs extension is not built")
+    kind, _ = vexel._vexel_rs._fit_fill(xs.tolist(), ys.tolist(), col.ravel().tolist(), [1.0] * xs.size,
+                                        True, 4, 4.0, None)
+    assert kind == "solid"
+    # The same glow a little stronger is painted, and is a gradient.
+    col[:, 3] *= 3.0
+    assert not isinstance(fit_fill(xs, ys, col, P), Solid)

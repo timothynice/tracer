@@ -5,7 +5,7 @@ use crate::core::grid::{Grid, Image, Mask};
 use crate::core::labels::{self, LabelIndex, Labels};
 use crate::core::morphology::dilate_cross;
 use crate::curves::{fit_shape, CurveParams, Shape};
-use crate::fills::{fit_fill, Fill, FitParams};
+use crate::fills::{fit_fill, Fill, FitParams, INVISIBLE_ALPHA};
 use crate::merge::{adjacency, merge_regions, MergeParams};
 use crate::order::{enclosure, paint_order, shape_labels, shape_mask, Enclosure};
 use crate::topology::{self, Boundary};
@@ -188,7 +188,7 @@ fn fit_regions(
                 num += alpha.data[*i as usize] * w[k];
                 den += w[k];
             }
-            (*lab, fill, num / den.max(1e-12) > 0.04, core)
+            (*lab, fill, num / den.max(1e-12) > INVISIBLE_ALPHA, core)
         })
         .collect();
     let mut fills = HashMap::new();
@@ -424,7 +424,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                     num += prep.alpha.data[*i as usize] * w[k];
                     den += w[k];
                 }
-                (*lab, num / den.max(1e-12) > 0.04)
+                (*lab, num / den.max(1e-12) > INVISIBLE_ALPHA)
             })
             .collect();
         for (lab, v) in vis {
@@ -472,6 +472,27 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                 let (x, y, c) = mask_pixels(&m, &xs, &ys, &corrected);
                 fills.insert(lab, fit_fill(&x, &y, &c, &fit_params, Some(&w), Some(&core)));
             }
+        }
+        if let (Some(canvas), false) = (shadow_plan.canvas, shadow_plan.absorbed.is_empty()) {
+            // On a transparent canvas the bands a filter explains are canvas
+            // with the shadow drawn over it: they join it, and the caster's
+            // edge there is placed against the canvas like the rest of its
+            // outline. See the Python.
+            let gone: HashSet<i32> = std::mem::take(&mut shadow_plan.absorbed);
+            for v in l.data.iter_mut() {
+                if gone.contains(v) {
+                    *v = canvas;
+                }
+            }
+            for lab in &gone {
+                fills.remove(lab);
+                visible.remove(lab);
+                order.retain(|x| x != lab);
+                invisible.remove(lab);
+            }
+            index = LabelIndex::build(&l);
+            ids = labels::unique_ids(&l);
+            enc = enclosure(&l);
         }
     }
 
@@ -820,6 +841,32 @@ struct Painting<'a> {
     over_backdrop: &'a HashSet<i32>,
 }
 
+/// Bilinear samples of an (h·w) per-pixel grid at image points (qx, qy); pixel
+/// (r, c) is centred at (c + 0.5, r + 0.5), and points past the outer centres
+/// take the edge value. `engine.sample_bilinear` in the Python.
+fn sample_bilinear(grid: &[[f64; 4]], h: usize, w: usize, qx: &[f64], qy: &[f64]) -> Vec<[f64; 4]> {
+    qx.iter()
+        .zip(qy.iter())
+        .map(|(x, y)| {
+            let fx = (x - 0.5).clamp(0.0, w as f64 - 1.0);
+            let fy = (y - 0.5).clamp(0.0, h as f64 - 1.0);
+            let x0 = (fx.floor() as usize).min(w - 1);
+            let y0 = (fy.floor() as usize).min(h - 1);
+            let x1 = (x0 + 1).min(w - 1);
+            let y1 = (y0 + 1).min(h - 1);
+            let tx = fx - x0 as f64;
+            let ty = fy - y0 as f64;
+            let mut out = [0.0; 4];
+            for c in 0..4 {
+                let top = grid[y0 * w + x0][c] * (1.0 - tx) + grid[y0 * w + x1][c] * tx;
+                let bottom = grid[y1 * w + x0][c] * (1.0 - tx) + grid[y1 * w + x1][c] * tx;
+                out[c] = top * (1.0 - ty) + bottom * ty;
+            }
+            out
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit(
     l: &Labels,
@@ -863,11 +910,23 @@ fn emit(
     see_through.extend(painting.stroked.keys().copied());
     let painted_by: HashMap<i32, i32> =
         painting.underlay.iter().flat_map(|(owner, ts)| ts.iter().map(move |t| (*t, *owner))).collect();
+    // Under a drop shadow on a transparent canvas, the canvas shows the shadow:
+    // an edge there is placed against that (`shadows._detect_clear`).
+    let ground = match (shadow_plan.canvas, shadow_plan.ground.as_ref()) {
+        (Some(c), Some(g)) => Some((c, g)),
+        _ => None,
+    };
+    let place_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+        match ground {
+            Some((c, g)) if c == lab => sample_bilinear(g, height, width, qx, qy),
+            _ => fill_at(lab, qx, qy),
+        }
+    };
     let mut bnd = topology::build(
         l,
         &prep.rgb,
         &prep.alpha,
-        &fill_at,
+        &place_at,
         curve_params,
         if stacked { Some(&rank) } else { None },
         &topology::Underlay { see_through, painted_by },

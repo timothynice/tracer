@@ -22,7 +22,7 @@ from studi0trace.engines.base import TraceInput, TraceResult, finish
 from studi0trace.engines.vexel.boundary import thin_coverage
 from studi0trace.engines.vexel import dump, refine_render, reuse
 from studi0trace.engines.vexel.curves import CurveParams, PathShape, Shape, fit_shape, shape_svg
-from studi0trace.engines.vexel.fills import FitParams, Solid, fit_fill
+from studi0trace.engines.vexel.fills import INVISIBLE_ALPHA, FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import MergeParams, adjacency, merge_regions
 from studi0trace.engines.vexel.order import enclosure, paint_order, shape_labels, shape_mask
 from studi0trace.engines.vexel import topology
@@ -304,6 +304,24 @@ class VexelEngine:
         return finish(svg, image, started)
 
 
+def sample_bilinear(grid: np.ndarray, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
+    """(N, C) bilinear samples of an (H, W, C) per-pixel grid at image points
+    (qx, qy); pixel (r, c) is centred at (c + 0.5, r + 0.5), and points past
+    the outer centres take the edge value."""
+    h, w = grid.shape[:2]
+    fx = np.clip(np.asarray(qx, dtype=np.float64) - 0.5, 0.0, w - 1.0)
+    fy = np.clip(np.asarray(qy, dtype=np.float64) - 0.5, 0.0, h - 1.0)
+    x0 = np.minimum(np.floor(fx).astype(np.intp), w - 1)
+    y0 = np.minimum(np.floor(fy).astype(np.intp), h - 1)
+    x1 = np.minimum(x0 + 1, w - 1)
+    y1 = np.minimum(y0 + 1, h - 1)
+    tx = (fx - x0)[:, None]
+    ty = (fy - y0)[:, None]
+    top = grid[y0, x0] * (1.0 - tx) + grid[y0, x1] * tx
+    bottom = grid[y1, x0] * (1.0 - tx) + grid[y1, x1] * tx
+    return top * (1.0 - ty) + bottom * ty
+
+
 def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     height, width = rgba.shape[:2]
     prep = prepare(rgba)
@@ -333,7 +351,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             w, core = interior(m)
             core_map[m] = core
             fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], fit_params, weights=w, core=core)
-            visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.04
+            visible[lab] = float(np.average(prep.alpha[m], weights=w)) > INVISIBLE_ALPHA
 
     ids = [int(i) for i in np.unique(labels) if i != 0]
     fit_regions(ids)
@@ -394,7 +412,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         visible.clear()
         for lab in ids:
             m = labels == lab
-            visible[lab] = float(np.average(prep.alpha[m], weights=interior_weights(m))) > 0.04
+            visible[lab] = float(np.average(prep.alpha[m], weights=interior_weights(m))) > INVISIBLE_ALPHA
 
     def fill_at(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
         return fills[lab].evaluate(qx, qy)
@@ -423,6 +441,22 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 m = labels == lab
                 w, core = interior(m)
                 fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w, core=core)
+        if shadow_plan.canvas is not None and shadow_plan.absorbed:
+            # On a transparent canvas the bands a filter explains are canvas
+            # with the shadow drawn over it: they join it, and the caster's edge
+            # there is placed against the canvas like the rest of its outline,
+            # not against a band that is no longer drawn (whose staircase of
+            # teeth had hidden the notches that edge was placed with).
+            gone = sorted(shadow_plan.absorbed)
+            labels = np.where(np.isin(labels, gone), shadow_plan.canvas, labels).astype(np.int32)
+            for lab in gone:
+                fills.pop(lab, None)
+                visible.pop(lab, None)
+                order.remove(lab)
+                invisible.discard(lab)
+            ids = [int(i) for i in np.unique(labels) if i != 0]
+            enc = enclosure(labels)
+            shadow_plan.absorbed = set()
 
     # Thin regions are drawn lines. A single line often arrives as several
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions
@@ -566,8 +600,17 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     if p.upsample == "always" or (p.upsample == "auto" and wants_upsample(labels, height, width)):
         dump.text("upsample", "2x\n")
         return halve(trace_rgba(upsample2x(rgba), p.model_copy(update={"upsample": "never"})), width, height)
+    place_at = fill_at
+    if shadow_plan.ground is not None and shadow_plan.canvas is not None:
+        ground_lab, ground = shadow_plan.canvas, shadow_plan.ground
+
+        def place_at(lab: int, qx: np.ndarray, qy: np.ndarray) -> np.ndarray:
+            if lab != ground_lab:
+                return fills[lab].evaluate(qx, qy)
+            return sample_bilinear(ground, qx, qy)
+
     bnd = topology.build(
-        labels, prep.rgb, prep.alpha, fill_at, curve_params,
+        labels, prep.rgb, prep.alpha, place_at, curve_params,
         rank={lab: i for i, lab in enumerate(order)} if stacked else None,
         # Nothing bleeds under paint that does not hide it: a top an overlap
         # made translucent, or a region drawn as a line along its middle.

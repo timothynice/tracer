@@ -137,6 +137,14 @@ def rescue_features(
     the core; edge-band pixels may belong to one that does (the darkest band of
     a drop shadow runs right up to its caster). Without this the rebound ring
     became a sliver region along every glyph at low `detail`.
+    `edge_mix` covers most of the same ground, but not all of it: with both in
+    place, dropping this rule changes nothing at the default preset (corpus
+    artifact index 28.80 against 28.82; the wordmark's SVG is the same byte
+    for byte under every preset), and at Detailed it costs 10 % of the
+    corpus artifact index (55.4 -> 61.2), 8 % more slivers and half an element
+    per image, nearly all of it on glows and shadows (logomark-128 +252,
+    inset-well-128 +80, radii-128 +59), whose bands `edge_mix` does not read
+    as a mix of the two fills beside them.
     Returns (new labels, ids of the rescued regions).
     """
     candidates = (residual > threshold) & ~boundary_band(labels)

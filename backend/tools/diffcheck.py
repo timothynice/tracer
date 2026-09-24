@@ -244,38 +244,48 @@ def _rust_fill(kind: str, vals: list[float]):
     return Radial(*vals[:3], stops=stops)
 
 
+# The fill fits the stage runs: the regions and FitParams of the default preset
+# (detail 6, min_region 6 → tol 3, four stops) and of Detailed (detail 3.5,
+# min_region 3 → tol 2, six stops), whose looser partition hands the fitter
+# small translucent regions where the choice between solid and gradient sits
+# near its thresholds.
+FILL_FITS = (("balanced", 6.0, 6, 4), ("detailed", 3.5, 3, 6))
+
+
 @stage
 def fills(path):
     """What every merged region's fitted fill actually paints, sampled at the
-    region's own pixels."""
+    region's own pixels, under each of `FILL_FITS`."""
     a = load(path)
     h, w = a.shape[:2]
     prep = prepare(a)
     g = discontinuity(prep.features)
-    labels = merge_regions(initial_labels(g, prep.features, min_region=6), prep.features,
-                           MergeParams(detail=6.0, gradients=True), g)
     ys, xs = np.mgrid[0:h, 0:w]
     xs = xs.astype(np.float64) + 0.5
     ys = ys.astype(np.float64) + 0.5
     rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
-    params = FitParams(gradients=True, max_stops=4, tol=3.0)
     py_out, rs_out = [], []
-    for lab in (int(i) for i in np.unique(labels) if i):
-        m = labels == lab
-        wt, core = interior(m)
-        f = fit_fill(xs[m], ys[m], rgba255[m], params, weights=wt, core=core)
-        kind, vals = vexel_rs._fit_fill(xs[m].tolist(), ys[m].tolist(), rgba255[m].ravel().tolist(),
-                                        wt.tolist(), True, 4, 3.0, core.tolist())
-        if f.kind != kind:
-            print(f"  FAIL fills     {path.name}: region {lab} is {f.kind} in Python, {kind} in Rust")
-            return np.zeros(1), np.full(1, 1e9)
-        # sample at most a few thousand of the region's pixels; the fill is
-        # smooth, so more tells us nothing
-        px, py_ = xs[m], ys[m]
-        step = max(1, px.size // 2000)
-        px, py_ = px[::step], py_[::step]
-        py_out.append(f.evaluate(px, py_))
-        rs_out.append(_rust_fill(kind, vals).evaluate(px, py_))
+    for fit, detail, min_region, max_stops in FILL_FITS:
+        labels = merge_regions(initial_labels(g, prep.features, min_region=min_region), prep.features,
+                               MergeParams(detail=detail, gradients=True), g)
+        tol = max(2.0, detail / 2.0)  # the engine's
+        params = FitParams(gradients=True, max_stops=max_stops, tol=tol)
+        for lab in (int(i) for i in np.unique(labels) if i):
+            m = labels == lab
+            wt, core = interior(m)
+            f = fit_fill(xs[m], ys[m], rgba255[m], params, weights=wt, core=core)
+            kind, vals = vexel_rs._fit_fill(xs[m].tolist(), ys[m].tolist(), rgba255[m].ravel().tolist(),
+                                            wt.tolist(), True, max_stops, tol, core.tolist())
+            if f.kind != kind:
+                print(f"  FAIL fills     {path.name}: {fit} region {lab} is {f.kind} in Python, {kind} in Rust")
+                return np.zeros(1), np.full(1, 1e9)
+            # sample at most a few thousand of the region's pixels; the fill is
+            # smooth, so more tells us nothing
+            px, py_ = xs[m], ys[m]
+            step = max(1, px.size // 2000)
+            px, py_ = px[::step], py_[::step]
+            py_out.append(f.evaluate(px, py_))
+            rs_out.append(_rust_fill(kind, vals).evaluate(px, py_))
     if not py_out:
         return np.zeros(1), np.zeros(1)
     return np.concatenate(py_out), np.concatenate(rs_out)

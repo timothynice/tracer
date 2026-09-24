@@ -92,6 +92,8 @@ pub const TRIM_SHARE: f64 = 0.3;
 /// An arc shorter than this has no direction worth reading; nodes it joins are
 /// one junction, and it collapses onto them.
 pub const SHORT_ARC: f64 = 2.1;
+/// px: a vertex this close to the end guard of `open_corners` is on it.
+pub const GUARD_TIE: f64 = 1e-9;
 /// Two arcs leaving a node are one smooth curve only if one line or one cubic
 /// fits SMOOTH_SPAN px of each, node in the middle, within SMOOTH_TOL of the
 /// tolerance; pairs turning more than SMOOTH_MAX_TURN are not tried.
@@ -470,6 +472,12 @@ impl LocalFills {
     }
 }
 
+/// An rgba255 colour with its RGB scaled by its alpha: what the pixel shows.
+fn premultiplied(c: &[f64; 4]) -> [f64; 4] {
+    let a = c[3] / 255.0;
+    [c[0] * a, c[1] * a, c[2] * a, c[3]]
+}
+
 /// How much of each pixel is `lab` rather than `other`, read from its colour.
 ///
 /// Given `local`, the reference colours are the fills as they are beside the
@@ -517,13 +525,16 @@ fn coverage(
             }
             let (r, c) = (r as usize, c as usize);
             let px = rgb.at(r, c);
-            let colour = [px[0], px[1], px[2], *alpha.get(r, c) * 255.0];
+            // Premultiplied, as the pixel shows: the colour under a transparent
+            // pixel is inpainted and means nothing. See `topology._premultiplied`.
+            let colour = premultiplied(&[px[0], px[1], px[2], *alpha.get(r, c) * 255.0]);
+            let (fa, fb) = (premultiplied(&f_a[k]), premultiplied(&f_b[k]));
             let mut denom = 0.0;
             let mut proj = 0.0;
             for ch in 0..4 {
-                let d = f_a[k][ch] - f_b[k][ch];
+                let d = fa[ch] - fb[ch];
                 denom += d * d;
-                proj += (colour[ch] - f_b[k][ch]) * d;
+                proj += (colour[ch] - fb[ch]) * d;
             }
             if denom > 1e-6 {
                 proj / denom.max(1e-9)
@@ -624,6 +635,36 @@ fn crossing(
         .unzip()
 }
 
+/// A vertex whose four samples all sit on one side of a half has no crossing
+/// within reach along its own step: on a steep staircase the step meets the
+/// edge at a glancing angle, and the edge is a pixel or more beyond it. Left at
+/// the label edge it stands out of line with its neighbours: a spike. Where both
+/// neighbours found their crossing and one of them found it beyond the label
+/// edge on that same side, it takes the midpoint of its neighbours; where both
+/// sit inside their own two pixels (a shape's corner pixel, too mixed to cross
+/// a half on either axis) the label edge is the corner, and it stays. A closed
+/// ring has no ends. `topology._place` in the Python.
+fn lone_vertices(pts: &mut [P], t: &[f64], side: &[i8], closed: bool) {
+    let n = pts.len();
+    if n < 3 {
+        return;
+    }
+    let found = |k: usize| side[k] == 0;
+    let beyond_a = |k: usize| t[k] < 0.0 && side[k] == 0;
+    let beyond_b = |k: usize| t[k] > 1.0 && side[k] == 0;
+    let orig: Vec<P> = pts.to_vec();
+    let (first, last) = if closed { (0, n) } else { (1, n - 1) };
+    for k in first..last {
+        let (pk, nk) = ((k + n - 1) % n, (k + 1) % n);
+        let lone = found(pk)
+            && found(nk)
+            && ((side[k] == -1 && (beyond_a(pk) || beyond_a(nk))) || (side[k] == 1 && (beyond_b(pk) || beyond_b(nk))));
+        if lone {
+            pts[k] = [(orig[pk][0] + orig[nk][0]) / 2.0, (orig[pk][1] + orig[nk][1]) / 2.0];
+        }
+    }
+}
+
 /// Sub-pixel position, and the side-to-side step, for every lattice edge of every arc.
 fn place(
     chains: &[Chain],
@@ -674,25 +715,10 @@ fn place(
                 // the other boundary has an equal call on. See the Python.
                 let tk = if crowded[k] { t[k].clamp(0.0, 1.0) } else { t[k] };
                 pts.push([c_in[0] + tk * step[0], c_in[1] + tk * step[1]]);
-                normal.push(step);
                 placed_t.push(tk);
+                normal.push(step);
             }
-            if pts.len() >= 3 {
-                // A vertex with no crossing within reach along its own step,
-                // whose neighbours both found the edge beyond the label edge on
-                // the side its samples point to, takes their midpoint: left at
-                // the label edge it is a spike. See the Python.
-                let beyond_a = |k: usize| placed_t[k] < 0.0 && side[k] == 0;
-                let beyond_b = |k: usize| placed_t[k] > 1.0 && side[k] == 0;
-                let before = pts.clone();
-                for k in 1..pts.len() - 1 {
-                    let lone = (side[k] == -1 && beyond_a(k - 1) && beyond_a(k + 1))
-                        || (side[k] == 1 && beyond_b(k - 1) && beyond_b(k + 1));
-                    if lone {
-                        pts[k] = [(before[k - 1][0] + before[k + 1][0]) / 2.0, (before[k - 1][1] + before[k + 1][1]) / 2.0];
-                    }
-                }
-            }
+            lone_vertices(&mut pts, &placed_t, &side, ch.n0.is_none());
             pts = unfold(&pts);
             if !handed_back.is_empty() {
                 pts = settle(&pts, &crowded);
@@ -2101,10 +2127,12 @@ fn open_corners(pts: &[P], threshold_deg: f64) -> Vec<usize> {
         }
     }
     // The ends are nodes: already placed, already tangent-matched, and the chord
-    // either side of them is truncated, which biases the angle there.
+    // either side of them is truncated, which biases the angle there. The test
+    // is inclusive at both ends, and a vertex within GUARD_TIE of the guard is
+    // on it: a staircase's last step is exactly one pixel. See the Python.
     const GUARD: f64 = 1.0;
     for k in 0..n {
-        if cum[k] < GUARD || cum[k] > total - GUARD {
+        if cum[k] <= GUARD + GUARD_TIE || cum[k] >= total - GUARD - GUARD_TIE {
             angles[k] = 0.0;
         }
     }

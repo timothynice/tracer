@@ -27,7 +27,7 @@ use crate::fills::{fmt, hex, Fill};
 use crate::prepare::Prepared;
 use crate::timing::Timer;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Fitting runs on a grid no larger than this on the long edge: σ scales with
 /// the image, so the objective's shape does not need full resolution.
@@ -43,6 +43,9 @@ const MIN_PEAK: f64 = 5.0;
 /// a model computed here while the judge is a renderer, and the two agree only
 /// to within a fraction of a colour level.
 const WIN_MARGIN: f64 = 0.75;
+/// On a transparent canvas, a region whose mean alpha is under this may be a
+/// shadow's band; the opaque rest of the ink are the casters.
+const CLEAR_BAND_ALPHA: f64 = 0.9;
 
 #[derive(Clone)]
 pub struct Shadow {
@@ -67,6 +70,10 @@ pub struct ShadowPlan {
     pub refit: HashSet<i32>,
     /// rgba255 with the accepted shadows removed
     pub corrected: Option<Vec<[f64; 4]>>,
+    /// the transparent canvas the shadows fall on (`detect_clear`), if they do
+    pub canvas: Option<i32>,
+    /// (H·W) rgba255, straight: what that canvas shows under the shadows
+    pub ground: Option<Vec<[f64; 4]>>,
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -324,22 +331,23 @@ fn is_sharp(observed: &Image, sil: &Mask, grad: &Grid<f64>) -> bool {
         return false;
     }
     let global = |i: usize| -> usize { (i / w + r0) * observed.w + (i % w + c0) };
-    let mean = |mask: &Mask| -> [f64; 3] {
-        let mut s = [0.0f64; 3];
+    let nc = observed.c;
+    let mean = |mask: &Mask| -> Vec<f64> {
+        let mut s = vec![0.0f64; nc];
         let mut n = 0usize;
         for i in 0..mask.len() {
             if mask.data[i] {
                 let p = observed.px(global(i));
-                for c in 0..3 {
+                for c in 0..nc {
                     s[c] += p[c];
                 }
                 n += 1;
             }
         }
-        [s[0] / n as f64, s[1] / n as f64, s[2] / n as f64]
+        s.iter().map(|v| v / n as f64).collect()
     };
     let (a, b) = (mean(&inner), mean(&outer));
-    let step = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+    let step = (0..nc).map(|c| (a[c] - b[c]).powi(2)).sum::<f64>().sqrt();
     if step < 8.0 {
         return false;
     }
@@ -358,7 +366,7 @@ fn is_sharp(observed: &Image, sil: &Mask, grad: &Grid<f64>) -> bool {
 fn sharpness_grad(observed: &Image) -> Grid<f64> {
     let (h, w) = (observed.h, observed.w);
     let mut acc = Grid::<f64>::new(h, w);
-    for c in 0..3 {
+    for c in 0..observed.c {
         let ch = observed.channel(c);
         let g0 = sobel(&ch, 0);
         let g1 = sobel(&ch, 1);
@@ -484,12 +492,30 @@ pub fn detect_shadows(
         on_border.insert(l.data[r * w]);
         on_border.insert(l.data[r * w + w - 1]);
     }
-    let Some(backdrop) = vis
-        .iter()
-        .filter(|lab| on_border.contains(lab))
-        .max_by_key(|lab| areas[lab])
-        .copied()
-    else {
+    // `max` by area, the first (lowest label) of equals, as the Python's `max`
+    let largest = |labs: &mut dyn Iterator<Item = i32>| -> Option<i32> {
+        let mut best: Option<i32> = None;
+        for lab in labs {
+            if best.is_none_or(|b| areas[&lab] > areas[&b]) {
+                best = Some(lab);
+            }
+        }
+        best
+    };
+    let backdrop = largest(&mut vis.iter().copied().filter(|lab| on_border.contains(lab)));
+    // Artwork on a transparent canvas: the canvas is the unpainted region on
+    // the border, and when it is the larger ground a shadow on it is ink of
+    // its own (`detect_clear`), not a darkening of a backdrop colour.
+    let canvas = largest(
+        &mut ids.iter().copied().filter(|lab| !visible.get(lab).copied().unwrap_or(false) && on_border.contains(lab)),
+    );
+    if let Some(cv) = canvas {
+        if (areas[&cv] as f64) >= 0.05 * total && backdrop.is_none_or(|b| areas[&cv] > areas[&b]) {
+            detect_clear(&mut plan, l, &index, fills, visible, silhouette, prep, xs, ys, &areas, &vis, cv, min_region, total);
+            return plan;
+        }
+    }
+    let Some(backdrop) = backdrop else {
         return plan;
     };
     if (areas[&backdrop] as f64) < 0.05 * total {
@@ -852,6 +878,301 @@ fn try_ray(
     }
     plan.corrected = Some(corrected);
     true
+}
+
+/// Colour times alpha, and alpha, both 0–255: what a pixel adds over nothing.
+fn premultiplied(rgb: &[f64], a01: f64) -> [f64; 4] {
+    [rgb[0] * a01, rgb[1] * a01, rgb[2] * a01, a01 * 255.0]
+}
+
+/// A drop shadow or glow on a transparent canvas: no backdrop colour to
+/// darken, so the shadow is ink of its own (colour C at alpha o·g) and the
+/// blur is fitted to the alpha over the canvas side of each caster, judged
+/// against the bands in premultiplied colour. See `shadows._detect_clear`.
+#[allow(clippy::too_many_arguments)]
+fn detect_clear(
+    plan: &mut ShadowPlan,
+    l: &Labels,
+    index: &LabelIndex,
+    fills: &HashMap<i32, Fill>,
+    visible: &HashMap<i32, bool>,
+    silhouette: &(dyn Fn(i32) -> Mask + Sync),
+    prep: &Prepared,
+    xs: &Grid<f64>,
+    ys: &Grid<f64>,
+    areas: &HashMap<i32, usize>,
+    vis: &[i32],
+    canvas: i32,
+    min_region: usize,
+    total: f64,
+) {
+    let (h, w) = (l.h, l.w);
+    let alpha = &prep.alpha;
+    let rgb = &prep.rgb;
+    let seen = |lab: i32| -> f64 {
+        let px = index.pixels(lab);
+        px.iter().map(|i| alpha.data[*i as usize]).sum::<f64>() / px.len().max(1) as f64
+    };
+    let bands: BTreeSet<i32> = vis
+        .iter()
+        .copied()
+        .filter(|lab| *lab != canvas && seen(*lab) < CLEAR_BAND_ALPHA && (areas[lab] as f64) < 0.4 * total)
+        .collect();
+    let floor = (4 * min_region) as f64;
+    let floor = floor.max(0.004 * total);
+    let mut ink: Vec<i32> = vis
+        .iter()
+        .copied()
+        .filter(|lab| *lab != canvas && !bands.contains(lab) && areas[lab] as f64 >= floor)
+        .collect();
+    if bands.is_empty() || ink.is_empty() {
+        return;
+    }
+    let sils: HashMap<i32, Mask> = ink.iter().map(|lab| (*lab, silhouette(*lab))).collect();
+    ink = ink
+        .iter()
+        .copied()
+        .filter(|lab| {
+            !ink.iter().any(|o| {
+                if o == lab {
+                    return false;
+                }
+                let (a, b) = (&sils[o], &sils[lab]);
+                let n = b.count();
+                if n == 0 {
+                    return false;
+                }
+                let covered = (0..b.len()).filter(|i| b.data[*i] && a.data[*i]).count();
+                covered as f64 / n as f64 > 0.9
+            })
+        })
+        .collect();
+    if ink.is_empty() {
+        return;
+    }
+    let mut painted = Grid::filled(h, w, false);
+    for lab in &ink {
+        painted.or_with(&sils[lab]);
+    }
+    let owner: Vec<usize> = if ink.len() > 1 {
+        let dists: Vec<Grid<f64>> = ink.par_iter().map(|lab| edt_to_true(&sils[lab])).collect();
+        (0..h * w)
+            .map(|i| {
+                let mut best = 0usize;
+                for k in 1..dists.len() {
+                    if dists[k].data[i] < dists[best].data[i] {
+                        best = k;
+                    }
+                }
+                best
+            })
+            .collect()
+    } else {
+        vec![0usize; h * w]
+    };
+
+    let mut observed = Image::new(h, w, 4);
+    for i in 0..h * w {
+        observed.px_mut(i).copy_from_slice(&premultiplied(rgb.px(i), alpha.data[i]));
+    }
+    let sharp_grad = sharpness_grad(&observed);
+    let step = ((h.max(w) as f64 / FIT_EDGE as f64).round() as usize).max(1);
+    let (sh, sw) = (h.div_ceil(step), w.div_ceil(step));
+    let small_mask = |m: &Mask| -> Mask {
+        let mut out = Grid::filled(sh, sw, false);
+        for r in 0..sh {
+            for c in 0..sw {
+                out.data[r * sw + c] = m.data[(r * step) * w + c * step];
+            }
+        }
+        out
+    };
+    let mut small_alpha = Grid::<f64>::new(sh, sw);
+    for r in 0..sh {
+        for c in 0..sw {
+            small_alpha.data[r * sw + c] = alpha.data[(r * step) * w + c * step] * 255.0;
+        }
+    }
+
+    type Fitted = (i32, f64, f64, f64, f64, [f64; 3], BTreeSet<i32>);
+    let fitted: Vec<Fitted> = ink
+        .par_iter()
+        .enumerate()
+        .filter_map(|(i, caster)| {
+            let sil = &sils[caster];
+            if !is_sharp(&observed, sil, &sharp_grad) {
+                return None;
+            }
+            let cell = Grid { h, w, data: (0..h * w).map(|k| !painted.data[k] && owner[k] == i).collect() };
+            if cell.count() < 64 {
+                return None;
+            }
+            let group: BTreeSet<i32> = bands
+                .iter()
+                .copied()
+                .filter(|lab| {
+                    let px = index.pixels(*lab);
+                    !px.is_empty() && px.iter().filter(|k| cell.data[**k as usize]).count() as f64 / px.len() as f64 > 0.9
+                })
+                .collect();
+            if group.is_empty() {
+                return None;
+            }
+            let cell_small = small_mask(&cell);
+            let mut target = Grid::<f64>::new(sh, sw);
+            for k in 0..cell_small.len() {
+                if cell_small.data[k] {
+                    target.data[k] = small_alpha.data[k];
+                }
+            }
+            let tmax = target.data.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            if tmax < MIN_PEAK {
+                return None;
+            }
+            let src = small_mask(sil);
+            let src = Grid { h: src.h, w: src.w, data: src.data.iter().map(|b| *b as u8 as f64).collect() };
+            if src.data.iter().sum::<f64>() < 16.0 {
+                return None;
+            }
+            let (mut gx, mut gy, mut gn) = (0.0f64, 0.0f64, 0usize);
+            let (mut sx, mut sy, mut sn) = (0.0f64, 0.0f64, 0usize);
+            for k in 0..cell_small.len() {
+                let (r, c) = (k / sw, k % sw);
+                if cell_small.data[k] && target.data[k] > 0.35 * tmax {
+                    gx += c as f64;
+                    gy += r as f64;
+                    gn += 1;
+                }
+                if src.data[k] > 0.5 {
+                    sx += c as f64;
+                    sy += r as f64;
+                    sn += 1;
+                }
+            }
+            let seed = if gn > 0 && sn > 0 {
+                (gx / gn as f64 - sx / sn as f64, gy / gn as f64 - sy / sn as f64)
+            } else {
+                (0.0, 0.0)
+            };
+            let (dx, dy, sigma, k, _) = fit_blur(&src, &target, &cell_small, seed, false);
+            let opacity = (k / 255.0).min(1.0);
+            if opacity < 0.02 {
+                return None;
+            }
+            let (mut num, mut den) = ([0.0f64; 3], 0.0f64);
+            for (i, lab) in l.data.iter().enumerate() {
+                if group.contains(lab) {
+                    let a = alpha.data[i].max(1e-6);
+                    let p = rgb.px(i);
+                    for c in 0..3 {
+                        num[c] += p[c] * a;
+                    }
+                    den += a;
+                }
+            }
+            let colour = [num[0] / den, num[1] / den, num[2] / den];
+            let s = step as f64;
+            Some((*caster, dx * s, dy * s, sigma * s, opacity, colour, group))
+        })
+        .collect();
+    if fitted.is_empty() {
+        return;
+    }
+
+    // Composed as the renderer will, over nothing; the bands as they would be
+    // painted, the canvas and anything else unpainted as nothing.
+    let idx: Vec<usize> = (0..h * w).filter(|i| !painted.data[*i]).collect();
+    let blurs: HashMap<i32, Grid<f64>> = fitted
+        .par_iter()
+        .map(|(caster, dx, dy, sigma, _, _, _)| {
+            let a = Grid { h, w, data: sils[caster].data.iter().map(|b| *b as u8 as f64).collect() };
+            (*caster, blur_shift(&a, *dx, *dy, *sigma))
+        })
+        .collect();
+    let mut model: Vec<[f64; 4]> = vec![[0.0; 4]; idx.len()];
+    for (caster, _, _, _, opacity, colour, _) in &fitted {
+        let g = &blurs[caster];
+        let clipped = [colour[0].clamp(0.0, 255.0), colour[1].clamp(0.0, 255.0), colour[2].clamp(0.0, 255.0)];
+        model.par_iter_mut().zip(idx.par_iter()).for_each(|(m, i)| {
+            let a = opacity * g.data[*i];
+            for c in 0..3 {
+                m[c] = m[c] * (1.0 - a) + clipped[c] * a;
+            }
+            m[3] = m[3] * (1.0 - a) + 255.0 * a;
+        });
+    }
+    let (filter_sq, band_sq) = idx
+        .par_iter()
+        .enumerate()
+        .map(|(k, i)| {
+            let p = observed.px(*i);
+            let lab = l.data[*i];
+            let band = if lab != canvas && visible.get(&lab).copied().unwrap_or(false) {
+                match fills.get(&lab) {
+                    Some(f) => {
+                        let v = f.evaluate_one(xs.data[*i], ys.data[*i]);
+                        premultiplied(&v[..3], v[3] / 255.0)
+                    }
+                    None => [0.0; 4],
+                }
+            } else {
+                [0.0; 4]
+            };
+            let (mut fs, mut bs) = (0.0, 0.0);
+            for c in 0..4 {
+                fs += (p[c] - model[k][c]).powi(2);
+                bs += (p[c] - band[c]).powi(2);
+            }
+            (fs, bs)
+        })
+        .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+    let m = (idx.len() * 4) as f64;
+    let (rms, band_rms) = ((filter_sq / m).sqrt(), (band_sq / m).sqrt());
+    if rms >= WIN_MARGIN * band_rms {
+        return;
+    }
+    plan.canvas = Some(canvas);
+    // What the canvas shows once the filters are drawn: the shadows composed
+    // over nothing, as straight colour; an edge between a caster and the canvas
+    // is placed against it. See `shadows._detect_clear`.
+    let mut ground = vec![[0.0f64; 4]; h * w];
+    for (caster, _, _, _, opacity, colour, _) in &fitted {
+        let g = &blurs[caster];
+        let clipped = [colour[0].clamp(0.0, 255.0), colour[1].clamp(0.0, 255.0), colour[2].clamp(0.0, 255.0)];
+        ground.par_iter_mut().enumerate().for_each(|(i, px)| {
+            let a = opacity * g.data[i];
+            for c in 0..3 {
+                px[c] = px[c] * (1.0 - a) + clipped[c] * a;
+            }
+            px[3] = px[3] * (1.0 - a) + 255.0 * a;
+        });
+    }
+    ground.par_iter_mut().for_each(|px| {
+        let a01 = (px[3] / 255.0).max(1e-9);
+        for c in 0..3 {
+            px[c] /= a01;
+        }
+    });
+    plan.ground = Some(ground);
+    for (caster, dx, dy, sigma, opacity, colour, group) in &fitted {
+        let clipped = [colour[0].clamp(0.0, 255.0), colour[1].clamp(0.0, 255.0), colour[2].clamp(0.0, 255.0)];
+        plan.shadows.insert(
+            *caster,
+            Shadow {
+                caster: *caster,
+                dx: *dx,
+                dy: *dy,
+                sigma: *sigma,
+                colour: clipped,
+                opacity: *opacity,
+                inset: false,
+                region: filter_region(&sils[caster], *dx, *dy, *sigma),
+            },
+        );
+        for m in group {
+            plan.absorbed.insert(*m);
+        }
+    }
 }
 
 /// An inner shadow darkens the inside of its own shape, against its own fill.
