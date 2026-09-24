@@ -2100,6 +2100,11 @@ pub fn counter_turn_deg(p0: P, c1: P, c2: P, p1: P) -> f64 {
     ((total - f64::abs(net)) / 2.0).to_degrees()
 }
 
+/// px: tangents that meet this close to an end meet at it (see the Python
+/// `MEET_TIE`: a split beside a repeated vertex put the meeting point exactly
+/// on the far end, 0.0 in one engine and a rounding error past it in the other).
+pub const MEET_TIE: f64 = 1e-9;
+
 /// The cubic from p0 along t1 to p1 along t2 (pointing back), arms a third of
 /// the chord, or no longer than the way to where the tangents meet when that is
 /// shorter and the chord/3 arms would make it an S. See the Python
@@ -2119,7 +2124,7 @@ fn two_point_cubic(p0: P, p1: P, t1: P, t2: P) -> (P, P, P, P) {
     let rhs = sub(p1, p0);
     let s1 = (rhs[0] * -t2[1] - (-t2[0]) * rhs[1]) / det;
     let s2 = (t1[0] * rhs[1] - t1[1] * rhs[0]) / det;
-    if s1 <= 0.0 || s2 <= 0.0 {
+    if s1 <= MEET_TIE || s2 <= MEET_TIE {
         return c;
     }
     arms(d.min(s1), d.min(s2))
@@ -2705,5 +2710,27 @@ mod line_tests {
         let Segment::Cubic { p0: a, c1, c2, p1: b } = segs[0].clone() else { panic!() };
         assert!(counter_turn_deg(a, c1, c2, b) <= INFL_DEG);
         assert_eq!((a, b), (p0, p1));
+    }
+}
+
+#[cfg(test)]
+mod meet_tests {
+    use super::*;
+
+    #[test]
+    fn tangents_that_meet_at_an_end_keep_the_chord_third_arms() {
+        // the Python's test_tangents_that_meet_at_an_end_keep_the_chord_third_arms
+        let p0 = [375.0736477277821, 79.52073564301003];
+        let p1 = [374.6315961869249, 80.27529752783168];
+        let t1 = normalize([-0.31463515, 0.94921269]);
+        let back = normalize(sub(p0, p1));
+        let third = norm(sub(p1, p0)) / 3.0;
+        for turn in [0.0f64, 1e-13, -1e-13] {
+            let (c, s) = (turn.cos(), turn.sin());
+            let t2 = [c * back[0] - s * back[1], s * back[0] + c * back[1]];
+            let (q0, c1, c2, q1) = two_point_cubic(p0, p1, t1, t2);
+            assert!((norm(sub(c1, q0)) - third).abs() < 1e-9 * third, "turn {turn}");
+            assert!((norm(sub(c2, q1)) - third).abs() < 1e-9 * third, "turn {turn}");
+        }
     }
 }

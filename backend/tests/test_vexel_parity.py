@@ -1,7 +1,8 @@
 """The choices the two engines once made differently because nothing defined
 them: a count at a rounding-level integer, an image equidistant from two
 vertices, the principal axes of an isotropic ring, which pixels a large region
-is fitted from, and knots that fit a ramp equally well. Each test holds the
+is fitted from, knots that fit a ramp equally well, and two tangents that meet
+exactly at a cubic's end. Each test holds the
 rule both engines now follow; `tools/diffcheck.py` holds them to each other
 over the corpus."""
 from __future__ import annotations
@@ -130,3 +131,23 @@ def test_both_engines_fit_a_tied_ramp_the_same_way(seed):
     assert kind == fill.kind
     assert [s.offset for s in rust.stops] == [s.offset for s in fill.stops]
     assert np.abs(rust.evaluate(xs, ys) - fill.evaluate(xs, ys)).max() < 1e-6
+
+
+@pytest.mark.parametrize("turn", [0.0, 1e-13, -1e-13])
+def test_tangents_that_meet_at_an_end_keep_the_chord_third_arms(turn):
+    """venn-512's bled copy: a split beside a repeated vertex took its tangent
+    along the chord, so the two tangents of the cubic up to it met exactly at
+    its start. One engine read that as 0.0 and kept the arms, the other as a
+    rounding error past it and cut the start arm to nothing."""
+    from studi0trace.engines.vexel import curves
+
+    p0 = np.array([375.0736477277821, 79.52073564301003])
+    p1 = np.array([374.6315961869249, 80.27529752783168])
+    t1 = np.array([-0.31463515, 0.94921269])
+    t1 = t1 / np.linalg.norm(t1)
+    back = (p0 - p1) / np.linalg.norm(p0 - p1)
+    t2 = np.array([[math.cos(turn), -math.sin(turn)], [math.sin(turn), math.cos(turn)]]) @ back
+    cubic = curves._two_point_cubic(p0, p1, t1, t2)
+    third = float(np.linalg.norm(p1 - p0)) / 3.0
+    assert float(np.linalg.norm(cubic.c1 - cubic.p0)) == pytest.approx(third, rel=1e-9)
+    assert float(np.linalg.norm(cubic.c2 - cubic.p1)) == pytest.approx(third, rel=1e-9)

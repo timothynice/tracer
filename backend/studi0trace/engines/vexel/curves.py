@@ -1510,10 +1510,20 @@ def counter_turn_deg(c: Cubic) -> float:
     return math.degrees((sum(abs(x) for x in lobes) - abs(sum(lobes))) / 2.0)
 
 
+# px: tangents that meet this close to an end meet at it. A split beside a
+# repeated vertex (the bled copy snaps a smooth join's two offsets onto one
+# point, `UNDER_SAME`) takes its tangent along the chord, and the two tangents
+# of the cubic up to it then cross exactly at its far end: 0.0 in the Python
+# and a rounding error past it in the Rust, a full arm in one and none in the
+# other (venn-512's bled copy, 0.28 px).
+MEET_TIE = 1e-9
+
+
 def _two_point_cubic(p0: np.ndarray, p1: np.ndarray, t1: np.ndarray, t2: np.ndarray) -> Cubic:
     """The cubic from p0 along t1 to p1 along t2 (pointing back), arms a third
     of the chord, or no longer than the way to where the two tangents meet
-    when that is shorter and the chord/3 arms would make it an S."""
+    when that is shorter and the chord/3 arms would make it an S. Tangents that
+    meet at an end (within MEET_TIE) or behind it keep the chord/3 arms."""
     d = float(np.linalg.norm(p1 - p0)) / 3.0
     c = Cubic(p0.copy(), p0 + t1 * d, p1 + t2 * d, p1.copy())
     if counter_turn_deg(c) <= INFL_DEG:
@@ -1525,8 +1535,8 @@ def _two_point_cubic(p0: np.ndarray, p1: np.ndarray, t1: np.ndarray, t2: np.ndar
     rhs = p1 - p0
     s1 = float((rhs[0] * -t2[1] - (-t2[0]) * rhs[1]) / det)
     s2 = float((t1[0] * rhs[1] - t1[1] * rhs[0]) / det)
-    if s1 <= 0.0 or s2 <= 0.0:
-        return c  # the tangents diverge: only an S has them
+    if s1 <= MEET_TIE or s2 <= MEET_TIE:
+        return c  # the tangents diverge, or meet at an end: only an S has them
     return Cubic(p0.copy(), p0 + t1 * min(d, s1), p1 + t2 * min(d, s2), p1.copy())
 
 
