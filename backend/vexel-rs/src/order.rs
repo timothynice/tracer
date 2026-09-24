@@ -98,14 +98,19 @@ pub fn paint_order(enc: &Enclosure) -> Vec<i32> {
         .filter(|(_, p)| p.is_none())
         .map(|(i, _)| *i)
         .collect();
+    // Ties (a mosaic of equal tiles) go to the lower label: the roots come out
+    // of a HashMap, whose order changes from run to run, and a tie decided by it
+    // repainted the whole mosaic in a different order every time.
     roots.sort_by(|a, b| {
         let ka = (
             std::cmp::Reverse(enc.border.get(a).copied().unwrap_or(0)),
             std::cmp::Reverse(enc.area.get(a).copied().unwrap_or(0)),
+            *a,
         );
         let kb = (
             std::cmp::Reverse(enc.border.get(b).copied().unwrap_or(0)),
             std::cmp::Reverse(enc.area.get(b).copied().unwrap_or(0)),
+            *b,
         );
         ka.cmp(&kb)
     });

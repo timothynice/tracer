@@ -1504,6 +1504,23 @@ def build(
     # are made exactly so. Nodes never move, so the ring still closes.
     regularize([(arc.segments, arc.closed) for arc in arcs], params.snap_axis_deg)
 
+    later_is_b = _bleed_arcs(arcs, params, rank, bleed, see_through, painted_by)
+    return Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=later_is_b, rank=rank)
+
+
+def _bleed_arcs(
+    arcs: list[Arc],
+    params: CurveParams,
+    rank: dict[int, int] | None,
+    bleed: float = BLEED,
+    see_through: set[int] | None = None,
+    painted_by: dict[int, int] | None = None,
+) -> list[bool]:
+    """Give every fitted arc its bled copy (`Arc.under`, `under_into`,
+    `under_jog`) for the side painted earlier to use, and say for each arc
+    whether pair[1] paints later. See `build` for `see_through`/`painted_by`;
+    `tools/diffcheck.py under` hands this and the Rust `bleed_arcs` one set of
+    fitted arcs."""
     later_is_b: list[bool] = []
     by_label: dict[int, list[int]] = {}
     for idx, arc in enumerate(arcs):
@@ -1556,8 +1573,7 @@ def build(
         loose = replace(params, tol=min(2.0 * params.tol, UNDER_TOL * bleed), kind_tol=math.inf)
         arc.under, arc.under_jog = _under(arc, bleed if into == b else -bleed, loose, walls(into, painter, idx))
         arc.under_into = into
-
-    return Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=later_is_b, rank=rank)
+    return later_is_b
 
 
 def _symmetrize(bnd: Boundary) -> int:
@@ -2697,7 +2713,8 @@ def _ray_gap(pts: np.ndarray, normal: np.ndarray, walls: list[np.ndarray], far: 
     return gap
 
 
-def _under(arc: Arc, amount: float, params: CurveParams, walls: list[np.ndarray] | None = None) -> list[Segment]:
+def _under(arc: Arc, amount: float, params: CurveParams, walls: list[np.ndarray] | None = None
+           ) -> tuple[list[Segment], tuple[bool, bool]]:
     """The arc's visible curve pushed `amount` towards one side (towards pair[1]
     when positive), for the side painted earlier to use.
 

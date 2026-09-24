@@ -1414,7 +1414,7 @@ pub fn try_rect(poly: &[P], corners: &[usize], params: &CurveParams) -> Option<S
 
 // --- Schneider cubic fitting -----------------------------------------------
 
-fn bezier(p0: P, c1: P, c2: P, p1: P, t: f64) -> P {
+pub(crate) fn bezier(p0: P, c1: P, c2: P, p1: P, t: f64) -> P {
     let mt = 1.0 - t;
     let (a, b, c, d) = (mt * mt * mt, 3.0 * mt * mt * t, 3.0 * mt * t * t, t * t * t);
     [
@@ -1423,7 +1423,7 @@ fn bezier(p0: P, c1: P, c2: P, p1: P, t: f64) -> P {
     ]
 }
 
-fn bezier_d1(p0: P, c1: P, c2: P, p1: P, t: f64) -> P {
+pub(crate) fn bezier_d1(p0: P, c1: P, c2: P, p1: P, t: f64) -> P {
     let mt = 1.0 - t;
     [
         3.0 * (mt * mt * (c1[0] - p0[0]) + 2.0 * mt * t * (c2[0] - c1[0]) + t * t * (p1[0] - c2[0])),
@@ -1816,11 +1816,15 @@ pub fn fit_c2(points: &[P], t1: P, t2: P, tol: f64) -> Option<Vec<Segment>> {
         for _ in 0..SPLINE_ROUNDS {
             let ctrl = spline_controls(points, &moved, &knots, n_ctrl, t1, t2)?;
             let drawn = spline_at(&ctrl, &knots, &moved);
-            let mut far = -1.0;
-            for i in 0..points.len() {
-                let d = norm(sub(drawn[i], points[i]));
-                if d > far {
-                    far = d;
+            let off: Vec<f64> = (0..points.len()).map(|i| norm(sub(drawn[i], points[i]))).collect();
+            let far = off.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            // Ties as in `max_error`: within SPLIT_TIE of the worst, the vertex
+            // nearest the middle, the lower one of two. See the Python.
+            let mid = (off.len() - 1) as f64 / 2.0;
+            let mut best_key = f64::INFINITY;
+            for (i, d) in off.iter().enumerate() {
+                if *d >= far - SPLIT_TIE && (i as f64 - mid).abs() < best_key {
+                    best_key = (i as f64 - mid).abs();
                     worst = i;
                 }
             }

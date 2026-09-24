@@ -214,6 +214,96 @@ mod python {
             .collect()
     }
 
+    fn seg_out(s: &curves::Segment) -> (String, Vec<f64>) {
+        match s {
+            curves::Segment::Line { p0, p1 } => ("L".to_string(), vec![p0[0], p0[1], p1[0], p1[1]]),
+            curves::Segment::Cubic { p0, c1, c2, p1 } => ("C".to_string(), vec![p0[0], p0[1], c1[0], c1[1], c2[0], c2[1], p1[0], p1[1]]),
+            curves::Segment::Arc { p0, p1, r, large, sweep } => {
+                ("A".to_string(), vec![p0[0], p0[1], p1[0], p1[1], *r, *large as u8 as f64, *sweep as u8 as f64])
+            }
+        }
+    }
+
+    fn seg_in(kind: &str, v: &[f64]) -> curves::Segment {
+        match kind {
+            "L" => curves::Segment::Line { p0: [v[0], v[1]], p1: [v[2], v[3]] },
+            "C" => curves::Segment::Cubic { p0: [v[0], v[1]], c1: [v[2], v[3]], c2: [v[4], v[5]], p1: [v[6], v[7]] },
+            _ => curves::Segment::Arc { p0: [v[0], v[1]], p1: [v[2], v[3]], r: v[4], large: v[5] != 0.0, sweep: v[6] != 0.0 },
+        }
+    }
+
+    /// The bled copies, for `tools/diffcheck.py`'s `under` stage: the Python's
+    /// fitted arcs (pair, nodes, placed vertices, per-vertex step, segments), its
+    /// paint order and underlay in; `topology::bleed_arcs` then gives every arc
+    /// its copy, and `Boundary::segments` walks the given rings. Out: per arc
+    /// (under_into or -1, jog in, jog out, the copy's segments), per ring its
+    /// segments.
+    #[pyfunction]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn _stage_under(
+        arcs: Vec<(i32, i32, i64, i64, Vec<f64>, Vec<f64>, Vec<(String, Vec<f64>)>)>,
+        padded: Vec<i32>,
+        ph: usize,
+        pw: usize,
+        rank: Vec<(i32, usize)>,
+        see_through: Vec<i32>,
+        painted_by: Vec<(i32, i32)>,
+        rings: Vec<(Vec<(usize, bool)>, Vec<i32>)>,
+        corner_threshold: f64,
+        tol: f64,
+        snap_axis_deg: f64,
+    ) -> (Vec<(i64, bool, bool, Vec<(String, Vec<f64>)>)>, Vec<Vec<(String, Vec<f64>)>>) {
+        use std::collections::{HashMap, HashSet};
+        let params = curves::CurveParams { corner_threshold, tol, shape_fitting: true, snap_axis_deg, kind_tol: curves::KIND_TOL };
+        let node = |v: i64| if v < 0 { None } else { Some(v as u64) };
+        let pairs = |v: &[f64]| -> Vec<[f64; 2]> { v.chunks(2).map(|c| [c[0], c[1]]).collect() };
+        let mut list: Vec<topology::Arc> = arcs
+            .into_iter()
+            .map(|(a, b, n0, n1, pts, normal, segs)| topology::Arc {
+                pair: (a, b),
+                pts: pairs(&pts),
+                normal: pairs(&normal),
+                n0: node(n0),
+                n1: node(n1),
+                segments: segs.iter().map(|(k, v)| seg_in(k, v)).collect(),
+                under: Vec::new(),
+                under_into: None,
+                under_jog: (false, false),
+                t0: None,
+                t1: None,
+                tip0: false,
+                tip1: false,
+                trim0: topology::NODE_TRIM,
+                trim1: topology::NODE_TRIM,
+                sliver: None,
+                mirror: None,
+            })
+            .collect();
+        let rank: HashMap<i32, usize> = rank.into_iter().collect();
+        let see: HashSet<i32> = see_through.into_iter().collect();
+        let by: HashMap<i32, i32> = painted_by.into_iter().collect();
+        topology::bleed_arcs(&mut list, &params, Some(&rank), topology::BLEED, &see, &by);
+        let copies = list
+            .iter()
+            .map(|a| (a.under_into.map_or(-1, |v| v as i64), a.under_jog.0, a.under_jog.1, a.under.iter().map(seg_out).collect()))
+            .collect();
+        let bnd = topology::Boundary::assembled(list, crate::core::grid::Grid::from_vec(ph, pw, padded), Some(rank));
+        let walked = rings
+            .iter()
+            .map(|(ring, member)| {
+                let m: HashSet<i32> = member.iter().copied().collect();
+                bnd.segments(ring, Some(&m)).iter().map(seg_out).collect()
+            })
+            .collect();
+        (copies, walked)
+    }
+
+    #[pyfunction]
+    fn _dbg_fit_open(pts: Vec<f64>, tol: f64) -> Vec<(String, Vec<f64>)> {
+        let pts: Vec<[f64; 2]> = pts.chunks(2).map(|c| [c[0], c[1]]).collect();
+        curves::fit_open(&pts, tol, None, None).iter().map(seg_out).collect()
+    }
+
     #[pyfunction]
     fn _lstsq(a: Vec<f64>, rows: usize, cols: usize, b: Vec<f64>, bcols: usize) -> Vec<f64> {
         use crate::core::linalg::Mat;
@@ -326,7 +416,7 @@ mod python {
             snap_axis_deg: 1.5,
             kind_tol: curves::KIND_TOL,
         };
-        let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, snap, extend);
+        let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, &topology::Underlay::default(), snap, extend);
 
         let mut rows: Vec<Vec<f64>> = bnd
             .arcs
@@ -432,6 +522,8 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_labels0, m)?)?;
     m.add_function(wrap_pyfunction!(_stage_upsample, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_under, m)?)?;
+        m.add_function(wrap_pyfunction!(_dbg_fit_open, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_wedges, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_edge_mix, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;

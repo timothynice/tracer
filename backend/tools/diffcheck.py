@@ -107,6 +107,11 @@ TOLERANCE = {
     # circular arc, and how many — must match exactly; the numbers then agree
     # to the last bits the two least-squares solvers leave.
     "segments": ("rms", 1e-3, 0.0),
+    # The bled copies, given one set of fitted arcs, one paint order and one
+    # underlay: where each reaches and with which jogs must match exactly, and
+    # which kinds of segment it is made of; the numbers are then the offset of
+    # the same curve, sampled and fitted by the same arithmetic.
+    "under": ("rms", 1e-3, 0.0),
     "trace_labels": ("max", 0.0, 0.002),
     "trace_arcs": ("rms", 0.05, 0.0),
     # Stroke recovery, per thin group: which regions are thin, how they group,
@@ -438,6 +443,96 @@ def segments(path):
             return np.zeros(1), np.full(1, 1e9)
         py_out.extend(v for _, vals in py for v in vals)
         rs_out.extend(v for _, vals in rs for v in vals)
+    return np.array(py_out, dtype=np.float64), np.array(rs_out, dtype=np.float64)
+
+
+def _seg_rows(segs) -> list[tuple[str, list[float]]]:
+    from studi0trace.engines.vexel.curves import CircArc, Cubic, Line
+
+    out = []
+    for s in segs:
+        if isinstance(s, Line):
+            out.append(("L", [*map(float, s.p0), *map(float, s.p1)]))
+        elif isinstance(s, Cubic):
+            out.append(("C", [*map(float, s.p0), *map(float, s.c1), *map(float, s.c2), *map(float, s.p1)]))
+        else:
+            assert isinstance(s, CircArc)
+            out.append(("A", [*map(float, s.p0), *map(float, s.p1), float(s.r), float(s.large), float(s.sweep)]))
+    return out
+
+
+@stage
+def under(path):
+    """The bled copies, and the rings walked from them: both sides are handed
+    the Python's fitted arcs (after the junctions, the fit and the
+    regularisation), a paint order (the engine's, from the enclosure tree) and
+    an underlay (every thin region see-through, filled by its earliest
+    neighbour painted before it, as the engine does for a stroked one). Each
+    arc's copy must reach into the same label with the same jogs and be made
+    of the same kinds of segment; every shape's rings, walked by
+    `Boundary.segments` (the copy where the far side paints later, copies
+    joined at all-later nodes, gaps bridged), must come out the same too."""
+    from studi0trace.engines.vexel.merge import adjacency
+    from studi0trace.engines.vexel.order import enclosure, paint_order, shape_labels
+
+    a, prep, labels, fills = _prepared(path)
+    params = CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True)
+    bnd = topology.build(labels, prep.rgb, prep.alpha, lambda lab, qx, qy: fills[lab].evaluate(qx, qy), params)
+    enc = enclosure(labels)
+    order = paint_order(enc)
+    rank = {lab: i for i, lab in enumerate(order)}
+    nbrs: dict[int, set[int]] = {}
+    for x, y in adjacency(labels):
+        nbrs.setdefault(x, set()).add(y)
+        nbrs.setdefault(y, set()).add(x)
+    see_through = {lab for lab in order if is_thin(labels == lab)}
+    painted_by = {}
+    for t in sorted(see_through):
+        cands = [n for n in nbrs.get(t, ()) if n in rank and n not in see_through and rank[n] < rank[t]]
+        if cands:
+            painted_by[t] = min(cands, key=rank.get)
+    handed = [
+        (int(arc.pair[0]), int(arc.pair[1]), -1 if arc.n0 is None else int(arc.n0), -1 if arc.n1 is None else int(arc.n1),
+         arc.pts.ravel().tolist(), np.asarray(arc.normal, dtype=float).ravel().tolist(), _seg_rows(arc.segments))
+        for arc in bnd.arcs
+    ]
+    topology._bleed_arcs(bnd.arcs, params, rank, topology.BLEED, see_through, painted_by)
+    bnd.rank = rank
+    rings, walked_py = [], []
+    for lab in order:
+        member = shape_labels(lab, enc, True) | frozenset(k for k, v in painted_by.items() if v == lab)
+        for ring in bnd.rings(member):
+            if ring:
+                rings.append(([(int(i), bool(r)) for i, r in ring], sorted(int(m) for m in member)))
+                walked_py.append(_seg_rows(bnd.segments(ring, member)))
+    padded = bnd.padded.astype(np.int32)
+    copies_rs, walked_rs = vexel_rs._stage_under(
+        handed, padded.ravel().tolist(), *padded.shape, sorted(rank.items()), sorted(see_through),
+        sorted(painted_by.items()), rings, params.corner_threshold, params.tol, params.snap_axis_deg,
+    )
+    py_out, rs_out = [], []
+    for k, (arc, (into, j0, j1, segs)) in enumerate(zip(bnd.arcs, copies_rs)):
+        py_into = -1 if arc.under_into is None else int(arc.under_into)
+        if (py_into, tuple(arc.under_jog)) != (into, (j0, j1)):
+            print(f"  FAIL under     {path.name}: arc {k} {arc.pair} copies into {py_into} with jogs {tuple(arc.under_jog)} "
+                  f"in Python, {into} with {(j0, j1)} in Rust")
+            return np.zeros(1), np.full(1, 1e9)
+        py = _seg_rows(arc.under)
+        if [s for s, _ in py] != [s for s, _ in segs]:
+            print(f"  FAIL under     {path.name}: arc {k} {arc.pair}'s copy is {''.join(s for s, _ in py)} in Python, "
+                  f"{''.join(s for s, _ in segs)} in Rust")
+            return np.zeros(1), np.full(1, 1e9)
+        py_out.extend(v for _, vals in py for v in vals)
+        rs_out.extend(v for _, vals in segs for v in vals)
+    for (ring, member), py, rs in zip(rings, walked_py, walked_rs):
+        if [s for s, _ in py] != [s for s, _ in rs]:
+            print(f"  FAIL under     {path.name}: the ring of {member[:6]} walks {''.join(s for s, _ in py)} in Python, "
+                  f"{''.join(s for s, _ in rs)} in Rust")
+            return np.zeros(1), np.full(1, 1e9)
+        py_out.extend(v for _, vals in py for v in vals)
+        rs_out.extend(v for _, vals in rs for v in vals)
+    if not py_out:
+        return np.zeros(1), np.zeros(1)
     return np.array(py_out, dtype=np.float64), np.array(rs_out, dtype=np.float64)
 
 

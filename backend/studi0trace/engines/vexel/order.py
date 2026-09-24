@@ -63,7 +63,8 @@ def enclosure(labels: np.ndarray) -> Enclosure:
 def paint_order(enc: Enclosure) -> list[int]:
     """Background-most root first, then depth-first by enclosure, siblings largest first."""
     roots = [i for i, p in enc.parent.items() if p is None]
-    roots.sort(key=lambda i: (-enc.border[i], -enc.area[i]))
+    # ties go to the lower label, in both engines, never to an iteration order
+    roots.sort(key=lambda i: (-enc.border[i], -enc.area[i], i))
     out: list[int] = []
 
     def visit(i: int) -> None:

@@ -1313,8 +1313,13 @@ def fit_c2(points: np.ndarray, t1: np.ndarray, t2: np.ndarray, tol: float) -> li
             if ctrl is None:
                 return None
             off = np.linalg.norm(_bspline_basis(moved, knots, n_ctrl) @ ctrl - points, axis=1)
-            worst = int(np.argmax(off))
-            if float(off[worst]) < tol:
+            # A symmetric run puts two vertices at the same distance to the last
+            # bit, and the next knot is cut at the worst one: ties as in
+            # `_max_error`, never an argmax's arithmetic order.
+            tied = np.nonzero(off >= float(off.max()) - SPLIT_TIE)[0]
+            mid = (len(off) - 1) / 2.0
+            worst = int(min(tied.tolist(), key=lambda k: (abs(k - mid), k)))
+            if float(off.max()) < tol:
                 return _finish_spline(points, u, list(interior), ctrl, knots, moved, t1, t2, tol)
             moved = _reparametrize_spline(points, ctrl, knots, moved)
         # One more span, cut where the fit is furthest out - the same place the

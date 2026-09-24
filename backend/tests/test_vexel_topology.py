@@ -698,6 +698,8 @@ def test_every_ring_is_one_unbroken_curve(monkeypatch):
         return bnd
 
     monkeypatch.setattr(vexel_engine.topology, "build", spy)
+    # the spy sits on the Python build; the Rust twin is `ring_bridges_an_arc_with_no_segments`
+    monkeypatch.setenv("VEXEL_BACKEND", "python")
     png = (CORPUS / "real" / "logo" / "studi0mail-logo-dark.png").read_bytes()
     trace(png)
     bnd = captured["bnd"]
