@@ -10,15 +10,14 @@ import re
 
 import numpy as np
 from scipy import ndimage
-from skimage.color import deltaE_ciede2000, rgb2lab
-from skimage.feature import canny
 from skimage.metrics import structural_similarity
-from skimage.morphology import dilation, disk
 
-from bench.artifacts import scorecard
 from bench.config import DEFAULT_WEIGHTS, Weights
 from bench.geometry import line_debt, outline_error
 from bench.raster import luminance, rasterize, to_rgb_on_white
+# ΔE, edge F1 and the scorecard are what Auto scores its candidates by, so they
+# live in the runtime package; the bench uses the same functions.
+from studi0trace.imaging.quality import delta_e, delta_e_map, edge_f1, scorecard  # noqa: F401
 from studi0trace.imaging.svg import svg_stats
 
 
@@ -30,36 +29,6 @@ def ssim(a_rgb: np.ndarray, b_rgb: np.ndarray) -> float:
     win = min(7, a_rgb.shape[0], a_rgb.shape[1])
     win = win if win % 2 == 1 else win - 1
     return float(structural_similarity(a_rgb, b_rgb, channel_axis=-1, data_range=255, win_size=win))
-
-
-def delta_e_map(a_rgb: np.ndarray, b_rgb: np.ndarray) -> np.ndarray:
-    """CIEDE2000 per pixel as a float64 (H, W) array."""
-    lab_a = rgb2lab(a_rgb.astype(np.float64) / 255.0)
-    lab_b = rgb2lab(b_rgb.astype(np.float64) / 255.0)
-    return deltaE_ciede2000(lab_a, lab_b)
-
-
-def delta_e(a_rgb: np.ndarray, b_rgb: np.ndarray) -> tuple[float, float]:
-    """CIEDE2000 per pixel → (mean, 95th percentile)."""
-    de = delta_e_map(a_rgb, b_rgb)
-    return float(de.mean()), float(np.percentile(de, 95))
-
-
-def edge_f1(a_rgb: np.ndarray, b_rgb: np.ndarray, tolerance_px: int = 2, sigma: float = 1.0) -> float:
-    """Canny edges of both, matched within `tolerance_px`. F1 of precision/recall."""
-    ea = canny(luminance(a_rgb) / 255.0, sigma=sigma)
-    eb = canny(luminance(b_rgb) / 255.0, sigma=sigma)
-    na, nb = int(ea.sum()), int(eb.sum())
-    if na == 0 and nb == 0:
-        return 1.0
-    if na == 0 or nb == 0:
-        return 0.0
-    footprint = disk(tolerance_px)
-    precision = float((eb & dilation(ea, footprint)).sum()) / nb
-    recall = float((ea & dilation(eb, footprint)).sum()) / na
-    if precision + recall == 0:
-        return 0.0
-    return 2 * precision * recall / (precision + recall)
 
 
 def alpha_mae(a_rgba: np.ndarray, b_rgba: np.ndarray) -> float:
