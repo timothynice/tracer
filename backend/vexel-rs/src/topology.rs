@@ -449,7 +449,7 @@ fn place(
             };
             // Between two bands of one posterised ramp the edge is where the
             // ramp crosses their level, not where colour says: see the Python.
-            if let Some(lv) = levels.filter(|lv| a != 0 && b != 0 && lv.sibling(a, b)) {
+            if let Some(lv) = levels.filter(|lv| a != 0 && b != 0 && lv.consecutive(a, b)) {
                 for k in 0..ch.edges.len() {
                     let c_in = [p_in[k].1 as f64 - 0.5, p_in[k].0 as f64 - 0.5];
                     let c_out = [p_out[k].1 as f64 - 0.5, p_out[k].0 as f64 - 0.5];

@@ -326,6 +326,7 @@ def _band_colour(c: np.ndarray, own: bool) -> np.ndarray:
     """A band's paint from the colours over it: their mean, alpha-weighted for
     the pixels' own colours (`own`), whose colour under a transparent pixel is
     inpainted and means nothing."""
+    c = c.astype(np.float64)  # the engine's colours are float32, and a band can be a whole canvas
     if not own:
         return c.mean(axis=0)
     a = c[:, 3]

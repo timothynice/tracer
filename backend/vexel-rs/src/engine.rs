@@ -461,7 +461,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     let mut levels = Levels::default();
     if !p.gradients {
         let (banded, band_fills, band_visible, lv) =
-            posterize_fills(&l, &fills, &visible, &xs, &ys, &rgba255, p.detail, p.min_region);
+            posterize_fills(&l, &fills, &visible, &xs, &ys, &rgba255, &prep.features, p.detail, p.min_region);
         l = banded;
         fills = band_fills;
         visible = band_visible;

@@ -414,7 +414,7 @@ mod python {
             })
             .collect();
         let (out, new_fills, _, lv) =
-            posterize::posterize_fills(&labels, &fills, &visible, &xs, &ys, &rgba255, step, min_region);
+            posterize::posterize_fills(&labels, &fills, &visible, &xs, &ys, &rgba255, &prep.features, step, min_region);
         let mut ids: Vec<i32> = new_fills.keys().copied().collect();
         ids.sort_unstable();
         let mut rows = Vec::new();

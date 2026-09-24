@@ -16,7 +16,7 @@ import pytest
 from studi0trace.engines.vexel import engine as vexel
 from studi0trace.engines.vexel.engine import VexelParams, trace_rgba
 from studi0trace.engines.vexel.fills import Linear, Radial, Stop
-from studi0trace.engines.vexel.posterize import BAND_MIN_PX, Levels, _features, band_levels
+from studi0trace.engines.vexel.posterize import BAND_MIN_PX, Levels, _features, band_levels, follows, observed_t, settled
 
 FLAT = VexelParams(gradients=False, shadows=False, detail=14.0, min_region=16)
 
@@ -153,3 +153,68 @@ def test_a_radial_ramp_posterises_into_concentric_circles(engine):
     assert "<path" not in svg, svg
     assert all(abs(cx - 80.0) <= 0.02 and abs(cy - 80.0) <= 0.02 for cx, cy, _ in circles), circles
     assert abs(max(r for *_, r in circles) - 64.0) < 0.3
+
+
+def test_observed_t_reads_each_pixel_s_own_place_on_the_ramp():
+    ramp = Linear(0.0, 0.0, 40.0, 0.0, stops=[Stop(0.0, np.array([20.0, 40.0, 200.0, 255.0])),
+                                              Stop(1.0, np.array([220.0, 190.0, 200.0, 255.0]))])
+    ys, xs = np.mgrid[0:12, 0:40].astype(float) + 0.5
+    rgba = ramp.evaluate(xs.ravel(), ys.ravel()).reshape(12, 40, 4)
+    m = np.ones((12, 40), bool)
+    t = observed_t(ramp, 0.0, 1.0, rgba, m)
+    inner = (xs.ravel() > 7) & (xs.ravel() < 33)  # past the smoothing's reach of the frame along the ramp
+    assert np.abs(t - xs.ravel() / 40.0)[inner].max() < 1e-6
+
+
+def test_a_ramp_whose_level_lines_are_not_the_images_is_cut_along_the_pixels_own():
+    # A card's soft drop shadow, merged with the backdrop it fades into and
+    # fitted as one centred radial: cut along the radial's circles it drew
+    # circles round the card, which the image does not have.
+    from pathlib import Path
+
+    from PIL import Image
+
+    src = Path(__file__).resolve().parents[1] / "bench" / "corpus" / "synthetic" / "shadow" / "card-512.png"
+    svg = trace_rgba(np.asarray(Image.open(src).convert("RGBA")), FLAT)
+    radii = [float(r) for r in re.findall(r"A([\d.]+) ", svg)]
+    assert "<circle" not in svg and all(r < 60 for r in radii), (radii, "only the card's own corners are arcs")
+    rgb = [tuple(int(c[k:k + 2], 16) for k in (1, 3, 5)) for c in re.findall(r'fill="(#[0-9a-f]{6})"', svg)]
+    greys = {c for c in rgb if max(c) - min(c) <= 6}
+    assert len(greys) >= 3, ("the backdrop and the shadow's bands", svg)
+
+
+def test_follows_tells_a_true_radial_from_a_radial_fitted_to_a_rounded_shadow():
+    size = 96
+    ys, xs = np.mgrid[0:size, 0:size].astype(float) + 0.5
+    ramp = Radial(48.0, 48.0, 40.0, stops=[Stop(0.0, np.array([40.0, 40.0, 40.0, 255.0])),
+                                           Stop(1.0, np.array([240.0, 240.0, 240.0, 255.0]))])
+    t = ramp.param(xs.ravel(), ys.ravel())
+    levels = band_levels(ramp, float(t.min()), 1.0, 14.0)
+    core = np.ones(t.size, bool)
+    true = _features(ramp.evaluate(xs.ravel(), ys.ravel()))
+    levels = band_levels(ramp, float(t.min()), 1.0, 6.0)
+    assert follows(ramp, t, true, core, levels, 6.0)
+    # the same ramp's colours laid along a square's distance instead of a circle's
+    square = np.maximum(np.abs(xs - 48.0), np.abs(ys - 48.0)).ravel() / 40.0
+    boxy = _features(ramp.evaluate(48.0 + square * 40.0, np.full(t.size, 48.0)))
+    assert not follows(ramp, t, boxy, core, levels, 6.0)
+
+
+def test_settled_lines_stay_put_when_the_smoothing_doubles_and_textured_ones_do_not():
+    ramp = Linear(0.0, 0.0, 80.0, 0.0, stops=[Stop(0.0, np.array([30.0, 30.0, 30.0, 255.0])),
+                                              Stop(1.0, np.array([230.0, 230.0, 230.0, 255.0]))])
+    ys, xs = np.mgrid[0:60, 0:80].astype(float) + 0.5
+    clean = ramp.evaluate(xs.ravel(), ys.ravel()).reshape(60, 80, 4)
+    m = np.ones((60, 80), bool)
+    levels = band_levels(ramp, 0.0, 1.0, 14.0)
+    fine, coarse = observed_t(ramp, 0.0, 1.0, clean, m), observed_t(ramp, 0.0, 1.0, clean, m, sigma=3.0)
+    assert settled(fine, coarse, levels, m)
+    # a sheen: blotches a few pixels across, a few levels deep
+    rng = np.random.default_rng(1)
+    from scipy import ndimage
+
+    blotch = ndimage.gaussian_filter(rng.normal(0.0, 1.0, (60, 80)), 2.5)
+    sheen = clean.copy()
+    sheen[..., :3] = np.clip(clean[..., :3] + 60.0 * blotch[..., None], 0, 255)
+    fine, coarse = observed_t(ramp, 0.0, 1.0, sheen, m), observed_t(ramp, 0.0, 1.0, sheen, m, sigma=3.0)
+    assert not settled(fine, coarse, levels, m)

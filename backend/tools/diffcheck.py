@@ -84,8 +84,11 @@ TOLERANCE = {
     "wedges": ("max", 0.0, 0.002),
     # Fed one label map and one set of fitted fills, the posterise is a band
     # index from each pixel centre's ramp parameter and a deterministic absorb
-    # of the grazing slivers: the two agree to the pixel.
-    "posterize": ("max", 0.0, 0.0),
+    # of the grazing slivers. The levels are shares of the ramp's running ΔE,
+    # which goes through the float32 Lab conversion the two round differently
+    # in the last bit, so a pixel whose centre sits within 1e-7 of a level can
+    # go either way: a pixel in ten thousand.
+    "posterize": ("max", 0.0, 1e-4),
     # Fed one label map, one set of fills and one residual, the two decide
     # alike to the pixel: the test is a handful of products per neighbour and
     # an "any neighbour explains it", which no visiting order can change.
@@ -346,7 +349,9 @@ def posterize(path):
     Both sides are given one label map and one set of fitted fills, at the Flat
     preset's detail and min_region, so what is compared is the cut: which band
     each pixel falls in, how the slivers where a level grazes the outline are
-    absorbed, the levels themselves and each band's colour. The labels must
+    absorbed, the levels themselves and each band's colour, and, for a ramp
+    whose level lines are not the image's, the check that says so and the cut
+    along the pixels' own lines (`follows`, `observed_t`, `settled`). The labels must
     match to the pixel; the levels are held to 1e-5 of the ramp and the band
     colours (means over many pixels) to 1e-4 of a colour level.
     """
@@ -362,7 +367,9 @@ def posterize(path):
     xs = xs.astype(np.float64) + 0.5
     ys = ys.astype(np.float64) + 0.5
     rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
-    params = FitParams(gradients=True, max_stops=4, tol=7.0)
+    # the Flat preset fits its ramps at the default detail's tolerance
+    # (`engine.POSTERIZE_FIT_DETAIL`) and cuts them at its own detail
+    params = FitParams(gradients=True, max_stops=4, tol=3.0)
     fills = {}
     for lab in (int(i) for i in np.unique(labels) if i):
         m = labels == lab
@@ -382,15 +389,16 @@ def posterize(path):
                                                    [k for k, _ in packed], [v for _, v in packed], 14.0, 16)
     rs_labels = np.asarray(rs_labels, dtype=np.int32).reshape(h, w)
     py_rows, rs_rows = np.array(rows), np.array(rs_rows)
-    # a band's colour is a mean over up to a whole canvas of pixels, summed in
-    # a different order by numpy and by Rust: 1e-4 of a colour level for those.
-    # A level is where the ramp's running ΔE reaches a share of its total, and
-    # the ΔE goes through the float32 Lab conversion the two round differently
-    # in the last bit (see the note above): 1e-5 of the ramp, a hundredth of a
-    # pixel on a 512 px ramp.
+    # A band's colour is a mean over up to a whole canvas of pixels, summed in
+    # a different order by numpy and by Rust, and moved by the odd pixel on a
+    # level (see TOLERANCE): a hundredth of a colour level. A region too short
+    # to cut is refitted flat, which is the `fills` stage's fit and its
+    # tolerance's business: a tenth of a level here. A level is where the
+    # ramp's running ΔE reaches a share of its total, through the float32 Lab
+    # conversion: 1e-5 of the ramp, a hundredth of a pixel on a 512 px ramp.
     atol = np.full(py_rows.shape, 1e-5)
-    per_label = np.arange(7 * len(py_fills))
-    atol[per_label[per_label % 7 >= 3]] = 1e-4
+    for i, k in enumerate(sorted(py_fills)):
+        atol[7 * i + 3:7 * i + 7] = 1e-2 if k in lv.band else 0.1
     if py_rows.shape != rs_rows.shape or not (np.abs(py_rows - rs_rows) <= atol).all():
         bad = "shape" if py_rows.shape != rs_rows.shape else f"max |Δ| {np.abs(py_rows - rs_rows).max():.3e}"
         print(f"  FAIL posterize {path.name}: bands/levels differ ({bad}; {py_rows.size} vs {rs_rows.size} values)")
