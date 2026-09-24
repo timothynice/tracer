@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from bench.presets_report import auto_records, detail_lines, write_details
 from studi0trace.engines.presets import all_presets, auto_candidates
@@ -50,3 +51,15 @@ def test_write_details_is_what_the_preset_list_reads(tmp_path):
     path = write_details(records, 2, tmp_path / "details.json")
     doc = json.loads(path.read_text(encoding="utf-8"))
     assert doc["corpus_items"] == 2 and doc["lines"]["dense"].startswith("ΔE ")
+
+
+def test_every_shipped_preset_quotes_a_measured_line_and_the_file_ships():
+    # The lines are read from preset_details.json; a preset without one would
+    # say "not measured yet", and a wheel without the file would say it for all.
+    from studi0trace.engines.presets import DETAILS_FILE
+
+    doc = json.loads(DETAILS_FILE.read_text(encoding="utf-8"))
+    for p in all_presets():
+        assert p.detail == doc["lines"][p.id] and p.detail.startswith("ΔE "), p.id
+    pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"studi0trace.engines" = ["preset_details.json"]' in pyproject
