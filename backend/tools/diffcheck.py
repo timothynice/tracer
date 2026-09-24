@@ -84,6 +84,9 @@ TOLERANCE = {
     # interpolation. A decision they tipped (a coverage level at exactly a
     # half) would move a vertex by a pixel and fail this outright.
     "placed": ("max", 1e-6, 0.0),
+    # `placed` carried through symmetry and the junctions, given one label map
+    # and one set of fills: the same ulps, through line fits and node solves.
+    "nodes": ("max", 1e-6, 0.0),
     "upsample": ("max", 0.0, 0.0),
     # The wedge extension hands whole pixels back to a region that the partition
     # cut off, on a threshold over a three-way colour mix — and that mix is read
@@ -409,6 +412,45 @@ def placed(path):
     rs = np.array([v for row in sorted(rs_rows, key=key) for v in row], dtype=np.float64)
     if py.shape != rs.shape:
         print(f"  FAIL placed    {path.name}: {len(rows)} arcs / {py.size} values in Python, {len(rs_rows)} arcs / {rs.size} in Rust")
+        return np.zeros(1), np.full(1, 1e9)
+    return py, rs
+
+
+def _arc_rows(flat) -> list[list[float]]:
+    """Split a Rust stage hook's flat (pair, n, points...) answer into rows."""
+    rows, i = [], 0
+    while i + 2 < len(flat):
+        n = int(flat[i + 2])
+        rows.append(list(flat[i:i + 3 + 2 * n]))
+        i += 3 + 2 * n
+    return rows
+
+
+@stage
+def nodes(path):
+    """Where the boundary graph puts every vertex once the nodes are placed:
+    the wedge extension, the placement, symmetry and the junctions (the tip
+    hold, the revert guard) and rectangles, given one label map and the
+    Python's fills — `placed` carried through everything that moves a vertex,
+    so a difference here is a rule, not a fill. The Rust passes it only with
+    the pinholes port's tip-revert guard and the rects port in; until then it
+    names the arcs where they bite."""
+    a, prep, labels, fills = _prepared(path)
+    h, w = a.shape[:2]
+    bnd = topology.build(labels, prep.rgb, prep.alpha, lambda lab, qx, qy: fills[lab].evaluate(qx, qy),
+                         CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True))
+
+    def key(row):
+        return tuple(round(v, 6) for v in row)
+
+    py_rows = sorted(([float(arc.pair[0]), float(arc.pair[1]), float(len(arc.pts)), *arc.pts.ravel().tolist()]
+                      for arc in bnd.arcs), key=key)
+    flat = vexel_rs._stage_place(a.tobytes(), h, w, labels.astype(np.int32).ravel().tolist(), *_fill_args(fills), True, True)
+    rs_rows = sorted(_arc_rows(flat), key=key)
+    py = np.array([v for row in py_rows for v in row], dtype=np.float64)
+    rs = np.array([v for row in rs_rows for v in row], dtype=np.float64)
+    if py.shape != rs.shape:
+        print(f"  FAIL nodes     {path.name}: {len(py_rows)} arcs / {py.size} values in Python, {len(rs_rows)} arcs / {rs.size} in Rust")
         return np.zeros(1), np.full(1, 1e9)
     return py, rs
 
