@@ -28,6 +28,8 @@ export interface ParamsState {
   set: (engine: string, name: string, value: unknown) => void;
   /** Apply a preset: its keys over the engine's defaults, not over current values. */
   apply: (engine: string, params: ParamValues) => void;
+  /** The values `apply(engine, params)` would set, without setting them. */
+  resolve: (engine: string, params: ParamValues) => ParamValues;
   reset: (engine: string) => void;
 }
 
@@ -57,16 +59,20 @@ export function useParams(engines: EngineDescription[] | undefined): ParamsState
     [specs],
   );
 
+  const resolve = useCallback(
+    (engine: string, params: ParamValues) => normalizeValues(specs[engine] ?? [], { ...normalizeValues(specs[engine] ?? [], undefined), ...params }),
+    [specs],
+  );
+
   const apply = useCallback(
     (engine: string, params: ParamValues) => {
       setValues((prev) => {
-        const base = normalizeValues(specs[engine] ?? [], undefined);
-        const next = { ...prev, [engine]: normalizeValues(specs[engine] ?? [], { ...base, ...params }) };
+        const next = { ...prev, [engine]: resolve(engine, params) };
         save(engine, next[engine]);
         return next;
       });
     },
-    [specs],
+    [resolve],
   );
 
   const reset = useCallback(
@@ -80,5 +86,5 @@ export function useParams(engines: EngineDescription[] | undefined): ParamsState
     [specs],
   );
 
-  return { values, specs, set, apply, reset };
+  return { values, specs, set, apply, resolve, reset };
 }

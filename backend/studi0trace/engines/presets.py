@@ -1,21 +1,31 @@
-"""Named parameter bundles.
+"""Named parameter bundles, and Auto, which picks among them per image.
 
-Each preset is a *trade-off*, not a secret better setting: the defaults already
-win on every bench class, so a preset earns its place by moving the balance
-between fidelity, path count, speed and portability in a direction someone
-actually wants.
+Each preset is a *trade-off*, not a secret better setting, and which one suits
+an image is not something a user can tell by looking at it. So the first entry
+is Auto (`kind="auto"`): it traces the image with every `auto_candidate`
+preset and keeps the cleanest result that is as faithful as the best
+(`studi0trace.auto`). Flat & poster and Cut file are never candidates: one is
+a style, the other an output format, and only the user can want those.
 
-Every number quoted in a `detail` line was measured over the whole bench corpus
-(71 items: the synthetic set plus the real logos) with `python -m bench run`,
-against the same corpus and the same engine build. Re-measure them whenever the
-engine or the corpus changes — a preset that quotes a stale number is worse
-than one that quotes none.
+The `detail` line of every preset is measured, never written by hand: it is
+read from `preset_details.json` next to this file, which one command writes
+from a run over the whole bench corpus with the engine as built:
+
+    cd backend && VEXEL_BACKEND=rust RAYON_NUM_THREADS=1 \\
+        .venv/bin/python -m bench.presets_eval --out /tmp/presets --fast --workers 3 --write-details
+
+Re-run it whenever the engine, a preset or the corpus changes — a preset that
+quotes a stale number is worse than one that quotes none.
 """
 from __future__ import annotations
 
-from typing import Any
+import json
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+DETAILS_FILE = Path(__file__).with_name("preset_details.json")
 
 
 class Preset(BaseModel):
@@ -23,69 +33,109 @@ class Preset(BaseModel):
     label: str
     engine: str
     description: str = Field(description="What this preset is for, in the user's terms")
-    detail: str = Field(description="What it measurably costs or buys, from the bench")
+    detail: str = Field(description="What it measurably costs or buys, from the bench corpus")
     sample: str = Field(description="Thumbnail filename under /presets/")
     params: dict[str, Any]
+    kind: Literal["auto", "preset"] = Field(
+        "preset", description="`auto` traces with every candidate and picks per image; `preset` is a fixed bundle")
+    auto_candidate: bool = Field(False, description="Whether Auto tries this preset")
 
 
-# ΔE and path counts are corpus means; lower ΔE is closer to the original.
-PRESETS: list[Preset] = [
-    Preset(
+def _measured() -> dict[str, str]:
+    try:
+        return dict(json.loads(DETAILS_FILE.read_text(encoding="utf-8")).get("lines", {}))
+    except (OSError, ValueError):
+        return {}
+
+
+_DETAIL = _measured()
+_UNMEASURED = "not measured yet"
+
+_PRESETS: list[dict[str, Any]] = [
+    dict(
+        id="auto",
+        label="Auto",
+        kind="auto",
+        # "{candidates}" is filled from the candidates' own labels below, so it cannot drift from them.
+        description="Traces your image with {candidates}, and keeps the cleanest result that is as faithful "
+                    "as the best. Start here.",
+        sample="auto.png",
+        params={},
+    ),
+    dict(
         id="balanced",
         label="Balanced",
-        engine="vexel",
-        description="Gradients, shadows, strokes and overlaps all reconstructed. The right starting point for most artwork.",
-        detail="ΔE 0.54 · 10 paths · 12 KB",
+        auto_candidate=True,
+        description="Gradients, shadows, strokes and overlaps all reconstructed. The most faithful all-rounder.",
         sample="balanced.png",
         params={},
     ),
-    Preset(
+    dict(
         id="logo",
         label="Logo & icon",
-        engine="vexel",
-        description="Merges harder and fits whole shapes, for a small, clean, hand-editable file. Best where the mark matters more than the last half-pixel.",
-        detail="ΔE 0.64 · 8 paths · 9 KB — 27% fewer nodes",
+        auto_candidate=True,
+        description="Merges harder and fits whole shapes, for a small, clean, hand-editable file. Best where "
+                    "the mark matters more than the last half-pixel.",
         sample="logo.png",
         params={"detail": 10.0, "min_region": 16, "curve_tolerance": 0.6, "corner_threshold": 70.0},
     ),
-    Preset(
+    dict(
         id="detailed",
         label="Detailed illustration",
-        engine="vexel",
-        description="Keeps more regions and more gradient stops. For dense art where subtle colour shifts matter.",
-        detail="ΔE 0.48 — the closest match, at 2.1× the nodes",
+        auto_candidate=True,
+        description="Keeps subtler colour steps and more gradient stops, and fits a little tighter. For "
+                    "illustration where soft shading matters.",
         sample="detailed.png",
-        params={"detail": 3.5, "min_region": 3, "max_stops": 6, "curve_tolerance": 0.25},
+        params={"detail": 3.5, "min_region": 6, "max_stops": 6, "curve_tolerance": 0.4},
     ),
-    Preset(
-        id="flat",
-        label="Flat & poster",
-        engine="vexel",
-        description="Solid colours only — no gradients, no filters. A style choice, and the safest thing to hand to an old importer.",
-        detail="ΔE 1.54 · 22 paths — visibly posterised, by design",
-        sample="flat.png",
-        params={"gradients": False, "shadows": False, "detail": 14.0, "min_region": 16},
-    ),
-    Preset(
+    dict(
         id="dense",
-        label="Photo & dense art",
-        engine="vexel",
-        description="Skips stroke and overlap recovery and merges aggressively. For photographic or very busy images, where those stages cost time and find nothing.",
-        detail="ΔE 0.73 · 7 paths — about twice as fast",
+        label="Simplified",
+        auto_candidate=True,
+        description="Fewest shapes; the cleanest on busy art and soft shadows. Skips stroke, overlap and "
+                    "shadow recovery and merges hard.",
         sample="dense.png",
         params={"detail": 14.0, "min_region": 24, "strokes": False, "overlaps": False, "shadows": False},
     ),
-    Preset(
+    dict(
+        id="flat",
+        label="Flat & poster",
+        description="A style choice, not a quality setting: solid colours only, no gradients and no filters. "
+                    "Also the safest file for an old importer. Auto never picks it.",
+        sample="flat.png",
+        params={"gradients": False, "shadows": False, "detail": 14.0, "min_region": 16},
+    ),
+    dict(
         id="cutfile",
         label="Cut file",
-        engine="vexel",
-        description="Non-overlapping shapes and no filters, for plotters and cutting machines that ignore anything clever.",
-        detail="ΔE 0.66 · 10 paths · every shape a closed outline",
+        description="An output format, not a quality setting: shapes that never overlap and no filters, for "
+                    "plotters and cutting machines. Auto never picks it.",
         sample="cutfile.png",
         params={"shadows": False, "strokes": False, "layering": "cutout", "detail": 10.0},
     ),
 ]
 
+def _and(words: list[str]) -> str:
+    return words[0] if len(words) < 2 else f"{', '.join(words[:-1])} and {words[-1]}"
+
+
+_CANDIDATE_LABELS = _and([p["label"] for p in _PRESETS if p.get("auto_candidate")])
+PRESETS: list[Preset] = [
+    Preset(engine="vexel", detail=_DETAIL.get(p["id"], _UNMEASURED),
+           **{**p, "description": p["description"].replace("{candidates}", _CANDIDATE_LABELS)})
+    for p in _PRESETS
+]
+
 
 def all_presets() -> list[Preset]:
     return list(PRESETS)
+
+
+def fixed_presets() -> list[Preset]:
+    """The presets that are one parameter bundle each (everything but Auto)."""
+    return [p for p in PRESETS if p.kind == "preset"]
+
+
+def auto_candidates() -> list[Preset]:
+    """What Auto traces with, in preference order (a tie goes to the earlier)."""
+    return [p for p in PRESETS if p.auto_candidate]

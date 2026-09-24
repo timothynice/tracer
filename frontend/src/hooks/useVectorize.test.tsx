@@ -136,3 +136,46 @@ test("refetch() recovers after a failed request", async () => {
   await waitFor(() => expect(result.current.results?.potrace.svg).toBe(SVG));
   expect(result.current.error).toBeNull();
 });
+
+test("auto asks the server to pick, sends no parameters, and ignores the panel's values", async () => {
+  const forms: FormData[] = [];
+  server.events.on("request:start", ({ request }) => {
+    if (request.url.endsWith("/vectorize")) void request.clone().formData().then((f) => forms.push(f));
+  });
+  let threshold = 100;
+  const { result, rerender } = renderHook(
+    () => useVectorize({ image, engines: ["potrace"], params: { potrace: { threshold } }, auto: true, reupload: async () => null, debounceMs: 10 }),
+    { wrapper: wrapper() },
+  );
+  await waitFor(() => expect(result.current.data?.auto?.potrace.pick).toBe("crisp"));
+  threshold = 150; // what the panel holds plays no part in an Auto trace
+  rerender();
+  await new Promise((r) => setTimeout(r, 40));
+  expect(result.current.updating).toBe(false);
+  expect(forms).toHaveLength(1);
+  expect(forms[0].get("auto")).toBe("true");
+  expect(JSON.parse(String(forms[0].get("parameters")))).toEqual({});
+  server.events.removeAllListeners();
+});
+
+test("a seeded answer is shown at once for its parameters, with no request and no debounce", async () => {
+  let calls = 0;
+  server.events.on("request:start", ({ request }) => void (request.url.endsWith("/vectorize") && (calls += 1)));
+  let threshold = 128;
+  const { result, rerender } = renderHook(
+    () => useVectorize({ image, engines: ["potrace"], params: { potrace: { threshold } }, reupload: async () => null, debounceMs: 10_000 }),
+    { wrapper: wrapper() },
+  );
+  await waitFor(() => expect(result.current.results?.potrace.svg).toBe(SVG)); // the first trace is not debounced
+  expect(calls).toBe(1);
+  const seeded = { success: true, image_id: image.imageId, width: 64, height: 64, parameters_used: {}, results: { potrace: { svg: "<svg data-seeded/>" } } };
+  result.current.seed({ potrace: { threshold: 200 } }, seeded);
+  threshold = 200;
+  rerender();
+  // No debounce to wait out, and nothing more asked of the server.
+  expect(result.current.results?.potrace.svg).toBe("<svg data-seeded/>");
+  expect(result.current.updating).toBe(false);
+  await new Promise((r) => setTimeout(r, 30));
+  expect(calls).toBe(1);
+  server.events.removeAllListeners();
+});

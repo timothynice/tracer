@@ -39,6 +39,10 @@ studi0trace-bench = "bench.cli:main"
 [tool.setuptools.packages.find]
 include = ["studi0trace*", "bench*"]
 
+[tool.setuptools.package-data]
+# The presets' measured detail lines (bench.presets_eval --write-details).
+"studi0trace.engines" = ["preset_details.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

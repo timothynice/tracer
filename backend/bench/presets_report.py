@@ -1,22 +1,31 @@
 """Read a `bench.presets_eval` run and answer: which preset is artifact-prone on
 which class, and which one parameter of it does the damage.
 
-    python -m bench.presets_report DIR [--items]
+    python -m bench.presets_report DIR [--items] [--write-details]
 
 The ablation table reads, for every preset P and each of its parameters k,
 how much of P's artifact count goes away when k alone is put back to the
 default (P−k): the parameter with the largest drop is the one causing it.
 The forward table reads what that parameter does on its own over the
 defaults (+k). Only items present in every compared configuration count.
+
+`auto` is not a traced configuration: for each item it is whichever
+candidate's record `studi0trace.auto.choose` picks. `--write-details` writes
+the preset list's measured `detail` lines (`detail_lines`) into
+`studi0trace/engines/preset_details.json`.
 """
 from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
+import os
+import time
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
+
+from studi0trace.imaging.quality import is_clean
 
 CLASSES = ("ALL", "logo", "flat", "gradient", "shadow")
 REAL = "real"
@@ -27,12 +36,95 @@ SHORT = {"delta_e_mean": "dE", "seam_ppm": "seam", "hole_clusters": "holeC", "de
          "rect_bowed": "bowed", "artifact_index": "ART", "pinholes": "pinh", "slivers": "sliv"}
 
 
-FLAGS = {
+FLAGS = {  # the four kinds of visible defect; clean is none of them (quality.is_clean)
     "hole": lambda m: m["pinholes"] >= 1,
     "sliver": lambda m: m["slivers"] + m["degenerate"] + m["thin_strokes"] >= 1,
     "wobble": lambda m: m["wobble_deg_100px"] >= 25.0,
     "rect": lambda m: m["radius_inconsistent"] + m["rect_bowed"] + m.get("rect_skewed", 0) >= 1,
 }
+
+
+def auto_records(records: list[dict]) -> list[dict]:
+    """One `auto` record per item: the record of the candidate Auto picks from
+    the candidates' own records, with `pick` naming it. Items missing any
+    candidate are left out, so Auto is never scored on a partial choice."""
+    from studi0trace.auto import Scored, choose
+    from studi0trace.engines.presets import auto_candidates
+
+    cands = [p.id for p in auto_candidates()]
+    by: dict[str, dict[str, dict]] = defaultdict(dict)
+    for r in records:
+        if "error" not in r and r["config"] in cands:
+            by[r["id"]][r["config"]] = r
+    out = []
+    for item, rs in by.items():
+        if len(rs) != len(cands):
+            continue
+        pick, _why = choose([Scored(c, rs[c]["metrics"]["delta_e_mean"], rs[c]["metrics"]["edge_f1"],
+                                    rs[c]["metrics"]["artifact_index"], int(rs[c]["metrics"]["elements"])) for c in cands])
+        out.append({**rs[pick.id], "config": "auto", "pick": pick.id})
+    return out
+
+
+def detail_lines(records: list[dict]) -> tuple[dict[str, str], dict]:
+    """The `detail` line of every preset, from records over the corpus: mean
+    ΔE, the median number of shapes, and the share of images traced clean
+    (`quality.is_clean`: no pinhole, sliver, wobbly edge or uneven rect)."""
+    from studi0trace.engines.presets import all_presets
+
+    by: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        if "error" not in r:
+            by[r["config"]].append(r)
+    lines: dict[str, str] = {}
+    numbers: dict[str, dict] = {}
+    for p in all_presets():
+        rs = by.get(p.id)
+        if not rs:
+            continue
+        ms = [r["metrics"] for r in rs]
+        de = float(np.mean([m["delta_e_mean"] for m in ms]))
+        shapes = int(round(float(np.median([m["elements"] for m in ms]))))
+        clean = 100.0 * sum(is_clean(m) for m in ms) / len(ms)
+        lines[p.id] = f"ΔE {de:.2f} · {shapes} shapes · clean on {clean:.0f}% of {len(ms)} test images"
+        numbers[p.id] = {"delta_e_mean": round(de, 4), "shapes_median": shapes, "clean_pct": round(clean, 1),
+                         "artifact_index_mean": round(float(np.mean([m["artifact_index"] for m in ms])), 2),
+                         "artifact_index_median": round(float(np.median([m["artifact_index"] for m in ms])), 2),
+                         "items": len(ms)}
+        if p.id == "auto":
+            picks = Counter(r["pick"] for r in rs)
+            numbers[p.id]["picks"] = {k: round(100.0 * v / len(rs), 1) for k, v in picks.most_common()}
+    return lines, numbers
+
+
+def write_details(records: list[dict], corpus_items: int, path: Path | None = None) -> Path:
+    """Write the measured detail lines where `studi0trace.engines.presets` reads them."""
+    from studi0trace.engines import presets as presets_mod
+    from studi0trace.engines.vexel.engine import backend
+
+    lines, numbers = detail_lines(records)
+    missing = [p.id for p in presets_mod.all_presets() if p.id not in lines]
+    if missing:
+        raise SystemExit(f"no records for {', '.join(missing)}: run every preset over the corpus first")
+    short = [k for k, v in numbers.items() if v["items"] < corpus_items]
+    if short:
+        print(f"warning: {', '.join(short)} measured on fewer than the {corpus_items} corpus items (errors?)")
+    path = path or presets_mod.DETAILS_FILE
+    doc = {
+        "about": "Measured by `python -m bench.presets_eval --write-details`; do not edit by hand.",
+        "measured": time.strftime("%Y-%m-%d"),
+        "vexel_backend": os.environ.get("VEXEL_BACKEND") or backend(),
+        "corpus_items": corpus_items,
+        "lines": lines,
+        "numbers": numbers,
+    }
+    path.write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"\nwrote {path}")
+    for k, v in lines.items():
+        print(f"  {k:<10} {v}")
+    if "auto" in numbers:
+        print("  auto picks: " + ", ".join(f"{k} {v:.0f}%" for k, v in numbers["auto"]["picks"].items()))
+    return path
 
 
 def flag_table(by, configs, items, classes=CLASSES + ("real",)):
@@ -45,7 +137,7 @@ def flag_table(by, configs, items, classes=CLASSES + ("real",)):
                 continue
             ms = [r["metrics"] for r in rs]
             hits = {k: 100.0 * sum(f(m) for m in ms) / len(ms) for k, f in FLAGS.items()}
-            clean = 100.0 * sum(not any(f(m) for f in FLAGS.values()) for m in ms) / len(ms)
+            clean = 100.0 * sum(is_clean(m) for m in ms) / len(ms)
             med = float(np.median([m["artifact_index"] for m in ms]))
             print(f"{cfg:<24}{c:<9}{len(ms):>4}" + "".join(f"{hits[k]:>8.0f}" for k in FLAGS) + f"{clean:>8.0f}{med:>8.1f}")
         print()
@@ -104,16 +196,19 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="bench.presets_report")
     ap.add_argument("dir")
     ap.add_argument("--items", action="store_true", help="per-item worst offenders")
+    ap.add_argument("--write-details", action="store_true", help="write the presets' measured detail lines")
     args = ap.parse_args(argv)
     d = Path(args.dir)
     by = load(d)
+    for r in auto_records([r for cfg in by.values() for r in cfg.values()]):
+        by["auto"][r["id"]] = r
     import yaml
     manifest = yaml.safe_load((Path(__file__).resolve().parent / "corpus" / "manifest.yaml").read_text())["items"]
     REAL_IDS.update(e["id"] for e in manifest if "real" in (e.get("tags") or []))
     from bench.presets_eval import configs as all_configs
 
     cfgs = all_configs(True, True)
-    presets = [c[0] for c in cfgs if c[0] == c[1] and "-" not in c[0] and not c[0].startswith("+")]
+    presets = ["auto"] + [c[0] for c in cfgs if c[0] == c[1] and "-" not in c[0] and not c[0].startswith("+")]
     presets = [p for p in presets if p in by]
     common = set.intersection(*(set(by[p]) for p in presets)) if presets else set()
     print(f"presets over {len(common)} common items")
@@ -121,6 +216,12 @@ def main(argv=None) -> int:
     print_means(t, presets)
     print("\n\nVISIBLE-DEFECT RATE (% of items): pinhole / sliver / wobble >= 25 deg per 100 px / uneven rect")
     flag_table(by, presets, common)
+
+    if "auto" in by:
+        picks = Counter(r["pick"] for r in by["auto"].values())
+        print("\nAUTO picks: " + ", ".join(f"{k} {v}" for k, v in picks.most_common()))
+    if args.write_details:
+        write_details([r for cfg in by.values() for r in cfg.values()], len(manifest))
 
     ablations = [c for c in cfgs if c[0] != c[1] and c[0] in by]
     if ablations:
