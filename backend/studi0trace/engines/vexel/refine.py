@@ -17,12 +17,9 @@ from skimage.segmentation import relabel_sequential
 
 from studi0trace.engines.vexel.fills import Fill, FitParams, Solid, fit_fill
 from studi0trace.engines.vexel.merge import adjacency
-from studi0trace.engines.vexel.weights import interior_weights
+from studi0trace.engines.vexel.weights import interior
 
 FitFn = Callable[[np.ndarray], tuple[Fill, float]]
-
-
-_weights = interior_weights
 
 
 def fill_rms(fill: Fill, xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, w: np.ndarray) -> float:
@@ -46,16 +43,24 @@ def refine_merge(
     if not params.gradients:
         return labels, fills, False
 
+    # A fill is fitted to its region's core (`weights.fill_core`), so it is
+    # judged there too. Scored over every pixel, a small part's own rim — which
+    # its fill does not try to explain — inflated its error, and a union merely
+    # as bad as a rim-inflated part passed "as good as the parts".
+    def core_rms(fill: Fill, mask: np.ndarray) -> float:
+        w, core = interior(mask)
+        return fill_rms(fill, xs[mask][core], ys[mask][core], rgba255[mask][core], w[core])
+
     def fit(mask: np.ndarray) -> tuple[Fill, float]:
-        w = _weights(mask)
-        f = fit_fill(xs[mask], ys[mask], rgba255[mask], params, weights=w)
-        return f, fill_rms(f, xs[mask], ys[mask], rgba255[mask], w)
+        w, core = interior(mask)
+        f = fit_fill(xs[mask], ys[mask], rgba255[mask], params, weights=w, core=core)
+        return f, core_rms(f, mask)
 
     rms: dict[int, float] = {}
     smooth: set[int] = set()
     for lab, fill in fills.items():
         m = labels == lab
-        rms[lab] = fill_rms(fill, xs[m], ys[m], rgba255[m], _weights(m))
+        rms[lab] = core_rms(fill, m)
         if not isinstance(fill, Solid) or rms[lab] > params.tol:
             smooth.add(lab)
     if len(smooth) < 1:

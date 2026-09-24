@@ -21,6 +21,15 @@ from scipy import optimize
 # measurable and removes it.
 MAX_FIT_SAMPLES = 25000
 
+# Fewest core pixels a gradient is fitted from (`fit_fill`'s `core`). A few
+# pixels in the middle of a band-wide region leave the ramp's stops to be
+# extrapolated from a handful of values: ill-posed, and the two engines'
+# solvers answered it differently. Fewer, and the region is its core's solid.
+CORE_GRADIENT_MIN = 24
+
+# Fewest pixels between two gradient stops (see `ramp_fit`).
+KNOT_GAP = 3.0
+
 
 # --- fill models ------------------------------------------------------------------
 
@@ -143,9 +152,23 @@ def _rms(pred: np.ndarray, target: np.ndarray, w: np.ndarray) -> float:
     return float(np.sqrt(np.sum(w * err) / max(np.sum(w) * 4.0, 1e-12)))
 
 
-def ramp_fit(t: np.ndarray, colours: np.ndarray, w: np.ndarray, max_stops: int, tol: float) -> list[Stop]:
-    """Weighted piecewise-linear colour ramp over t ∈ [0,1], adding knots where the residual peaks."""
+def ramp_fit(t: np.ndarray, colours: np.ndarray, w: np.ndarray, max_stops: int, tol: float, span: float = 0.0,
+             check: tuple | None = None) -> list[Stop]:
+    """Weighted piecewise-linear colour ramp over t ∈ [0,1], adding knots where the residual peaks.
+
+    `span` is the ramp's length in pixels. Two stops closer than KNOT_GAP px
+    describe a step, which is an edge (the partition's business), not a
+    gradient, and the knots between them rest on a pixel or two: on a 10 px
+    ramp the relative spacing alone put two stops 0.6 px apart, fitted to a
+    handful of core pixels, which the two engines' solvers resolved
+    differently.
+
+    `check` = (t, colours, w) are the pixels the "good enough" test is made
+    over when they are not the fitted ones (the whole region, when the ramp is
+    fitted to its core).
+    """
     knots = [0.0, 1.0]
+    gap = max(0.04, KNOT_GAP / span) if span > 0 else 0.04
 
     def solve(knots: list[float]) -> tuple[np.ndarray, np.ndarray]:
         k = np.array(knots)
@@ -167,12 +190,19 @@ def ramp_fit(t: np.ndarray, colours: np.ndarray, w: np.ndarray, max_stops: int, 
     current = sse(pred)
     candidates = np.linspace(0.0, 1.0, 17)[1:-1]
     while len(knots) < max_stops:
-        if _rms(pred, colours, w) <= tol:
+        if check is None:
+            good = _rms(pred, colours, w) <= tol
+        else:
+            tc, cc, wc = check
+            kk = np.array(knots)
+            pc = np.stack([np.interp(np.clip(tc, 0.0, 1.0), kk, coef[:, ch]) for ch in range(4)], axis=1)
+            good = _rms(pc, cc, wc) <= tol
+        if good:
             break
         # try candidate knot positions and keep the one that removes the most error
         best: tuple[float, float, np.ndarray, np.ndarray] | None = None
         for c in candidates:
-            if min(abs(c - kk) for kk in knots) < 0.04:
+            if min(abs(c - kk) for kk in knots) < gap:
                 continue
             trial = sorted(knots + [float(c)])
             tc, tp = solve(trial)
@@ -199,11 +229,30 @@ class FitParams:
     tol: float = 4.0  # RMS in 0..255 units at which a model is "good enough"
 
 
-def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitParams, weights: np.ndarray | None = None) -> Fill:
+def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitParams, weights: np.ndarray | None = None,
+             core: np.ndarray | None = None) -> Fill:
     """Best fill for the pixels (xs, ys) with colours rgba255 (N, 4), alpha channel 0..255.
 
     `weights` (N,) lets the caller down-weight boundary pixels, which are
     anti-aliasing mixtures of two fills and would otherwise bias the colour.
+
+    `core` (N,) bool marks the region's interior (`weights.fill_core`); the
+    rest is its edge band, whose colour belongs to the edge — anti-aliasing, a
+    blur, a sharpening halo — and is redrawn by the shape's own anti-aliased
+    outline. Down-weighting the band is not enough: nothing but the rim lies
+    at the ends of a ramp across a small shape, so a stop placed a sixteenth of
+    the span in owned the rim alone, whatever its weight, and a white counter
+    came out as a ramp from rim grey through white to rim grey. So with a core:
+
+    - the solid colour is the core's mean;
+    - "good enough" is still judged over every pixel, rim included — the solid
+      early exit and the ramp's stopping test — which keeps `tol` meaning what
+      it was calibrated to mean;
+    - a gradient's direction and stops are fitted to the core alone, and
+      it has to beat the solid on the core. The ramp spans the whole region,
+      so a real gradient reaches the edge: over the band its ends are the
+      core's ramp carried on, not the band's colour;
+    - a radial's centre is geometry and is searched over every pixel.
     """
     xs = np.asarray(xs, dtype=float).ravel()
     ys = np.asarray(ys, dtype=float).ravel()
@@ -215,12 +264,22 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
     rng = np.random.default_rng(1234)
     sel = _subsample(xs.size, rng)
     x, y, c, w = xs[sel], ys[sel], col[sel], w_all[sel]
+    k = None if core is None else np.asarray(core, dtype=bool).ravel()[sel]
+    if k is not None and (k.all() or not k.any()):
+        k = None
+    inner = slice(None) if k is None else k
 
-    mean = np.average(c, axis=0, weights=w)
+    mean = np.average(c[inner], axis=0, weights=w[inner])
     solid = Solid(rgba=mean)
     rms_solid = _rms(solid.evaluate(x, y), c, w)
-    if not params.gradients or rms_solid <= params.tol or x.size < 8:
+    too_few = x.size < 8 if k is None else int(k.sum()) < CORE_GRADIENT_MIN
+    if not params.gradients or rms_solid <= params.tol or too_few:
         return solid
+    full = None  # every pixel, for the ramps' "good enough" test
+    if k is not None:
+        full = (x, y, c, w)
+        x, y, c, w = x[k], y[k], c[k], w[k]
+        rms_solid = _rms(solid.evaluate(x, y), c, w)
 
     candidates: list[tuple[float, Fill]] = [(rms_solid, solid)]
 
@@ -237,18 +296,28 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
         d = -d
     if np.linalg.norm(d) > 0 and evals.max() > 1e-12:
         t_raw = (x - cx0) * d[0] + (y - cy0) * d[1]
-        tmin, tmax = float(t_raw.min()), float(t_raw.max())
+        # the ramp runs on over the band (a real gradient reaches the edge),
+        # with the core's colours carried on, not the band's
+        t_all = t_raw if full is None else (full[0] - cx0) * d[0] + (full[1] - cy0) * d[1]
+        tmin, tmax = float(t_all.min()), float(t_all.max())
         if tmax - tmin > 1e-6:
             t = (t_raw - tmin) / (tmax - tmin)
-            stops = ramp_fit(t, c, w, params.max_stops, params.tol)
+            chk = None if full is None else ((t_all - tmin) / (tmax - tmin), full[2], full[3])
+            stops = ramp_fit(t, c, w, params.max_stops, params.tol, span=tmax - tmin, check=chk)
             lin = Linear(x1=cx0 + tmin * d[0], y1=cy0 + tmin * d[1], x2=cx0 + tmax * d[0], y2=cy0 + tmax * d[1], stops=stops)
             candidates.append((_rms(lin.evaluate(x, y), c, w), lin))
 
     # --- radial: centre from the quadratic fit, refined numerically ------------------
+    # The centre is geometry and is searched over every pixel: the band is
+    # where a shadow or glow is strongest (it hugs its caster), and without it
+    # the search on the core alone found no radial at all. Only the stops come
+    # from the core.
+    X, Y, C, W = full if full is not None else (x, y, c, w)
     if x.size >= 24:
-        xr, yr = x - cx0, y - cy0  # centroid-relative positions throughout the radial fit
+        gx0, gy0 = np.average(X, weights=W), np.average(Y, weights=W)
+        xr, yr = X - gx0, Y - gy0  # centroid-relative positions throughout the radial fit
         Q = np.stack([np.ones_like(xr), xr, yr, xr * xr, xr * yr, yr * yr], axis=1)
-        qc, *_ = np.linalg.lstsq(Q * np.sqrt(w)[:, None], c * np.sqrt(w)[:, None], rcond=None)  # (6, 4)
+        qc, *_ = np.linalg.lstsq(Q * np.sqrt(W)[:, None], C * np.sqrt(W)[:, None], rcond=None)  # (6, 4)
         curv = 0.5 * (qc[3] + qc[5])  # per-channel mean curvature
         weight = np.abs(curv)
         if weight.sum() > 1e-9:
@@ -257,28 +326,32 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
             span_x, span_y = xr.max() - xr.min(), yr.max() - yr.min()
             centre = np.clip(centre, [xr.min() - 2 * span_x, yr.min() - 2 * span_y], [xr.max() + 2 * span_x, yr.max() + 2 * span_y])
 
-            sw = np.sqrt(w)[:, None]
+            sw = np.sqrt(W)[:, None]
 
             def radial_objective(cen: np.ndarray) -> float:
                 """Cheap, smooth surrogate for the centre search: colour as a cubic polynomial in r."""
                 r = np.hypot(xr - cen[0], yr - cen[1])
                 rn = r / max(float(r.max()), 1e-9)
                 basis = np.stack([np.ones_like(rn), rn, rn * rn, rn**3], axis=1)
-                coef, *_ = np.linalg.lstsq(basis * sw, c * sw, rcond=None)
-                return _rms(basis @ coef, c, w)
+                coef, *_ = np.linalg.lstsq(basis * sw, C * sw, rcond=None)
+                return _rms(basis @ coef, C, W)
 
             def radial_for(cen: np.ndarray) -> tuple[float, Radial]:
-                r = np.hypot(xr - cen[0], yr - cen[1])
-                rmax = float(r.max())
+                r_all = np.hypot(xr - cen[0], yr - cen[1])
+                r = r_all if full is None else np.hypot(x - gx0 - cen[0], y - gy0 - cen[1])
+                rmax = float(r_all.max())
                 if rmax < 1e-6:
-                    return np.inf, Radial(float(cen[0] + cx0), float(cen[1] + cy0), 1.0, [])
-                stops = ramp_fit(r / rmax, c, w, params.max_stops, params.tol)
-                rad = Radial(cx=float(cen[0] + cx0), cy=float(cen[1] + cy0), r=rmax, stops=stops)
+                    return np.inf, Radial(float(cen[0] + gx0), float(cen[1] + gy0), 1.0, [])
+                chk = None if full is None else (r_all / rmax, C, W)
+                stops = ramp_fit(r / rmax, c, w, params.max_stops, params.tol, span=rmax, check=chk)
+                rad = Radial(cx=float(cen[0] + gx0), cy=float(cen[1] + gy0), r=rmax, stops=stops)
                 return _rms(rad.evaluate(x, y), c, w), rad
 
             # Only search when the radial surrogate at the initial centre already
-            # beats the best candidate so far by a margin; most regions are not radial.
-            best_so_far = min(r for r, _ in candidates)
+            # beats the best candidate so far by a margin; most regions are not
+            # radial. Both are measured over every pixel, like the search.
+            best_so_far = min(_rms(f.evaluate(X, Y), C, W) for _, f in candidates) if full is not None \
+                else min(r for r, _ in candidates)
             if radial_objective(centre) < best_so_far - 0.25 * params.tol:
                 res = optimize.minimize(radial_objective, centre, method="Nelder-Mead",
                                         options={"maxiter": 80, "xatol": 0.05, "fatol": 0.01})
@@ -290,6 +363,14 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
     best_rms, best = min(candidates, key=lambda cr: cr[0] + penalty[cr[1].kind])
     if best.kind != "solid":
         if rms_solid - best_rms < 0.25 * params.tol:
+            return solid
+        # Fitted to a core a few rows deep, a ramp can follow the core's own
+        # noise exactly and still beat the solid there — and then carries that
+        # trend on across the band: three levels over four rows of a white
+        # counter became a thirteen-level grey edge. A gradient whose whole
+        # range over the core is under 2·tol is one the solid already holds
+        # within tol at every core pixel: there is nothing to draw.
+        if full is not None and float(np.ptp(best.evaluate(x, y), axis=0).max()) < 2.0 * params.tol:
             return solid
         # In a mostly transparent region, a model that is only somewhat better
         # than solid is fitting faint ink (a sub-pixel line in an empty field), not

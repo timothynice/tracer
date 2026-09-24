@@ -11,8 +11,25 @@ use crate::core::grid::{Grid, Mask};
 use crate::core::labels::{self, Labels};
 use crate::fills::{fit_fill, Fill, FitParams};
 use crate::merge::adjacency;
-use crate::weights::interior_weights;
+use crate::weights::interior;
 use std::collections::{HashMap, HashSet};
+
+/// The region's core pixels (`weights::fill_core`) and their weights. A fill is
+/// fitted to its core, so it is judged there: scored over every pixel, a small
+/// part's own rim — which its fill does not try to explain — inflated its
+/// error, and a union merely as bad as a rim-inflated part passed "as good as
+/// the parts". `refine.refine_merge` in the Python.
+#[allow(clippy::type_complexity)]
+fn gather_core(mask: &Mask, xs: &Grid<f64>, ys: &Grid<f64>, rgba: &[[f64; 4]]) -> (Vec<f64>, Vec<f64>, Vec<[f64; 4]>, Vec<f64>, Vec<bool>, Vec<f64>) {
+    let (w, core) = interior(mask);
+    let (x, y, c) = gather(mask, xs, ys, rgba);
+    let wk: Vec<f64> = w.iter().zip(core.iter()).filter(|(_, k)| **k).map(|(a, _)| *a).collect();
+    (x, y, c, w, core, wk)
+}
+
+fn core_of<T: Copy>(v: &[T], core: &[bool]) -> Vec<T> {
+    v.iter().zip(core.iter()).filter(|(_, k)| **k).map(|(a, _)| *a).collect()
+}
 
 pub fn fill_rms(fill: &Fill, xs: &[f64], ys: &[f64], rgba255: &[[f64; 4]], w: &[f64]) -> f64 {
     let mut num = 0.0;
@@ -65,12 +82,12 @@ pub fn refine_merge(
     let mut labels_out = l.clone();
     let mut fills = fills;
 
+    // (fill, rms over the core)
     let fit = |mask: &Mask, labels_now: &Labels| -> (Fill, f64) {
         let _ = labels_now;
-        let w = interior_weights(mask);
-        let (x, y, c) = gather(mask, xs, ys, rgba255);
-        let f = fit_fill(&x, &y, &c, params, Some(&w));
-        let r = fill_rms(&f, &x, &y, &c, &w);
+        let (x, y, c, w, core, wk) = gather_core(mask, xs, ys, rgba255);
+        let f = fit_fill(&x, &y, &c, params, Some(&w), Some(&core));
+        let r = fill_rms(&f, &core_of(&x, &core), &core_of(&y, &core), &core_of(&c, &core), &wk);
         (f, r)
     };
 
@@ -80,9 +97,8 @@ pub fn refine_merge(
     fill_ids.sort_unstable();
     for lab in &fill_ids {
         let m = labels::mask_of(&labels_out, *lab);
-        let w = interior_weights(&m);
-        let (x, y, c) = gather(&m, xs, ys, rgba255);
-        let r = fill_rms(&fills[lab], &x, &y, &c, &w);
+        let (x, y, c, _, core, wk) = gather_core(&m, xs, ys, rgba255);
+        let r = fill_rms(&fills[lab], &core_of(&x, &core), &core_of(&y, &core), &core_of(&c, &core), &wk);
         rms.insert(*lab, r);
         if !matches!(fills[lab], Fill::Solid { .. }) || r > params.tol {
             smooth.insert(*lab);

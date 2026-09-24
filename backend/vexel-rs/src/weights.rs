@@ -19,7 +19,11 @@ use crate::core::edt::edt;
 use crate::core::grid::{Grid, Mask};
 
 /// Distance at which a pixel counts fully as interior.
-const REACH: f64 = 3.0;
+pub const REACH: f64 = 3.0;
+
+/// Fewest core pixels a region needs to be fitted from its core alone
+/// (`fill_core`).
+const CORE_MIN: usize = 8;
 
 #[inline]
 fn weight_of(dist: f64) -> f64 {
@@ -27,8 +31,8 @@ fn weight_of(dist: f64) -> f64 {
     t * t
 }
 
-/// Weights for `mask`'s true pixels in row-major order.
-pub fn interior_weights(mask: &Mask) -> Vec<f64> {
+/// Distance into the region for `mask`'s true pixels, row-major.
+pub fn interior_depth(mask: &Mask) -> Vec<f64> {
     let Some((r0, r1, c0, c1)) = mask.bbox() else {
         return Vec::new();
     };
@@ -38,16 +42,52 @@ pub fn interior_weights(mask: &Mask) -> Vec<f64> {
     for r in r0..r1 {
         for c in c0..c1 {
             if mask.data[r * mask.w + c] {
-                out.push(weight_of(dist.data[(r - r0 + 1) * crop.w + (c - c0 + 1)]));
+                out.push(dist.data[(r - r0 + 1) * crop.w + (c - c0 + 1)]);
             }
         }
     }
     out
 }
 
+/// Weights for `mask`'s true pixels in row-major order.
+pub fn interior_weights(mask: &Mask) -> Vec<f64> {
+    interior_depth(mask).into_iter().map(weight_of).collect()
+}
+
+/// The pixels a fill is fitted from: those deeper than `REACH`, past the
+/// edge's anti-aliasing and any sharpening halo. A region too thin to have
+/// `CORE_MIN` of them is all edge band and keeps every pixel: its deepest ridge
+/// alone can be one pixel, or the transparent side of an anti-aliased sliver,
+/// whose fill would then come out invisible and drop a piece out of a thin
+/// line. `weights.fill_core` in the Python.
+pub fn fill_core(depth: &[f64]) -> Vec<bool> {
+    let core: Vec<bool> = depth.iter().map(|d| *d > REACH).collect();
+    if core.iter().filter(|v| **v).count() < CORE_MIN {
+        return vec![true; depth.len()];
+    }
+    core
+}
+
+/// (weights, core) for `mask`'s true pixels, row-major.
+pub fn interior(mask: &Mask) -> (Vec<f64>, Vec<bool>) {
+    let depth = interior_depth(mask);
+    (depth.iter().copied().map(weight_of).collect(), fill_core(&depth))
+}
+
 /// The same weights, for a region given as a pixel index list — the bounding box
 /// comes from the list instead of a frame-sized mask scan.
-pub fn interior_weights_at(l: &crate::core::labels::Labels, _label: i32, pixels: &[u32]) -> Vec<f64> {
+pub fn interior_weights_at(l: &crate::core::labels::Labels, label: i32, pixels: &[u32]) -> Vec<f64> {
+    interior_depth_at(l, label, pixels).into_iter().map(weight_of).collect()
+}
+
+/// `interior` for a region given as a pixel index list.
+pub fn interior_at(l: &crate::core::labels::Labels, label: i32, pixels: &[u32]) -> (Vec<f64>, Vec<bool>) {
+    let depth = interior_depth_at(l, label, pixels);
+    (depth.iter().copied().map(weight_of).collect(), fill_core(&depth))
+}
+
+/// `interior_depth` for a region given as a pixel index list.
+pub fn interior_depth_at(l: &crate::core::labels::Labels, _label: i32, pixels: &[u32]) -> Vec<f64> {
     if pixels.is_empty() {
         return Vec::new();
     }
@@ -71,7 +111,7 @@ pub fn interior_weights_at(l: &crate::core::labels::Labels, _label: i32, pixels:
         .iter()
         .map(|i| {
             let (r, c) = (*i as usize / w, *i as usize % w);
-            weight_of(dist.data[(r - r0 + 1) * cw + (c - c0 + 1)])
+            dist.data[(r - r0 + 1) * cw + (c - c0 + 1)]
         })
         .collect()
 }

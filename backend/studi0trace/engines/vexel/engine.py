@@ -32,10 +32,10 @@ from studi0trace.engines.vexel.partition import discontinuity, initial_labels
 from studi0trace.engines.vexel.posterize import posterize_regions
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.refine import refine_merge
-from studi0trace.engines.vexel.rescue import rescue_features
+from studi0trace.engines.vexel.rescue import edge_mix, rescue_features
 from studi0trace.engines.vexel.upsample import halve, upsample2x, wants_upsample
 from studi0trace.engines.vexel.strokes import is_thin, stroke_fidelity, stroke_geometry, stroke_svg
-from studi0trace.engines.vexel.weights import interior_weights
+from studi0trace.engines.vexel.weights import interior, interior_weights
 
 SVG_NS = 'xmlns="http://www.w3.org/2000/svg"'
 _CROSS = ndimage.generate_binary_structure(2, 1)
@@ -300,13 +300,16 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     fills: dict[int, object] = {}
     visible: dict[int, bool] = {}
 
+    core_map = np.zeros((height, width), bool)  # every region's fill core (`weights.fill_core`)
+
     def fit_regions(target: list[int]) -> None:
         for lab in target:
             m = labels == lab
             # Boundary pixels are anti-aliasing mixtures: weight by distance into the
             # region so the fill (and the visibility test) is driven by pure pixels.
-            w = interior_weights(m)
-            fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], fit_params, weights=w)
+            w, core = interior(m)
+            core_map[m] = core
+            fills[lab] = fit_fill(xs[m], ys[m], rgba255[m], fit_params, weights=w, core=core)
             visible[lab] = float(np.average(prep.alpha[m], weights=w)) > 0.04
 
     ids = [int(i) for i in np.unique(labels) if i != 0]
@@ -337,17 +340,22 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # it left a whole transparent field hovering at the threshold, where the
     # last bits of the fill decided which of its inpainting seams were "features".
     residual = np.zeros((height, width), np.float32)
+    pred = np.zeros((height, width, 4))
     for lab in ids:
         m = labels == lab
-        diff = rgba255[m] - fills[lab].evaluate(xs[m], ys[m])
+        pred[m] = fills[lab].evaluate(xs[m], ys[m])
+        diff = rgba255[m] - pred[m]
         cover = prep.alpha[m]
         r = np.sqrt(cover * cover * (diff[:, :3] ** 2).sum(axis=1) + diff[:, 3] ** 2)
         base = 7.5 * p.detail
         inliers = r[r < base]  # the swallowed feature itself must not inflate the scale
         fit_rms = float(np.sqrt(np.mean(inliers * inliers))) if inliers.size else 0.0
         residual[m] = r / max(base, 4.0 * fit_rms)
+    # Near an edge, a pixel the edge's anti-aliasing or ringing explains is not
+    # part of a feature, and does not count towards promoting one.
+    explained = edge_mix(labels, rgba255, pred, prep.alpha, residual > 1.0)
     dump.labels("labels_clear", labels)
-    labels, rescued = rescue_features(labels, residual, threshold=1.0, min_region=p.min_region)
+    labels, rescued = rescue_features(labels, residual, threshold=1.0, min_region=p.min_region, explained=explained, core=core_map)
     dump.labels("labels_rescue", labels)
     if rescued:
         ids = [int(i) for i in np.unique(labels) if i != 0]
@@ -390,8 +398,8 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             # reach; refit it against colours with the shadow taken back out.
             for lab in shadow_plan.refit:
                 m = labels == lab
-                w = interior_weights(m)
-                fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w)
+                w, core = interior(m)
+                fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w, core=core)
 
     # Thin regions are drawn lines. A single line often arrives as several
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions

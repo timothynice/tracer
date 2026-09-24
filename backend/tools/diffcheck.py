@@ -30,7 +30,7 @@ from studi0trace.engines.vexel.fills import FitParams, Linear, Radial, Solid, St
 from studi0trace.engines.vexel.merge import MergeParams, merge_regions  # noqa: E402
 from studi0trace.engines.vexel.partition import discontinuity, initial_labels  # noqa: E402
 from studi0trace.engines.vexel.prepare import prepare  # noqa: E402
-from studi0trace.engines.vexel.weights import interior_weights  # noqa: E402
+from studi0trace.engines.vexel.weights import interior  # noqa: E402
 from studi0trace.engines.vexel import topology  # noqa: E402
 from studi0trace.engines.vexel.curves import CurveParams  # noqa: E402
 from studi0trace.engines.vexel.engine import VexelParams, trace_rgba  # noqa: E402
@@ -82,6 +82,10 @@ TOLERANCE = {
     # handful of pixels in a frame. `arcs` is then given one extended map so that
     # what it compares is the graph, not this.
     "wedges": ("max", 0.0, 0.002),
+    # Fed one label map, one set of fills and one residual, the two decide
+    # alike to the pixel: the test is a handful of products per neighbour and
+    # an "any neighbour explains it", which no visiting order can change.
+    "edge_mix": ("max", 0.0, 0.0),
     # The skeleton decides whether a thin region is a stroke, and skimage's
     # would decide it differently on every run; both engines now thin in the
     # same deterministic order, so the two are one skeleton, pixel for pixel.
@@ -231,10 +235,10 @@ def fills(path):
     py_out, rs_out = [], []
     for lab in (int(i) for i in np.unique(labels) if i):
         m = labels == lab
-        wt = interior_weights(m)
-        f = fit_fill(xs[m], ys[m], rgba255[m], params, weights=wt)
+        wt, core = interior(m)
+        f = fit_fill(xs[m], ys[m], rgba255[m], params, weights=wt, core=core)
         kind, vals = vexel_rs._fit_fill(xs[m].tolist(), ys[m].tolist(), rgba255[m].ravel().tolist(),
-                                        wt.tolist(), True, 4, 3.0)
+                                        wt.tolist(), True, 4, 3.0, core.tolist())
         if f.kind != kind:
             print(f"  FAIL fills     {path.name}: region {lab} is {f.kind} in Python, {kind} in Rust")
             return np.zeros(1), np.full(1, 1e9)
@@ -261,7 +265,8 @@ def _fills_for(prep, labels):
     out = {}
     for lab in (int(i) for i in np.unique(labels) if i):
         m = labels == lab
-        out[lab] = fit_fill(xs[m], ys[m], rgba255[m], params, weights=interior_weights(m))
+        wt, core = interior(m)
+        out[lab] = fit_fill(xs[m], ys[m], rgba255[m], params, weights=wt, core=core)
     return out
 
 
@@ -273,6 +278,37 @@ def _prepared(path):
     labels = merge_regions(initial_labels(g, prep.features, min_region=6), prep.features,
                            MergeParams(detail=6.0, gradients=True), g)
     return a, prep, labels, _fills_for(prep, labels)
+
+
+@stage
+def edge_mix(path):
+    """Which pixels the rescue treats as an edge's anti-aliasing or ringing
+    rather than a feature, given one label map, one set of fills and the
+    residual the engine thresholds (at the Detailed preset's detail, where the
+    rescue reaches furthest into the ringing)."""
+    from studi0trace.engines.vexel.rescue import edge_mix as py_edge_mix
+
+    a, prep, labels, fills = _prepared(path)
+    h, w = a.shape[:2]
+    ys, xs = np.mgrid[0:h, 0:w]
+    xs = xs.astype(np.float64) + 0.5
+    ys = ys.astype(np.float64) + 0.5
+    rgba255 = np.concatenate([prep.rgb, (prep.alpha * 255.0)[..., None]], axis=-1)
+    pred = np.zeros((h, w, 4))
+    residual = np.zeros((h, w))
+    for lab, f in fills.items():
+        m = labels == lab
+        pred[m] = f.evaluate(xs[m], ys[m])
+        d = rgba255[m] - pred[m]
+        cover = prep.alpha[m]
+        residual[m] = np.sqrt(cover * cover * (d[:, :3] ** 2).sum(axis=1) + d[:, 3] ** 2) / (7.5 * 3.5)
+    at = residual > 1.0
+    py = py_edge_mix(labels, rgba255, pred, prep.alpha, at).astype(np.int32)
+    rs = np.asarray(vexel_rs._stage_edge_mix(labels.astype(np.int32).ravel().tolist(), h, w,
+                                             rgba255.ravel().tolist(), pred.ravel().tolist(),
+                                             prep.alpha.astype(np.float64).ravel().tolist(), at.ravel().tolist()),
+                    dtype=np.int32).reshape(h, w)
+    return py, rs
 
 
 @stage

@@ -81,6 +81,10 @@ pub struct CurveParams {
     pub tol: f64,
     pub shape_fitting: bool,
     pub snap_axis_deg: f64,
+    /// A stretch that is lines first at this tolerance stays lines first when
+    /// `tol` is looser (KIND_TOL); the bled copies under a boundary are weighed
+    /// at their own tolerance alone (infinity).
+    pub kind_tol: f64,
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -171,6 +175,8 @@ pub const CHORD_TURN: f64 = 20.0;
 pub const CHORD_GAP: f64 = 12.1;
 pub const CHORD_END: f64 = 2.0 * LINE_MIN;
 pub const LINE_COST: f64 = 0.5;
+/// px; lines first here stays lines first at any looser tolerance (see `fit_stretch`).
+pub const KIND_TOL: f64 = 0.4;
 
 struct Prefix {
     sx: Vec<f64>,
@@ -886,10 +892,9 @@ pub fn fit_arc_run(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) ->
     Some(split_arc(c, r, p0, p1, sweep))
 }
 
-pub fn fit_stretch(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) -> Vec<Segment> {
-    if pts.len() < 2 {
-        return Vec::new();
-    }
+/// The three answers for one run at `tol`, in order of preference on a tie in
+/// cost: one circular arc, lines first, the plain curve (which always exists).
+fn stretch_answers(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) -> [Option<Vec<Segment>>; 3] {
     let curve = if t_start.is_none() && t_end.is_none() {
         fit_open(pts, tol, None, None)
     } else {
@@ -897,16 +902,35 @@ pub fn fit_stretch(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>) ->
         let t2 = t_end.unwrap_or_else(|| end_tangent(pts, false));
         fit_cubics(pts, t1, t2, tol, 0)
     };
-    let best = match lines_first(pts, tol, t_start, t_end) {
-        Some(lines) if cost(&lines) <= cost(&curve) => lines,
-        _ => curve,
-    };
-    if let Some(arcs) = fit_arc_run(pts, tol, t_start, t_end) {
-        if cost(&arcs) <= cost(&best) {
-            return arcs;
+    [fit_arc_run(pts, tol, t_start, t_end), lines_first(pts, tol, t_start, t_end), Some(curve)]
+}
+
+/// Index of the cheapest answer; the earlier one on a tie.
+fn cheapest(answers: &[Option<Vec<Segment>>; 3]) -> usize {
+    let mut best: Option<usize> = None;
+    for (k, segs) in answers.iter().enumerate() {
+        if let Some(segs) = segs {
+            if best.map_or(true, |b| cost(segs) < cost(answers[b].as_ref().unwrap())) {
+                best = Some(k);
+            }
         }
     }
-    best
+    best.unwrap_or(2)
+}
+
+/// One run between two breaks, as one arc, lines first or a curve: the
+/// cheapest, the arc on a tie, then the lines; and lines first whenever they
+/// are the answer at `kind_tol` and `tol` is looser. See the Python.
+pub fn fit_stretch(pts: &[P], tol: f64, t_start: Option<P>, t_end: Option<P>, kind_tol: f64) -> Vec<Segment> {
+    if pts.len() < 2 {
+        return Vec::new();
+    }
+    let mut answers = stretch_answers(pts, tol, t_start, t_end);
+    let mut k = cheapest(&answers);
+    if k != 1 && answers[1].is_some() && tol > kind_tol && cheapest(&stretch_answers(pts, kind_tol, t_start, t_end)) == 1 {
+        k = 1;
+    }
+    answers[k].take().expect("the cheapest answer exists")
 }
 
 /// Indices of vertices where the contour turns by more than `threshold_deg` at
@@ -2017,17 +2041,92 @@ fn local_tangent(points: &[P], at: usize, reach: usize) -> P {
     }
 }
 
+/// Degrees a cubic may turn back against its own turning before it is an S.
+pub const INFL_DEG: f64 = 1.0;
+
+fn cross2(u: P, v: P) -> f64 {
+    u[0] * v[1] - u[1] * v[0]
+}
+
+/// How far the cubic turns back against its net turning, in degrees: 0 for a
+/// convex cubic, the smaller lobe of an S. Read at its inflections, the roots in
+/// (0, 1) of cross(B', B''), a quadratic. See the Python `counter_turn_deg`.
+pub fn counter_turn_deg(p0: P, c1: P, c2: P, p1: P) -> f64 {
+    let a = sub(c1, p0);
+    let b = sub(c2, c1);
+    let d = sub(p1, c2);
+    let qa = [a[0] - 2.0 * b[0] + d[0], a[1] - 2.0 * b[1] + d[1]];
+    let qb = [2.0 * (b[0] - a[0]), 2.0 * (b[1] - a[1])];
+    let qc = a;
+    let (k2, k1, k0) = (-cross2(qa, qb), 2.0 * cross2(qc, qa), cross2(qc, qb));
+    let mut roots: Vec<f64> = Vec::new();
+    if k2.abs() > 1e-12 {
+        let disc = k1 * k1 - 4.0 * k2 * k0;
+        if disc > 0.0 {
+            let r = disc.sqrt();
+            let (x, y) = ((-k1 - r) / (2.0 * k2), (-k1 + r) / (2.0 * k2));
+            roots = if x <= y { vec![x, y] } else { vec![y, x] };
+        }
+    } else if k1.abs() > 1e-12 {
+        roots = vec![-k0 / k1];
+    }
+    let mut ts = vec![0.0];
+    ts.extend(roots.into_iter().filter(|t| *t > 1e-6 && *t < 1.0 - 1e-6));
+    ts.push(1.0);
+    if ts.len() == 2 {
+        return 0.0;
+    }
+    let tangent = |t: f64| -> P {
+        let v = [qa[0] * t * t + qb[0] * t + qc[0], qa[1] * t * t + qb[1] * t + qc[1]];
+        if v[0].hypot(v[1]) < 1e-12 {
+            let t = t.clamp(1e-4, 1.0 - 1e-4);
+            [qa[0] * t * t + qb[0] * t + qc[0], qa[1] * t * t + qb[1] * t + qc[1]]
+        } else {
+            v
+        }
+    };
+    let mut total = 0.0;
+    let mut net = 0.0;
+    for w in ts.windows(2) {
+        let (u, v) = (tangent(w[0]), tangent(w[1]));
+        let lobe = cross2(u, v).atan2(u[0] * v[0] + u[1] * v[1]);
+        total += lobe.abs();
+        net += lobe;
+    }
+    ((total - f64::abs(net)) / 2.0).to_degrees()
+}
+
+/// The cubic from p0 along t1 to p1 along t2 (pointing back), arms a third of
+/// the chord, or no longer than the way to where the tangents meet when that is
+/// shorter and the chord/3 arms would make it an S. See the Python
+/// `_two_point_cubic`.
+fn two_point_cubic(p0: P, p1: P, t1: P, t2: P) -> (P, P, P, P) {
+    let d = norm(sub(p1, p0)) / 3.0;
+    let arms = |a1: f64, a2: f64| (p0, [p0[0] + t1[0] * a1, p0[1] + t1[1] * a1], [p1[0] + t2[0] * a2, p1[1] + t2[1] * a2], p1);
+    let c = arms(d, d);
+    if counter_turn_deg(c.0, c.1, c.2, c.3) <= INFL_DEG {
+        return c;
+    }
+    // V = p0 + s1 t1 = p1 + s2 t2
+    let det = t1[0] * -t2[1] - (-t2[0]) * t1[1];
+    if det.abs() < 1e-12 {
+        return c;
+    }
+    let rhs = sub(p1, p0);
+    let s1 = (rhs[0] * -t2[1] - (-t2[0]) * rhs[1]) / det;
+    let s2 = (t1[0] * rhs[1] - t1[1] * rhs[0]) / det;
+    if s1 <= 0.0 || s2 <= 0.0 {
+        return c;
+    }
+    arms(d.min(s1), d.min(s2))
+}
+
 /// Schneider: fit one cubic to `points` with end tangents, split at the worst
 /// point and recurse when needed.
 pub fn fit_cubics(points: &[P], t1: P, t2: P, tol: f64, depth: usize) -> Vec<Segment> {
     if points.len() == 2 {
-        let d = norm(sub(points[1], points[0])) / 3.0;
-        return vec![Segment::Cubic {
-            p0: points[0],
-            c1: [points[0][0] + t1[0] * d, points[0][1] + t1[1] * d],
-            c2: [points[1][0] + t2[0] * d, points[1][1] + t2[1] * d],
-            p1: points[1],
-        }];
+        let (p0, c1, c2, p1) = two_point_cubic(points[0], points[1], t1, t2);
+        return vec![Segment::Cubic { p0, c1, c2, p1 }];
     }
     if depth == 0 && points.len() >= SPLINE_MIN {
         if let Some(spline) = fit_c2(points, t1, t2, tol) {
@@ -2257,20 +2356,20 @@ pub fn split_pieces(poly: &[P], corners: &[usize]) -> Vec<Vec<P>> {
 pub fn fit_contour_segments(poly: &[P], params: &CurveParams) -> Vec<Segment> {
     let corners = find_corners(poly, params.corner_threshold);
     if corners.is_empty() {
-        return fit_closed(poly, params.tol);
+        return fit_closed(poly, params.tol, params.kind_tol);
     }
     let mut pieces: Vec<Vec<P>> = split_pieces(poly, &corners).into_iter().filter(|p| p.len() >= 2).collect();
     corners_from_runs(&mut pieces, true);
     let mut segments = Vec::new();
     for piece in &pieces {
-        segments.extend(fit_stretch(piece, params.tol, None, None));
+        segments.extend(fit_stretch(piece, params.tol, None, None, params.kind_tol));
     }
     snap_axis_lines(segments, params.snap_axis_deg)
 }
 
 /// Closed contour without corners: lines first where it has straight runs,
 /// else the smooth closed fit. See the Python `fit_closed`.
-pub fn fit_closed(poly: &[P], tol: f64) -> Vec<Segment> {
+pub fn fit_closed(poly: &[P], tol: f64, kind_tol: f64) -> Vec<Segment> {
     let n = poly.len();
     if n >= 8 {
         // a loop that is one circle: two half arcs (see the Python)
@@ -2316,9 +2415,26 @@ pub fn fit_closed(poly: &[P], tol: f64) -> Vec<Segment> {
     let mut rolled: Vec<P> = poly[start..].to_vec();
     rolled.extend_from_slice(&poly[..start]);
     rolled.push(poly[start]);
-    let Some(mut lines) = lines_first(&rolled, tol, None, None) else {
+    let Some(lines) = lines_first(&rolled, tol, None, None).map(seam_merged) else {
         return smooth;
     };
+    if cost(&lines) <= cost(&smooth) {
+        return lines;
+    }
+    if tol > kind_tol {
+        // lines first at `kind_tol` stays lines first when looser (`fit_stretch`)
+        if let Some(tight) = lines_first(&rolled, kind_tol, None, None).map(seam_merged) {
+            if cost(&tight) <= cost(&fit_closed_smooth(poly, kind_tol)) {
+                return lines;
+            }
+        }
+    }
+    smooth
+}
+
+/// A closed lines-first answer with the two lines that meet at its seam made one
+/// when they are collinear.
+fn seam_merged(mut lines: Vec<Segment>) -> Vec<Segment> {
     if lines.len() > 1 {
         let last = lines.len() - 1;
         if let (Segment::Line { p0: a0, p1: a1 }, Segment::Line { p0: b0, p1: b1 }) = (lines[0].clone(), lines[last].clone()) {
@@ -2332,11 +2448,7 @@ pub fn fit_closed(poly: &[P], tol: f64) -> Vec<Segment> {
             }
         }
     }
-    if cost(&lines) <= cost(&smooth) {
-        lines
-    } else {
-        smooth
-    }
+    lines
 }
 
 /// Fit a region's contours (outer first). Whole-shape primitives only for
@@ -2505,7 +2617,7 @@ mod line_tests {
         pts[142][1] -= 0.3;
         let runs = line_runs(&pts);
         assert_eq!(runs.len(), 1, "{:?}", runs.iter().map(|r| (r.i, r.j)).collect::<Vec<_>>());
-        let segs = fit_stretch(&pts, 0.4, None, None);
+        let segs = fit_stretch(&pts, 0.4, None, None, KIND_TOL);
         assert_eq!(kinds(&segs), "L");
         assert_eq!(segs[0].start(), pts[0]);
     }
@@ -2515,7 +2627,7 @@ mod line_tests {
         for r in [30.0f64, 120.0, 300.0] {
             let n = (2.0 * r) as usize;
             let pts: Vec<P> = (0..n).map(|k| { let a = std::f64::consts::FRAC_PI_2 * k as f64 / (n - 1) as f64; [r * a.cos(), r * a.sin()] }).collect();
-            assert!(!kinds(&fit_stretch(&pts, 0.4, None, None)).contains('L'), "r={r}");
+            assert!(!kinds(&fit_stretch(&pts, 0.4, None, None, KIND_TOL)).contains('L'), "r={r}");
         }
     }
 
@@ -2530,7 +2642,44 @@ mod line_tests {
         for k in 1..60 {
             pts.push([40.0 + r, r + 40.0 * k as f64 / 59.0]);
         }
-        let k = kinds(&fit_stretch(&pts, 0.4, None, None));
+        let k = kinds(&fit_stretch(&pts, 0.4, None, None, KIND_TOL));
         assert!(k.starts_with('L') && k.ends_with('L') && k.contains('C') && k.matches('L').count() == 2, "{k}");
+    }
+
+    /// The wordmark's ribbon edge: a flat run heading -x that turns,
+    /// tangentially, into an arc of radius 45 (see the Python test of the name).
+    fn ribbon() -> Vec<P> {
+        let (flat, r) = (38.0f64, 45.0f64);
+        let mut pts: Vec<P> = (0..38).map(|k| [-(k as f64), 0.0]).collect();
+        let step = 1.0 / r;
+        let mut a = 0.0f64;
+        while a <= 40f64.to_radians() + 1e-9 {
+            pts.push([-flat - r * a.sin(), r - r * a.cos()]);
+            a += step;
+        }
+        pts
+    }
+
+    #[test]
+    fn a_line_running_into_an_arc_stays_a_line_at_a_loose_tolerance() {
+        let pts = ribbon();
+        for tol in [0.4, 0.6, 1.0] {
+            let k = kinds(&fit_stretch(&pts, tol, None, None, KIND_TOL));
+            assert!(k.starts_with('L'), "tol={tol}: {k}");
+        }
+        // what an infinite kind_tol (the bled copies') gets: the cheaper single curve at 0.6
+        assert!(!kinds(&fit_stretch(&pts, 0.6, None, None, f64::INFINITY)).starts_with('L'));
+    }
+
+    #[test]
+    fn a_two_point_cubic_is_held_inside_its_tangents() {
+        let (p0, p1, v) = ([0.0, 0.0], [3.0, 0.0], [0.5, 0.3]);
+        let (t1, t2) = (normalize(sub(v, p0)), normalize(sub(v, p1)));
+        let plain = ([0.0, 0.0], [t1[0], t1[1]], [3.0 + t2[0], t2[1]], [3.0, 0.0]);
+        assert!(counter_turn_deg(plain.0, plain.1, plain.2, plain.3) > 3.0);
+        let segs = fit_cubics(&[p0, p1], t1, t2, 0.4, 0);
+        let Segment::Cubic { p0: a, c1, c2, p1: b } = segs[0].clone() else { panic!() };
+        assert!(counter_turn_deg(a, c1, c2, b) <= INFL_DEG);
+        assert_eq!((a, b), (p0, p1));
     }
 }

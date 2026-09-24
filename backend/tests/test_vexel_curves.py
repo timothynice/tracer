@@ -302,3 +302,116 @@ def test_no_spline_span_has_a_bump():
         chord = np.linalg.norm(c.p1 - c.p0)
         assert np.linalg.norm(c.c1 - c.p0) <= curves.BUMP_RATIO * chord
         assert np.linalg.norm(c.c2 - c.p1) <= curves.BUMP_RATIO * chord
+
+
+# --- the kind of a stretch does not depend on the tolerance ----------------------------
+
+
+def _ribbon(seed: int, flat: float = 38.0, r: float = 45.0, deg: float = 40.0) -> np.ndarray:
+    """The wordmark's ribbon edge: a flat run heading -x that turns, tangentially,
+    into a circular arc of radius 45 curving down."""
+    rng = np.random.default_rng(seed)
+    xs = np.arange(0.0, flat, 1.0)
+    line = np.column_stack([-xs, np.zeros_like(xs)])
+    a = np.radians(np.arange(0.0, deg + 1e-9, 180.0 / (math.pi * r)))
+    arc = np.column_stack([-flat - r * np.sin(a), r - r * np.cos(a)])
+    pts = np.vstack([line, arc])
+    return pts + rng.normal(0.0, 0.02, pts.shape)
+
+
+def _samples(segs, n=200):
+    out = []
+    for s in segs:
+        if isinstance(s, Cubic):
+            out.append(_bezier(s, np.linspace(0, 1, n)))
+        elif isinstance(s, Line):
+            out.append(np.linspace(s.p0, s.p1, n))
+        else:
+            out.append(curves.arc_points(s, n))
+    return np.vstack(out)
+
+
+def test_a_line_running_into_an_arc_stays_straight_at_a_loose_tolerance():
+    """At 0.6 px one cubic reaches across the flat run and the arc it turns into
+    (cost 1 against line + curve's 1.5) and bows the flat run by half a pixel:
+    the logo preset's wavy ribbon. The run is straight to 0.02 px; at every
+    tolerance it is a line."""
+    for seed in range(4):
+        pts = _ribbon(seed)
+        for tol in (0.4, 0.6, 1.0):
+            segs = fit_stretch(pts, tol)
+            assert isinstance(segs[0], Line), (seed, tol, segs)
+            d = _samples(segs)
+            flat = (d[:, 0] < -4.0) & (d[:, 0] > -34.0)
+            assert np.abs(d[flat, 1]).max() < 0.06, (seed, tol)
+
+
+def test_lines_first_at_0_4_stays_lines_first_when_looser():
+    """A stretch drawn lines first at 0.4 px is drawn lines first at 0.6, with
+    the same lines; a curve that is a curve at 0.4 does not become lines."""
+    kinds = lambda segs: [type(s).__name__ for s in segs if isinstance(s, Line)]
+    for seed in range(4):
+        pts = _ribbon(seed)
+        assert kinds(fit_stretch(pts, 0.6)) == kinds(fit_stretch(pts, 0.4))
+    t = np.linspace(0, 2 * np.pi, 400, endpoint=False)
+    for radius in (20.0, 60.0, 150.0):
+        quarter = np.column_stack([radius * np.cos(t), radius * np.sin(t)])[:100]
+        assert not any(isinstance(s, Line) for s in fit_stretch(quarter, 0.6)), radius
+
+
+def test_a_rounded_square_keeps_its_sides_straight_at_a_loose_tolerance():
+    """The same rounded square as above, fitted as one closed contour at the
+    logo preset's 0.6 px: four straight sides, not a pillow."""
+    r = 6.0
+    pts = []
+    for cx, cy, a0 in ((44, 44, 0), (16, 44, 90), (16, 16, 180), (44, 16, 270)):
+        for t in np.linspace(a0, a0 + 90, 14):
+            pts.append([cx + r * np.cos(np.radians(t)), cy + r * np.sin(np.radians(t))])
+        nxt = {0: (16, 44), 90: (16, 16), 180: (44, 16), 270: (44, 44)}[a0]
+        here = pts[-1]
+        far = np.array(nxt) + r * np.array([np.cos(np.radians(a0 + 90)), np.sin(np.radians(a0 + 90))])
+        for f in np.linspace(0, 1, 26)[1:-1]:
+            pts.append(list(np.array(here) + f * (far - np.array(here))))
+    poly = np.array(pts)
+    for tol in (0.4, 0.6):
+        segs = fit_closed(poly, tol)
+        assert len([s for s in segs if isinstance(s, Line)]) == 4, tol
+
+
+# --- a two-point cubic has no inflection -----------------------------------------------
+
+
+def _counter_sampled(c: Cubic, n: int = 2001) -> float:
+    """counter_turn_deg the slow way: the tangent angle sampled densely."""
+    t = np.linspace(0.0, 1.0, n)[:, None]
+    d = 3 * (1 - t) ** 2 * (c.c1 - c.p0) + 6 * (1 - t) * t * (c.c2 - c.c1) + 3 * t ** 2 * (c.p1 - c.c2)
+    turn = np.diff(np.unwrap(np.arctan2(d[:, 1], d[:, 0])))
+    return math.degrees((np.abs(turn).sum() - abs(turn.sum())) / 2.0)
+
+
+def test_counter_turn_reads_an_s_and_not_a_c():
+    s = Cubic(np.array([0.0, 0.0]), np.array([4.0, 2.0]), np.array([6.0, -2.0]), np.array([10.0, 0.0]))
+    c = Cubic(np.array([0.0, 0.0]), np.array([0.0, 4.0]), np.array([2.0, 6.0]), np.array([6.0, 6.0]))
+    w = Cubic(np.array([0.0, 0.0]), np.array([5.0, 1.0]), np.array([5.0, -1.0]), np.array([10.0, 0.0]))  # two inflections
+    assert curves.counter_turn_deg(c) == 0.0
+    for cubic in (s, w):
+        assert curves.counter_turn_deg(cubic) > 5.0
+        assert abs(curves.counter_turn_deg(cubic) - _counter_sampled(cubic)) < 0.05
+
+
+def test_a_two_point_cubic_is_held_inside_its_tangents():
+    """Two vertices say nothing about curvature. Tangents that meet 0.6 px
+    along the first one, with chord/3 (1 px) arms, overshoot the meeting point
+    and come back: a hook. Held to it, the cubic is convex, and still leaves
+    and arrives along the pinned tangents."""
+    p0, p1, v = np.array([0.0, 0.0]), np.array([3.0, 0.0]), np.array([0.5, 0.3])
+    t1, t2 = curves._normalize(v - p0), curves._normalize(v - p1)
+    assert curves.counter_turn_deg(Cubic(p0, p0 + t1, p1 + t2, p1)) > 3.0
+    (c,) = curves.fit_cubics(np.vstack([p0, p1]), t1, t2, 0.4)
+    assert curves.counter_turn_deg(c) <= curves.INFL_DEG
+    assert np.allclose(c.p0, p0) and np.allclose(c.p1, p1)
+    assert np.allclose(curves._normalize(c.c1 - c.p0), t1) and np.allclose(curves._normalize(c.c2 - c.p1), t2)
+    # tangents that diverge allow only an S, and keep it
+    t2s = curves._normalize(np.array([-1.0, -0.3]))
+    (s,) = curves.fit_cubics(np.vstack([p0, p1]), t1, t2s, 0.4)
+    assert np.allclose(s.c2, p1 + t2s * 1.0)

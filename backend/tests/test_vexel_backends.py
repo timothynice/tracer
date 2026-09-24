@@ -187,3 +187,70 @@ def test_both_backends_stroke_the_thin_ring_of_thin_mark_128():
     assert rs_ring is not None, "the Rust engine should stroke the ring"
     assert py_ring.group(1) == rs_ring.group(1)
     assert _elements(py) == _elements(rs)
+
+
+def _sharpened_glyph(size: int = 128) -> np.ndarray:
+    """A dark rounded glyph with a counter on white, downsampled with Lanczos
+    and unsharp-masked: the ringing band a pixel or two inside every edge that
+    AI-generated and resampled logos carry (`logo/vexel-wordmark-512`)."""
+    from PIL import Image, ImageDraw, ImageFilter
+
+    big = Image.new("RGB", (size * 4, size * 4), (255, 255, 255))
+    d = ImageDraw.Draw(big)
+    d.rounded_rectangle([88, 120, 424, 392], radius=56, fill=(8, 10, 20))
+    d.rounded_rectangle([184, 208, 328, 304], radius=24, fill=(255, 255, 255))
+    img = big.resize((size, size), Image.LANCZOS).filter(ImageFilter.UnsharpMask(radius=1.2, percent=250, threshold=0))
+    return np.asarray(img.convert("RGBA"), dtype=np.uint8)
+
+
+def _shapes(svg: str) -> int:
+    return len(re.findall(r"<(path|circle|ellipse|rect|use)\b", svg))
+
+
+@pytest.mark.parametrize("engine", ["python", "rust"])
+def test_lower_detail_does_not_turn_edge_ringing_into_slivers(engine):
+    """Detail only ever adds real regions: the ringing inside a sharpened edge
+    is the edge's rendering, and at a low `detail` it used to be rescued as a
+    ring of slivers along the glyph."""
+    rgba = _sharpened_glyph()
+    run = trace_rgba if engine == "python" else _rust
+    fine = run(rgba, VexelParams(detail=2.0, min_region=3))
+    assert _shapes(fine) == _shapes(run(rgba, VexelParams())) == 3, fine
+    assert 'fill="none"' not in fine
+
+
+def _rim_stops(svg: str) -> list[tuple[str, float, float]]:
+    """Gradient stops that own an edge band: two neighbouring stops within an
+    eighth of the ramp that differ by more than 30 grey levels. That is a ramp
+    across a small shape whose end stop took the shape's anti-aliased rim."""
+    lum = lambda c: sum(int(c[i:i + 2], 16) for i in (0, 2, 4)) / 3  # noqa: E731
+    bad = []
+    for g in re.finditer(r'<(linear|radial)Gradient id="(\w+)"[^>]*>(.*?)</\1Gradient>', svg):
+        stops = [(float(o), c) for o, c in re.findall(r'offset="([\d.]+)" stop-color="#(\w{6})"', g.group(3))]
+        for (o1, c1), (o2, c2) in zip(stops, stops[1:]):
+            if o2 - o1 <= 0.13 and abs(lum(c1) - lum(c2)) > 30:
+                bad.append((g.group(2), o1, o2))
+    return bad
+
+
+@pytest.mark.parametrize("preset", ["balanced", "detailed"])
+def test_the_wordmark_has_no_halo_fills_or_halo_regions(preset):
+    """The Vexel wordmark's source was sharpened: inside every dark glyph a
+    light lobe rings 2-3 px in, with an undershoot at the edge. Fitted over
+    the whole region, the "e" counter came out a ramp from rim grey through
+    white to rim grey and the "l" got a grey streak down its edge (six such
+    rim stops in balanced, eleven in detailed); and in detailed the lobes were
+    rescued as regions of their own (41 paths, seven hairline strokes)."""
+    from pathlib import Path
+
+    from PIL import Image
+
+    from studi0trace.engines.presets import all_presets
+
+    png = Path(__file__).resolve().parent.parent / "bench" / "corpus" / "real" / "logo" / "vexel-wordmark-512.png"
+    rgba = np.asarray(Image.open(png).convert("RGBA"), dtype=np.uint8)
+    params = VexelParams(**next(p for p in all_presets() if p.id == preset).params)
+    svg = _rust(rgba, params)
+    assert _rim_stops(svg) == []
+    assert svg.count('fill="none"') == 0
+    assert len(re.findall(r"<(?:path|rect|circle|ellipse|use)\b", svg)) <= 20

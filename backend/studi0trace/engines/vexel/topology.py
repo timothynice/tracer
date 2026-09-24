@@ -1224,7 +1224,8 @@ def build(
             # Fitted no looser than the bleed can absorb: an error larger than
             # the offset would let the copy wander back across the very edge it
             # is there to cover.
-            loose = replace(params, tol=min(2.0 * params.tol, UNDER_TOL * bleed))
+            # The copy is weighed at its own tolerance alone: nobody sees it.
+            loose = replace(params, tol=min(2.0 * params.tol, UNDER_TOL * bleed), kind_tol=math.inf)
             arc.under = _fit_under(_bled(arc, bleed if b_later else -bleed, taper), loose)
 
     return Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=later_is_b)
@@ -1448,7 +1449,7 @@ def _fit_arc(arc: Arc, params: CurveParams) -> list[Segment]:
         t_end = arc.t1 if hi == len(pts) - 1 else None
         # Lines first: a straight run comes out as one line whatever the
         # pinned tangent says, and the curves between runs honour it.
-        segments.extend(fit_stretch(piece, params.tol, t_start, t_end))
+        segments.extend(fit_stretch(piece, params.tol, t_start, t_end, params.kind_tol))
     return _snap_axis(segments, params.snap_axis_deg)
 
 
@@ -1548,7 +1549,7 @@ def _fit_mirrored(pts: np.ndarray, axis: tuple[np.ndarray, np.ndarray], params: 
         _axis_corner_from_run(pieces[-1][0], False, c, d)
     segments: list[Segment] = []
     for piece, lo, hi in pieces:
-        segments.extend(fit_stretch(piece, params.tol, t_start if lo == 0 else None, t_end if hi == len(half) - 1 else None))
+        segments.extend(fit_stretch(piece, params.tol, t_start if lo == 0 else None, t_end if hi == len(half) - 1 else None, params.kind_tol))
     if not segments:
         return None
     segments = _snap_axis(segments, params.snap_axis_deg)

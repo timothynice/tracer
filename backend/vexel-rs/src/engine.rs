@@ -18,7 +18,7 @@ use crate::rescue::rescue_features;
 use crate::shadows::{detect_shadows, shadow_filter_svg, ShadowPlan};
 use crate::strokes::{is_thin_at, stroke_fidelity, stroke_geometry, stroke_svg};
 use crate::timing::Timer;
-use crate::weights::{interior_weights, interior_weights_at};
+use crate::weights::{interior, interior_at, interior_weights_at};
 use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -155,6 +155,8 @@ fn split_rim(
 struct FitOut {
     fills: HashMap<i32, Fill>,
     visible: HashMap<i32, bool>,
+    /// Every region's fill core (`weights::fill_core`), for the rescue.
+    core: Mask,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -168,34 +170,38 @@ fn fit_regions(
     alpha: &Grid<f64>,
     fit_params: &FitParams,
 ) -> FitOut {
-    let results: Vec<(i32, Fill, bool)> = ids
+    let results: Vec<(i32, Fill, bool, Vec<bool>)> = ids
         .par_iter()
         .map(|lab| {
             let px = index.pixels(*lab);
             // Boundary pixels are anti-aliasing mixtures: weight by distance
             // into the region so the fill (and the visibility test) is driven
             // by pure pixels.
-            let w = interior_weights_at(l, *lab, px);
+            let (w, core) = interior_at(l, *lab, px);
             let x: Vec<f64> = px.iter().map(|i| xs.data[*i as usize]).collect();
             let y: Vec<f64> = px.iter().map(|i| ys.data[*i as usize]).collect();
             let c: Vec<[f64; 4]> = px.iter().map(|i| rgba255[*i as usize]).collect();
-            let fill = fit_fill(&x, &y, &c, fit_params, Some(&w));
+            let fill = fit_fill(&x, &y, &c, fit_params, Some(&w), Some(&core));
             let mut num = 0.0;
             let mut den = 0.0;
             for (k, i) in px.iter().enumerate() {
                 num += alpha.data[*i as usize] * w[k];
                 den += w[k];
             }
-            (*lab, fill, num / den.max(1e-12) > 0.04)
+            (*lab, fill, num / den.max(1e-12) > 0.04, core)
         })
         .collect();
     let mut fills = HashMap::new();
     let mut visible = HashMap::new();
-    for (lab, f, v) in results {
+    let mut core_map = Grid::filled(l.h, l.w, false);
+    for (lab, f, v, core) in results {
+        for (k, i) in index.pixels(lab).iter().enumerate() {
+            core_map.data[*i as usize] = core[k];
+        }
         fills.insert(lab, f);
         visible.insert(lab, v);
     }
-    FitOut { fills, visible }
+    FitOut { fills, visible, core: core_map }
 }
 
 /// Union-find over thin regions that touch (within one pixel) and have similar
@@ -313,6 +319,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     let out = fit_regions(&ids, &l, &index, &xs, &ys, &rgba255, &prep.alpha, &fit_params);
     let mut fills = out.fills;
     let mut visible = out.visible;
+    let mut core_map = out.core;
     t.lap("fit_regions");
 
     // Transparency is one region. The inpainting under alpha = 0 leaves colour
@@ -334,6 +341,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         let out = fit_regions(&ids, &l, &index, &xs, &ys, &rgba255, &prep.alpha, &fit_params);
         fills = out.fills;
         visible = out.visible;
+        core_map = out.core;
     }
 
     // Rescue thin strokes / small details swallowed by a neighbour: pixels far
@@ -341,7 +349,8 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     // residual is normalised per region by its own fit error, so a smooth region
     // a gradient model fits imperfectly is not shredded into fragments.
     let mut residual = Grid::<f64>::new(height, width);
-    let per_region: Vec<(Vec<usize>, Vec<f64>, f64)> = ids
+    let mut pred: Vec<[f64; 4]> = vec![[0.0; 4]; height * width];
+    let per_region: Vec<(Vec<usize>, Vec<[f64; 4]>, Vec<f64>, f64)> = ids
         .par_iter()
         .map(|lab| {
             let idx: Vec<usize> = index.pixels(*lab).iter().map(|i| *i as usize).collect();
@@ -349,10 +358,11 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
             // A pixel's colour counts in proportion to how much of it shows:
             // under a transparent pixel the colour is inpainted and means
             // nothing (see the Python).
+            let at: Vec<[f64; 4]> = idx.iter().map(|i| fill.evaluate_one(xs.data[*i], ys.data[*i])).collect();
             let r: Vec<f64> = idx
                 .iter()
-                .map(|i| {
-                    let pred = fill.evaluate_one(xs.data[*i], ys.data[*i]);
+                .zip(at.iter())
+                .map(|(i, pred)| {
                     let cover = prep.alpha.data[*i];
                     let colour: f64 = (0..3).map(|c| (rgba255[*i][c] - pred[c]).powi(2)).sum();
                     (cover * cover * colour + (rgba255[*i][3] - pred[3]).powi(2)).sqrt()
@@ -366,17 +376,22 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
             } else {
                 (inliers.iter().map(|v| v * v).sum::<f64>() / inliers.len() as f64).sqrt()
             };
-            (idx, r, base.max(4.0 * fit_rms))
+            (idx, at, r, base.max(4.0 * fit_rms))
         })
         .collect();
-    for (idx, r, denom) in per_region {
+    for (idx, at, r, denom) in per_region {
         for (k, i) in idx.iter().enumerate() {
             residual.data[*i] = r[k] / denom;
+            pred[*i] = at[k];
         }
     }
+    // Near an edge, a pixel the edge's anti-aliasing or ringing explains is
+    // not part of a feature and does not count towards promoting one.
+    let over = Grid { h: height, w: width, data: residual.data.iter().map(|v| *v > 1.0).collect() };
+    let explained = crate::rescue::edge_mix(&l, &rgba255, &pred, &prep.alpha, &over);
     t.lap("residual");
     crate::dump::labels("labels_clear", &l);
-    let (rescued_labels, rescued) = rescue_features(&l, &residual, 1.0, p.min_region);
+    let (rescued_labels, rescued) = rescue_features(&l, &residual, 1.0, p.min_region, Some(&explained), Some(&core_map));
     l = rescued_labels;
     crate::dump::labels("labels_rescue", &l);
     if !rescued.is_empty() {
@@ -428,6 +443,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         tol: p.curve_tolerance,
         shape_fitting: p.shape_fitting,
         snap_axis_deg: 1.5,
+        kind_tol: crate::curves::KIND_TOL,
     };
 
     let mut invisible: HashSet<i32> = ids
@@ -452,9 +468,9 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
             refit.sort_unstable();
             for lab in refit {
                 let m = labels::mask_of(&l, lab);
-                let w = interior_weights(&m);
+                let (w, core) = interior(&m);
                 let (x, y, c) = mask_pixels(&m, &xs, &ys, &corrected);
-                fills.insert(lab, fit_fill(&x, &y, &c, &fit_params, Some(&w)));
+                fills.insert(lab, fit_fill(&x, &y, &c, &fit_params, Some(&w), Some(&core)));
             }
         }
     }

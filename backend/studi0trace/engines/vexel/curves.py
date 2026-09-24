@@ -6,8 +6,10 @@ stretch is fitted lines first — straight runs found from the residuals about
 their own total-least-squares line, gaps between them as cubics — and kept
 that way when it costs no more segments than the plain curve fit, which is
 Schneider's least-squares cubics with recursive splitting (or one C2 spline)
-within `tol`. Closed contours with no corners are tried as circles/ellipses
-first, four axis-aligned corners as rectangles.
+within `tol`; a stretch that is lines first at KIND_TOL stays lines first at
+any looser tolerance, so a straight run is a line whatever the tolerance.
+Closed contours with no corners are tried as
+circles/ellipses first, four axis-aligned corners as rectangles.
 """
 from __future__ import annotations
 
@@ -132,12 +134,19 @@ class PathShape:
 Shape = Circle | Ellipse | Rect | RoundedRect | PathShape
 
 
+KIND_TOL = 0.4  # px; lines first here stays lines first at any looser tolerance (`fit_stretch`)
+
+
 @dataclass(frozen=True)
 class CurveParams:
     corner_threshold: float = 60.0  # degrees
     tol: float = 0.4  # px
     shape_fitting: bool = True
     snap_axis_deg: float = 1.5
+    # a stretch that is lines first at this tolerance stays lines first when
+    # `tol` is looser; the bled copies under a boundary (`topology.build`) are
+    # never seen and are weighed at their own tolerance alone (inf)
+    kind_tol: float = KIND_TOL
 
 
 # --- lines first ---------------------------------------------------------------------
@@ -736,7 +745,30 @@ def fit_arc_run(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, 
     return split_arc(c, float(circle.r), p0, p1, sweep)
 
 
-def fit_stretch(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, t_end: np.ndarray | None = None) -> list[Segment]:
+def _stretch_answers(pts: np.ndarray, tol: float, t_start: np.ndarray | None, t_end: np.ndarray | None) -> list[list[Segment] | None]:
+    """The three answers for one run at `tol`, in order of preference on a tie
+    in cost: one circular arc (the exact shape), lines first, the plain curve.
+    An answer that does not exist is None; the curve always does."""
+    if t_start is None and t_end is None:
+        curve = fit_open(pts, tol)
+    else:
+        t1 = t_start if t_start is not None else _end_tangent(pts, True)
+        t2 = t_end if t_end is not None else _end_tangent(pts, False)
+        curve = list(fit_cubics(pts, t1, t2, tol))
+    return [fit_arc_run(pts, tol, t_start, t_end), lines_first(pts, tol, t_start, t_end), curve]
+
+
+def _cheapest(answers: list[list[Segment] | None]) -> int:
+    """Index of the cheapest answer; the earlier one on a tie."""
+    best = -1
+    for k, segs in enumerate(answers):
+        if segs is not None and (best < 0 or _cost(segs) < _cost(answers[best])):
+            best = k
+    return best
+
+
+def fit_stretch(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, t_end: np.ndarray | None = None,
+                kind_tol: float = KIND_TOL) -> list[Segment]:
     """One run between two breaks, as lines first or as a curve.
 
     Both are fitted; the lines-first answer is kept when it needs no more
@@ -745,24 +777,27 @@ def fit_stretch(pts: np.ndarray, tol: float, t_start: np.ndarray | None = None, 
     rounded corner between two sides, line-cubic-line, beats the four cubics the
     smooth fitter needs for it. A pinned tangent is honoured by the cubics; a
     line at a pinned end follows its own vertices, which at a wedge tip is the
-    tangent that was pinned, and elsewhere is within a degree of it.
+    tangent that was pinned, and elsewhere is within a degree of it. A run that
+    is one circle is said so, when that is no dearer: one arc against one cubic
+    is a tie the arc wins, being the exact shape.
+
+    A looser tolerance than `kind_tol` may not turn lines into a curve. It
+    lets one cubic reach across a straight run and the arc it runs into -
+    cheaper than line + curve, and bowing the straight run by half a pixel to
+    get there: the logo preset's wavy ribbon, its bowed "l", its pillowed
+    squares. Whether a run of vertices is straight does not depend on the
+    tolerance (`line_runs` has its own), so neither may whether it is drawn as
+    one: a stretch that is lines first at `kind_tol` is lines first at any
+    looser tolerance, fitted at that tolerance. Otherwise the answers at the
+    tolerance asked for are weighed as always (which can still find lines).
     """
     if len(pts) < 2:
         return []
-    if t_start is None and t_end is None:
-        curve = fit_open(pts, tol)
-    else:
-        t1 = t_start if t_start is not None else _end_tangent(pts, True)
-        t2 = t_end if t_end is not None else _end_tangent(pts, False)
-        curve = list(fit_cubics(pts, t1, t2, tol))
-    lines = lines_first(pts, tol, t_start, t_end)
-    best = lines if lines is not None and _cost(lines) <= _cost(curve) else curve
-    # a run that is one circle is said so, when that is no dearer: one arc
-    # against one cubic is a tie the arc wins, being the exact shape
-    arcs = fit_arc_run(pts, tol, t_start, t_end)
-    if arcs is not None and _cost(arcs) <= _cost(best):
-        return arcs
-    return best
+    answers = _stretch_answers(pts, tol, t_start, t_end)
+    k = _cheapest(answers)
+    if k != 1 and answers[1] is not None and tol > kind_tol and _cheapest(_stretch_answers(pts, kind_tol, t_start, t_end)) == 1:
+        k = 1
+    return answers[k]
 
 
 def _cost(segs: list[Segment]) -> float:
@@ -1421,12 +1456,80 @@ def _local_tangent(points: np.ndarray, at: int, reach: int) -> np.ndarray:
     return got if scatter <= TANGENT_SCATTER else chord
 
 
+# --- a two-point piece has no inflection -----------------------------------------------
+#
+# Two vertices say nothing about curvature, so the cubic between them must not
+# turn one way and then the other. The piece is a pixel or two long - next to
+# a node, or where a split left two vertices - and its arms, a third of the
+# chord along the two pinned tangents, overshoot the point V where those
+# tangents meet whenever V is nearer than that: a hook. Held to V, the control
+# polygon is convex and so is the cubic. Tangents that do not meet ahead (an
+# S is the only cubic they allow) are left as they are.
+
+INFL_DEG = 1.0  # degrees a cubic may turn back against its own turning before it is an S
+
+
+def counter_turn_deg(c: Cubic) -> float:
+    """How far the cubic turns back against its net turning, in degrees: 0 for
+    a convex cubic, the smaller lobe of an S. Read at its inflections, the
+    roots in (0, 1) of cross(B', B''), which is a quadratic, so it is exact."""
+    a, b, d = c.c1 - c.p0, c.c2 - c.c1, c.p1 - c.c2
+    # B'(t) / 3 = qa t^2 + qb t + qc, and cross(B', B'') is proportional to
+    # -x(qa, qb) t^2 + 2 x(qc, qa) t + x(qc, qb)
+    qa, qb, qc = a - 2.0 * b + d, 2.0 * (b - a), a
+
+    def cross(u: np.ndarray, v: np.ndarray) -> float:
+        return float(u[0] * v[1] - u[1] * v[0])
+
+    k2, k1, k0 = -cross(qa, qb), 2.0 * cross(qc, qa), cross(qc, qb)
+    roots: list[float] = []
+    if abs(k2) > 1e-12:
+        disc = k1 * k1 - 4.0 * k2 * k0
+        if disc > 0.0:
+            r = math.sqrt(disc)
+            roots = sorted(((-k1 - r) / (2.0 * k2), (-k1 + r) / (2.0 * k2)))
+    elif abs(k1) > 1e-12:
+        roots = [-k0 / k1]
+    ts = [0.0, *(t for t in roots if 1e-6 < t < 1.0 - 1e-6), 1.0]
+    if len(ts) == 2:
+        return 0.0
+
+    def tangent(t: float) -> np.ndarray:
+        v = qa * t * t + qb * t + qc
+        if math.hypot(v[0], v[1]) < 1e-12:  # a zero arm: the direction just inside
+            t = min(max(t, 1e-4), 1.0 - 1e-4)
+            v = qa * t * t + qb * t + qc
+        return v
+
+    lobes = [math.atan2(cross(tangent(t0), tangent(t1)), float(tangent(t0) @ tangent(t1))) for t0, t1 in zip(ts[:-1], ts[1:])]
+    return math.degrees((sum(abs(x) for x in lobes) - abs(sum(lobes))) / 2.0)
+
+
+def _two_point_cubic(p0: np.ndarray, p1: np.ndarray, t1: np.ndarray, t2: np.ndarray) -> Cubic:
+    """The cubic from p0 along t1 to p1 along t2 (pointing back), arms a third
+    of the chord, or no longer than the way to where the two tangents meet
+    when that is shorter and the chord/3 arms would make it an S."""
+    d = float(np.linalg.norm(p1 - p0)) / 3.0
+    c = Cubic(p0.copy(), p0 + t1 * d, p1 + t2 * d, p1.copy())
+    if counter_turn_deg(c) <= INFL_DEG:
+        return c
+    # V = p0 + s1 t1 = p1 + s2 t2
+    det = float(t1[0] * -t2[1] - (-t2[0]) * t1[1])
+    if abs(det) < 1e-12:
+        return c  # parallel tangents: a jog, only an S has them
+    rhs = p1 - p0
+    s1 = float((rhs[0] * -t2[1] - (-t2[0]) * rhs[1]) / det)
+    s2 = float((t1[0] * rhs[1] - t1[1] * rhs[0]) / det)
+    if s1 <= 0.0 or s2 <= 0.0:
+        return c  # the tangents diverge: only an S has them
+    return Cubic(p0.copy(), p0 + t1 * min(d, s1), p1 + t2 * min(d, s2), p1.copy())
+
+
 def fit_cubics(points: np.ndarray, t1: np.ndarray, t2: np.ndarray, tol: float, depth: int = 0) -> list[Cubic]:
     """Schneider: fit one cubic to `points` with end tangents t1 (at start) and t2 (at end,
     pointing backwards); split at the worst point and recurse when needed."""
     if len(points) == 2:
-        d = np.linalg.norm(points[1] - points[0]) / 3.0
-        return [Cubic(points[0].copy(), points[0] + t1 * d, points[1] + t2 * d, points[1].copy())]
+        return [_two_point_cubic(points[0], points[1], t1, t2)]
     if depth == 0 and len(points) >= SPLINE_MIN:
         spline = fit_c2(points, t1, t2, tol)
         if spline is not None:
@@ -1576,16 +1679,16 @@ def split_pieces(poly: np.ndarray, corners: list[int], reach: float = 3.0, trim:
 def fit_contour_segments(poly: np.ndarray, params: CurveParams) -> tuple[list[Segment], list[int]]:
     corners = find_corners(poly, params.corner_threshold)
     if not corners:
-        return fit_closed(poly, params.tol), corners
+        return fit_closed(poly, params.tol, params.kind_tol), corners
     pieces = [piece for piece in split_pieces(poly, corners) if len(piece) >= 2]
     corners_from_runs(pieces, closed=True)
     segments: list[Segment] = []
     for piece in pieces:
-        segments.extend(fit_stretch(piece, params.tol))
+        segments.extend(fit_stretch(piece, params.tol, kind_tol=params.kind_tol))
     return snap_axis_lines(segments, params.snap_axis_deg), sorted(corners)
 
 
-def fit_closed(poly: np.ndarray, tol: float) -> list[Segment]:
+def fit_closed(poly: np.ndarray, tol: float, kind_tol: float = KIND_TOL) -> list[Segment]:
     """Closed contour without corners: lines first where it has straight runs,
     else the smooth closed fit. A rounded square has no corner sharp enough to
     split it and used to go to the smooth fit whole, sides barrelled; its sides
@@ -1619,17 +1722,30 @@ def fit_closed(poly: np.ndarray, tol: float) -> list[Segment]:
     i, j, _c, _d = max(runs, key=lambda r: r[1] - r[0])
     start = ((i + j) // 2) % n
     rolled = np.vstack([poly[start:], poly[:start], poly[start:start + 1]])
-    lines = lines_first(rolled, tol)
+    lines = _seam_merged(lines_first(rolled, tol))
     if lines is None:
         return smooth
-    if len(lines) > 1 and isinstance(lines[0], Line) and isinstance(lines[-1], Line):
+    if _cost(lines) <= _cost(smooth):
+        return lines
+    if tol > kind_tol:
+        # lines first at `kind_tol` stays lines first when looser (`fit_stretch`)
+        tight = _seam_merged(lines_first(rolled, kind_tol))
+        if tight is not None and _cost(tight) <= _cost(fit_closed_smooth(poly, kind_tol)):
+            return lines
+    return smooth
+
+
+def _seam_merged(lines: list[Segment] | None) -> list[Segment] | None:
+    """A closed lines-first answer with the two lines that meet at its seam made
+    one when they are collinear."""
+    if lines is not None and len(lines) > 1 and isinstance(lines[0], Line) and isinstance(lines[-1], Line):
         a = lines[0].p1 - lines[0].p0
         b = lines[-1].p1 - lines[-1].p0
         la, lb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
         if la > 0 and lb > 0 and _turn_deg(a / la, b / lb) <= MERGE_DEG:
             lines[-1] = Line(lines[-1].p0.copy(), lines[0].p1.copy())
             lines = lines[1:]
-    return lines if _cost(lines) <= _cost(smooth) else smooth
+    return lines
 
 
 def fit_shape(contours: list[np.ndarray], params: CurveParams) -> Shape:

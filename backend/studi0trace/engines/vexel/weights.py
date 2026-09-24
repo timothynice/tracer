@@ -25,8 +25,11 @@ from scipy import ndimage
 REACH = 3.0  # distance at which a pixel counts fully as interior
 
 
-def interior_weights(mask: np.ndarray) -> np.ndarray:
-    """Weights for `mask`'s True pixels in row-major order (same order as mask[mask])."""
+CORE_MIN = 8  # fewest core pixels a region needs to be fitted from its core alone
+
+
+def interior_depth(mask: np.ndarray) -> np.ndarray:
+    """Distance into the region for `mask`'s True pixels, row-major (same order as mask[mask])."""
     rows = np.nonzero(mask.any(axis=1))[0]
     cols = np.nonzero(mask.any(axis=0))[0]
     if rows.size == 0:
@@ -35,4 +38,31 @@ def interior_weights(mask: np.ndarray) -> np.ndarray:
     c0, c1 = cols[0], cols[-1] + 1
     crop = np.pad(mask[r0:r1, c0:c1], 1, mode="constant", constant_values=False)
     dist = ndimage.distance_transform_edt(crop)[1:-1, 1:-1]
-    return ((np.clip(dist, 0.5, REACH) / REACH) ** 2)[mask[r0:r1, c0:c1]]
+    return dist[mask[r0:r1, c0:c1]]
+
+
+def weights_of(depth: np.ndarray) -> np.ndarray:
+    return (np.clip(depth, 0.5, REACH) / REACH) ** 2
+
+
+def interior_weights(mask: np.ndarray) -> np.ndarray:
+    """Weights for `mask`'s True pixels in row-major order (same order as mask[mask])."""
+    return weights_of(interior_depth(mask))
+
+
+def fill_core(depth: np.ndarray) -> np.ndarray:
+    """The pixels a fill is fitted from: those deeper than REACH, past the edge's
+    anti-aliasing and any sharpening halo. A region too thin to have CORE_MIN
+    of them is all edge band, and keeps every pixel: its deepest ridge alone
+    can be one pixel, or the transparent side of an anti-aliased sliver, whose
+    fill would then come out invisible and drop a piece out of a thin line."""
+    core = depth > REACH
+    if int(core.sum()) < CORE_MIN:
+        return np.ones(depth.shape, bool)
+    return core
+
+
+def interior(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(weights, core) for `mask`'s True pixels, row-major."""
+    depth = interior_depth(mask)
+    return weights_of(depth), fill_core(depth)

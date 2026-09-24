@@ -95,3 +95,93 @@ def test_ramp_fit_recovers_two_stop_ramp():
     assert len(stops) == 2
     assert np.allclose(stops[0].rgba, [0, 128, 255, 255], atol=1)
     assert np.allclose(stops[1].rgba, [255, 128, 0, 255], atol=1)
+
+
+# --- the edge band: anti-aliasing and sharpening halos are the edge's, not the fill's ---
+
+
+def _band(profile, length, across_rows=True, pad=3):
+    """A straight band region whose colour varies only across it: `profile[i]`
+    is the colour of its i-th row (or column). Returns pixel centres, colours
+    and the fit's (weights, core) for it."""
+    from studi0trace.engines.vexel.weights import interior
+
+    n = len(profile)
+    shape = (n + 2 * pad, length + 2 * pad) if across_rows else (length + 2 * pad, n + 2 * pad)
+    mask = np.zeros(shape, bool)
+    if across_rows:
+        mask[pad:pad + n, pad:pad + length] = True
+    else:
+        mask[pad:pad + length, pad:pad + n] = True
+    yy, xx = np.nonzero(mask)
+    col = opaque(np.asarray(profile, float)[(yy if across_rows else xx) - pad])
+    wt, core = interior(mask)
+    return xx + 0.5, yy + 0.5, col, wt, core
+
+
+# Profiles read off the Vexel wordmark (bench/corpus/real/logo/vexel-wordmark-512.png).
+# The "e" counter, top to bottom: grey anti-aliasing rows either side of white.
+COUNTER = [(202, 202, 206), (246, 246, 248), (252, 251, 251), (251, 251, 251), (254, 253, 254),
+           (254, 253, 254), (254, 254, 254), (252, 252, 252), (255, 255, 255), (170, 170, 172)]
+# The "l", left to right: grey AA, a black undershoot and a light rebound (the
+# source was sharpened), the glyph's near-black, and the same halo mirrored.
+ELL = [(125, 126, 129), (0, 0, 0), (35, 36, 40)] + [(6, 10, 20)] * 11 + [(24, 26, 32), (0, 0, 0), (45, 48, 55)]
+
+
+def test_counter_with_anti_aliased_rim_is_solid():
+    # Fitted with the rim, this came out as #cacacf → white → #aaaaac: the rim
+    # rows alone decided the end stops and painted a grey band along the edge.
+    xs, ys, col, wt, core = _band(COUNTER, 38)
+    fill = fit_fill(xs, ys, col, FitParams(max_stops=4, tol=3.0), weights=wt, core=core)
+    assert isinstance(fill, Solid), fill
+    assert np.allclose(fill.rgba[:3], 253, atol=1.5)
+
+
+def test_sharpening_halo_does_not_bend_a_glyph_fill():
+    # Fitted with the rim: a grey (#7d7e81) streak down the l's left edge, and
+    # at max_stops 6 the whole halo profile as six stops.
+    xs, ys, col, wt, core = _band(ELL, 84, across_rows=False)
+    for stops, tol in ((4, 3.0), (6, 2.0)):
+        fill = fit_fill(xs, ys, col, FitParams(max_stops=stops, tol=tol), weights=wt, core=core)
+        assert isinstance(fill, Solid), fill
+        assert np.allclose(fill.rgba[:3], [6, 10, 20], atol=1.0)
+
+
+def test_real_gradient_survives_the_edge_band():
+    # The V's lower arm at the logo preset's tolerance: a 34-level ramp across a
+    # 72 px shape, anti-aliased against white. On the core alone a solid scores
+    # 4.6, under tol 5, and the ramp would be lost; "good enough" is judged over
+    # the whole region (as it was before the core existed), the ramp is fitted
+    # on the core.
+    from studi0trace.engines.vexel.weights import interior
+
+    mask = np.zeros((66, 78), bool)
+    mask[3:63, 3:75] = True
+    yy, xx = np.nonzero(mask)
+    xs, ys = xx + 0.5, yy + 0.5
+    wt, core = interior(mask)
+    t = (xs - xs.min()) / (xs.max() - xs.min())
+    ramp = np.stack([0 + 2 * t, 89 + 34 * t, np.full_like(t, 252.0)], axis=1)
+    rim = (xx == 3) | (xx == 74) | (yy == 3) | (yy == 62)
+    ramp[rim] = 0.5 * ramp[rim] + 0.5 * 255.0  # anti-aliased against white
+    col = opaque(ramp)
+    fill = fit_fill(xs, ys, col, FitParams(max_stops=4, tol=5.0), weights=wt, core=core)
+    assert isinstance(fill, Linear), fill
+    inner = ~rim
+    err = np.sqrt(((fill.evaluate(xs[inner], ys[inner]) - col[inner]) ** 2).mean())
+    assert err < 1.5
+    assert all(s.rgba[0] < 10 for s in fill.stops)  # no stop took the rim's white
+
+
+
+def test_ramp_stops_keep_a_minimum_pixel_gap():
+    # A 10 px ramp whose last pixel is a step: a stop 1/16 of the span in would
+    # own that pixel alone. Stops closer than KNOT_GAP px are an edge.
+    from studi0trace.engines.vexel.fills import KNOT_GAP
+
+    t = np.linspace(0, 1, 11)
+    lum = np.where(t > 0.95, 120.0, 20.0)
+    col = np.stack([lum, lum, lum, np.full_like(t, 255.0)], axis=1)
+    stops = ramp_fit(t, col, np.ones_like(t), max_stops=6, tol=0.5, span=10.0)
+    offs = [s.offset for s in stops]
+    assert all(b - a >= KNOT_GAP / 10.0 - 1e-9 for a, b in zip(offs, offs[1:]))

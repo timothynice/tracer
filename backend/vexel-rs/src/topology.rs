@@ -1592,7 +1592,7 @@ pub fn fit_arc(pts: &[P], closed: bool, t0: Option<P>, t1: Option<P>, trims: (f6
         let ts = if *lo == 0 { t0 } else { None };
         let te = if *hi == n - 1 { t1 } else { None };
         // Lines first: see the Python `_fit_arc`.
-        segments.extend(fit_stretch(piece, params.tol, ts, te));
+        segments.extend(fit_stretch(piece, params.tol, ts, te, params.kind_tol));
     }
     snap_axis(segments, params.snap_axis_deg)
 }
@@ -1784,7 +1784,7 @@ fn fit_mirrored(pts: &[P], axis: (P, P), params: &CurveParams) -> Option<Vec<Seg
     for (piece, (lo, hi)) in pieces.iter().zip(&spans) {
         let ts = if *lo == 0 { t_start } else { None };
         let te = if *hi == half.len() - 1 { t_end } else { None };
-        segments.extend(fit_stretch(piece, params.tol, ts, te));
+        segments.extend(fit_stretch(piece, params.tol, ts, te, params.kind_tol));
     }
     if segments.is_empty() {
         return None;
@@ -1969,7 +1969,8 @@ pub fn build_opt(
         if rank.is_some() && BLEED > 0.0 && a != 0 && b != 0 {
             // The bled copy is never seen — the shape that causes it covers it —
             // so it is fitted loosely, but no looser than the bleed can absorb.
-            let loose = CurveParams { tol: (2.0 * params.tol).min(UNDER_TOL * BLEED), ..*params };
+            // ... and weighed at its own tolerance alone: nobody sees it.
+            let loose = CurveParams { tol: (2.0 * params.tol).min(UNDER_TOL * BLEED), kind_tol: f64::INFINITY, ..*params };
             let moved = bled(arc, if b_later { BLEED } else { -BLEED }, TAPER);
             let under = fit_under(&moved, arc, &loose);
             arc.under = under;

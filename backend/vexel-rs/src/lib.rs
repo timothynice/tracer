@@ -62,7 +62,8 @@ mod python {
     /// Fit one region's fill from the raw pixel lists, so the fill stage can be
     /// compared against the Python's in isolation.
     #[pyfunction]
-    #[pyo3(signature = (xs, ys, rgba, weights, gradients, max_stops, tol))]
+    #[pyo3(signature = (xs, ys, rgba, weights, gradients, max_stops, tol, core=None))]
+    #[allow(clippy::too_many_arguments)]
     fn _fit_fill(
         xs: Vec<f64>,
         ys: Vec<f64>,
@@ -71,10 +72,11 @@ mod python {
         gradients: bool,
         max_stops: usize,
         tol: f64,
+        core: Option<Vec<bool>>,
     ) -> (String, Vec<f64>) {
         let col: Vec<[f64; 4]> = rgba.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
         let params = fills::FitParams { gradients, max_stops, tol };
-        let f = fills::fit_fill(&xs, &ys, &col, &params, Some(&weights));
+        let f = fills::fit_fill(&xs, &ys, &col, &params, Some(&weights), core.as_deref());
         let mut out = Vec::new();
         match &f {
             fills::Fill::Solid { rgba } => out.extend_from_slice(rgba),
@@ -188,7 +190,7 @@ mod python {
         snap_axis_deg: f64,
     ) -> Vec<(String, Vec<f64>)> {
         let pts: Vec<[f64; 2]> = pts.chunks(2).map(|c| [c[0], c[1]]).collect();
-        let params = curves::CurveParams { corner_threshold, tol, shape_fitting: true, snap_axis_deg };
+        let params = curves::CurveParams { corner_threshold, tol, shape_fitting: true, snap_axis_deg, kind_tol: curves::KIND_TOL };
         let segs = topology::fit_arc(
             &pts,
             closed,
@@ -270,7 +272,7 @@ mod python {
     ) -> std::collections::HashMap<i32, crate::fills::Fill> {
         use crate::core::labels::{mask_of, LabelIndex};
         use crate::fills::{fit_fill, FitParams};
-        use crate::weights::interior_weights;
+        use crate::weights::interior;
         let rgba255: Vec<[f64; 4]> = (0..h * w)
             .map(|i| {
                 let px = prep.rgb.px(i);
@@ -287,12 +289,12 @@ mod python {
         let mut fills = std::collections::HashMap::new();
         for lab in &ids {
             let m = mask_of(labels, *lab);
-            let wt = interior_weights(&m);
+            let (wt, core) = interior(&m);
             let px = index.pixels(*lab);
             let x: Vec<f64> = px.iter().map(|i| xs[*i as usize]).collect();
             let y: Vec<f64> = px.iter().map(|i| ys[*i as usize]).collect();
             let c: Vec<[f64; 4]> = px.iter().map(|i| rgba255[*i as usize]).collect();
-            fills.insert(*lab, fit_fill(&x, &y, &c, &params, Some(&wt)));
+            fills.insert(*lab, fit_fill(&x, &y, &c, &params, Some(&wt), Some(&core)));
         }
         fills
     }
@@ -322,6 +324,7 @@ mod python {
             tol: 0.4,
             shape_fitting: true,
             snap_axis_deg: 1.5,
+            kind_tol: curves::KIND_TOL,
         };
         let bnd = topology::build_opt(&labels, &prep.rgb, &prep.alpha, &fill_at, &cp, None, snap, extend);
 
@@ -362,6 +365,24 @@ mod python {
             }
         }
         topology::extend_wedges(&padded, &prep.rgb, &prep.alpha, &fill_at).0.data
+    }
+
+    /// Which of the `at` pixels a nearby edge explains (`rescue::edge_mix`),
+    /// given one label map, colours, fills-at-each-pixel and alpha, for
+    /// `tools/diffcheck.py`.
+    #[pyfunction]
+    #[allow(clippy::too_many_arguments)]
+    fn _stage_edge_mix(labels: Vec<i32>, h: usize, w: usize, colour: Vec<f64>, pred: Vec<f64>, alpha: Vec<f64>, at: Vec<bool>) -> Vec<i32> {
+        use crate::core::grid::Grid;
+        let quad = |v: &[f64]| -> Vec<[f64; 4]> { v.chunks_exact(4).map(|q| [q[0], q[1], q[2], q[3]]).collect() };
+        let ex = crate::rescue::edge_mix(
+            &Grid::from_vec(h, w, labels),
+            &quad(&colour),
+            &quad(&pred),
+            &Grid::from_vec(h, w, alpha),
+            &Grid::from_vec(h, w, at),
+        );
+        ex.data.iter().map(|b| *b as i32).collect()
     }
 
     #[pyfunction]
@@ -412,6 +433,7 @@ mod python {
     m.add_function(wrap_pyfunction!(_stage_upsample, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_wedges, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_edge_mix, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_seed, m)?)?;
         m.add_function(wrap_pyfunction!(_rng_choice, m)?)?;
         m.add_function(wrap_pyfunction!(_fit_fill, m)?)?;
