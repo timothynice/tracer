@@ -24,6 +24,7 @@ use crate::core::labels::Labels;
 use crate::curves::{
     CORNER_REACH,
     CurveParams,
+    Shape,
     MERGE_DEG,
     P,
     Segment,
@@ -157,6 +158,8 @@ pub struct Arc {
     pub sliver: Option<Vec<bool>>,
     /// A closed arc's mirror axis (point, unit direction), when it has one.
     pub mirror: Option<(P, P)>,
+    /// A closed arc that is one (rounded) rectangle, as the primitive (`rectify`).
+    pub rect: Option<Shape>,
 }
 
 impl Arc {
@@ -176,6 +179,8 @@ pub struct Boundary {
     /// Paint order by label, when the shapes are stacked.
     pub rank: Option<HashMap<i32, usize>>,
 }
+
+pub mod rectify;
 
 #[inline]
 fn edge_key(kind: u64, i: u64, j: u64, lat_cols: u64) -> u64 {
@@ -2578,6 +2583,7 @@ pub fn build_opt(
             trim1: NODE_TRIM,
             sliver: if crowded.iter().any(|c| *c) { Some(crowded) } else { None },
             mirror: None,
+            rect: None,
         })
         .collect();
 
@@ -2605,6 +2611,15 @@ pub fn build_opt(
         arc.segments = fit_arc(&arc.pts, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), arc.mirror, params);
     }
     timer.lap("topology: fit");
+    // Rounded rectangles drawn as a designer draws them: one radius per shape
+    // and per size of shape, edges on shared guides (see `rectify`); and a
+    // rounded corner between two lines anywhere else is one circle, of the
+    // radius the rest of the mark's corners share where they agree.
+    let mut whole = Boundary { arcs, padded, edge_arc, later_is_b: Vec::new(), rank: None };
+    let (rect_arcs, radii) = rectify::rectify(&mut whole, params, rgb, None);
+    rectify::fillets(&mut whole, params, &rect_arcs, &radii, None);
+    let Boundary { mut arcs, padded, edge_arc, .. } = whole;
+    timer.lap("topology: rectangles");
     // Across the graph: lines meant to be parallel, perpendicular or on an axis
     // are made exactly so. Nodes never move, so the ring still closes.
     {
@@ -2725,6 +2740,21 @@ impl Boundary {
     pub fn assembled(arcs: Vec<Arc>, padded: Labels, rank: Option<HashMap<i32, usize>>) -> Self {
         let later_is_b = vec![false; arcs.len()];
         Boundary { arcs, padded, edge_arc: HashMap::new(), later_is_b, rank }
+    }
+
+    /// A boundary from its parts, for `tools/diffcheck.py`'s stage hooks: the
+    /// arcs as another implementation left them, and its edge index.
+    pub fn from_parts(arcs: Vec<Arc>, padded: Labels, edge_arc: HashMap<u64, (usize, usize)>) -> Boundary {
+        let later_is_b = vec![false; arcs.len()];
+        Boundary { arcs, padded, edge_arc, later_is_b, rank: None }
+    }
+
+    /// The whole-shape primitive a ring already is, when `rectify` made it one.
+    pub fn primitive(&self, ring: &[(usize, bool)]) -> Option<Shape> {
+        if ring.len() == 1 {
+            return self.arcs[ring[0].0].rect.clone();
+        }
+        None
     }
 
     /// Closed rings bounding the union of `labels`, as (arc index, reversed).

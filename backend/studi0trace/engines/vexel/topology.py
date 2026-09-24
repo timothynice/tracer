@@ -1812,7 +1812,10 @@ def _decide_corner(arcs: list[Arc], cand: _RectCandidate, nc: _NodeCorner, m: re
     o_idx, o_end = outside[0]
     o_pts = arcs[o_idx].pts if o_end == 0 else arcs[o_idx].pts[::-1]
     o_segs = arcs[o_idx].segments if o_end == 0 else reverse_segments(arcs[o_idx].segments)
-    head = o_segs[0] if o_segs else None
+    if not o_segs:
+        # a collapsed arc (both ends on one node) has no first piece to leave along
+        return "unresolved", None
+    head = o_segs[0]
     point = np.array([cx, cy])
     corner_sides = [k for k in range(4) if nc.corner in _side_corners(k)]
 
@@ -2320,7 +2323,7 @@ def _resample(arc: Arc) -> None:
     arc.sliver = None
 
 
-def _rectify(bnd: Boundary, params: CurveParams, rgb: np.ndarray) -> tuple[set[int], list[float]]:
+def _rectify(bnd: Boundary, params: CurveParams, rgb: np.ndarray, log: list | None = None) -> tuple[set[int], list[float]]:
     """Every ring that is an axis-aligned rounded rectangle, made regular and
     written back into its arcs. Returns the arcs of every ring that reads as
     one, written or not, and the radii the rounded shapes took, for `_fillets`.
@@ -2330,7 +2333,11 @@ def _rectify(bnd: Boundary, params: CurveParams, rgb: np.ndarray) -> tuple[set[i
     that share an arc cannot both be written: a rounded one is taken before a
     sharp one (a bar a rounded square sits against is only lines already, and
     the square's corners at the bar need the bar's arcs), and otherwise the
-    first found."""
+    first found.
+
+    `log`, when given, receives one row of numbers per candidate and per
+    settled shape, for `tools/diffcheck.py`'s `rects` stage
+    (`topology/rectify.rs` writes the same rows)."""
     h, w = bnd.padded.shape[0] - 2, bnd.padded.shape[1] - 2
     seen: set[frozenset[int]] = set()
     found: list[_RectCandidate] = []
@@ -2365,9 +2372,15 @@ def _rectify(bnd: Boundary, params: CurveParams, rgb: np.ndarray) -> tuple[set[i
             # taken out of what the placement read (`rects.deblur`)
             read = rects.edge_sigma(rgb, m)
             sigma = read[0] if read is not None else 0.0
+            raw = list(m.r)
             m.r = [rects.deblur(r, sigma) if r > 0.0 else 0.0 for r in m.r]
             x, y = poly[:, 0], poly[:, 1]
             clockwise = float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) > 0.0
+            if log is not None:
+                log.append([1.0, float(len(ring)), *[float(v) for i, rev in ring for v in (i, rev)],
+                            m.x0, m.y0, m.x1, m.y1, *raw, *m.votes, sigma, float(read[1]) if read is not None else -1.0,
+                            *m.r, float(clockwise), *[float(len(p)) for p in pinned], float(len(node_corners)),
+                            *[float(v) for nc in node_corners for v in (nc.corner, nc.before, nc.after, len(nc.sides), *nc.sides)]])
             found.append(_RectCandidate(ring, poly, trusted, m, clockwise, pinned, node_corners, sigma))
     rounded = [any(c.model.r[k] > rects.SHARP_SHAPE_R and c.model.votes[k] > 0 for k in range(4)) for c in found]
     cands: list[_RectCandidate] = []
@@ -2386,11 +2399,18 @@ def _rectify(bnd: Boundary, params: CurveParams, rgb: np.ndarray) -> tuple[set[i
     radii: set[float] = set()
     for k, cand in enumerate(cands):
         # the model made regular with the others, else on its own
-        settled = (_settle_corners(bnd.arcs, cand, models[k], shape_r[k], claimed, params)
-                   or _settle_corners(bnd.arcs, cand, own[k], own_r[k], claimed, params))
+        settled, which = _settle_corners(bnd.arcs, cand, models[k], shape_r[k], claimed, params), 1.0
         if settled is None:
+            settled, which = _settle_corners(bnd.arcs, cand, own[k], own_r[k], claimed, params), 2.0
+        if settled is None:
+            if log is not None:
+                log.append([2.0, float(k), 0.0, shape_r[k], own_r[k]])
             continue
         m, plans = settled
+        if log is not None:
+            log.append([2.0, float(k), which, shape_r[k], own_r[k], m.x0, m.y0, m.x1, m.y1, *m.r, float(len(plans)),
+                        *[float(v) for nc, plan in plans
+                          for v in (nc.corner, plan[0], plan[1], plan[2], plan[3][0], plan[3][1] == -1, plan[4])]])
         moved = set()
         for nc, plan in plans:
             t = _apply_cusp(bnd.arcs, m, nc.corner, plan, nc.point, params)
@@ -2454,7 +2474,7 @@ FILLET_TURN = (30.0, 150.0)  # degrees two lines must turn by to make a corner w
 FILLET_LINE_KEEP = 1.0   # px of each line that must be left once the fillet has taken its share
 
 
-def _fillets(bnd: Boundary, params: CurveParams, skip: set[int], anchors: list[float]) -> int:
+def _fillets(bnd: Boundary, params: CurveParams, skip: set[int], anchors: list[float], log: list | None = None) -> int:
     """Rounded corners between two lines, anywhere in the graph, as a designer
     draws them: a circular arc tangent to both lines, of a radius shared with
     the other rounded corners of the mark where they agree.
@@ -2547,6 +2567,8 @@ def _fillets(bnd: Boundary, params: CurveParams, skip: set[int], anchors: list[f
     for (idx, i, j, x, da, db, near, r, r_max), want in sorted(zip(found, target), key=lambda t: (t[0][0], -t[0][1])):
         if want != r and (want > r_max or not _fillet_holds(near, x, da, db, want, FINAL_SLACK * tol, 2.0 * tol)):
             want = r
+        if log is not None:
+            log.append([3.0, float(idx), float(i), float(j), r, r_max, want])
         segs = bnd.arcs[idx].segments
         t1, t2, sweep = rects.fillet_points(x, da, db, want)
         a, b = segs[i], segs[j]

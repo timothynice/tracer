@@ -126,6 +126,14 @@ TOLERANCE = {
     # which kinds of segment it is made of; the numbers are then the offset of
     # the same curve, sampled and fitted by the same arithmetic.
     "under": ("rms", 1e-3, 0.0),
+    # Stage 7a, on one fitted graph (see `rects`). Which rings are candidates,
+    # every decision (joint or own model, sharp, cusp, carries), which segments
+    # come out and how many vertices each arc is resampled to must match
+    # exactly, and a mismatch fails outright; the numbers are then held to the
+    # worst difference. What is left is the last bits: a golden-section search
+    # compares two costs summed as BLAS sums a dot product in the Python and in
+    # a plain loop here.
+    "rects": ("max", 1e-6, 0.0),
     "trace_labels": ("max", 0.0, 0.002),
     "trace_arcs": ("rms", 0.05, 0.0),
     # Stroke recovery, per thin group: which regions are thin, how they group,
@@ -512,6 +520,124 @@ def arcs(path):
         print(f"  FAIL arcs      {path.name}: {len(rows)} arcs / {py.size} values in Python, {len(rs_rows)} arcs / {rs.size} in Rust")
         return np.zeros(1), np.full(1, 1e9)
     return py, rs
+
+
+def _seg_rows(segs) -> list[tuple[str, list[float]]]:
+    from studi0trace.engines.vexel.curves import CircArc, Cubic, Line
+
+    out = []
+    for s in segs:
+        if isinstance(s, Line):
+            out.append(("L", [*map(float, s.p0), *map(float, s.p1)]))
+        elif isinstance(s, Cubic):
+            out.append(("C", [*map(float, s.p0), *map(float, s.c1), *map(float, s.c2), *map(float, s.p1)]))
+        else:
+            assert isinstance(s, CircArc)
+            out.append(("A", [*map(float, s.p0), *map(float, s.p1), float(s.r), float(s.large), float(s.sweep)]))
+    return out
+
+
+@stage
+def rects(path):
+    """Stage 7a on one fitted graph: the Python builds the graph on one map, and
+    its arcs as they stand after the arc fit (vertices, normals, segments,
+    tangents, trims, slivers), with the padded map and the edge index, go to
+    `topology._rectify` + `_fillets` and to the Rust `rectify` + `fillets`
+    alike. Compared: the decision log (each candidate ring's box, raw radii,
+    votes, blur, deblurred radii, pinned sides and node corners; each shape's
+    settled model, which of the joint and own models held, and every cusp;
+    each fillet's radius read, room and radius written), then every arc as the
+    stage left it (vertices, normals, segments, pinned tangents, trims, the
+    rectangle primitive). Any difference in which segments exist fails
+    outright."""
+    import copy
+
+    a, prep, labels, fills = _prepared(path)
+    h, w = a.shape[:2]
+    params = CurveParams(corner_threshold=60.0, tol=0.4, shape_fitting=True)
+    captured: dict = {}
+    orig_rectify, orig_fillets = topology._rectify, topology._fillets
+
+    def rectify(bnd, p, rgb, log=None):
+        captured["before"] = copy.deepcopy(bnd.arcs)
+        captured["padded"], captured["edge_arc"], captured["log"] = bnd.padded, dict(bnd.edge_arc), []
+        return orig_rectify(bnd, p, rgb, log=captured["log"])
+
+    def fillets(bnd, p, skip, anchors, log=None):
+        n = orig_fillets(bnd, p, skip, anchors, log=captured["log"])
+        captured["after"] = copy.deepcopy(bnd.arcs)
+        return n
+
+    topology._rectify, topology._fillets = rectify, fillets
+    try:
+        topology.build(labels, prep.rgb, prep.alpha, lambda lab, qx, qy: fills[lab].evaluate(qx, qy), params)
+    finally:
+        topology._rectify, topology._fillets = orig_rectify, orig_fillets
+    before, after, py_log = captured["before"], captured["after"], captured["log"]
+    padded = captured["padded"]
+    keys = [int(k) for k in captured["edge_arc"]]
+    vals = [(int(i), int(pos)) for i, pos in captured["edge_arc"].values()]
+
+    def opt(v):
+        return None if v is None else tuple(float(x) for x in v)
+
+    rs_log, rs_arcs = vexel_rs._stage_rects(
+        padded.astype(np.int32).ravel().tolist(), *padded.shape,
+        np.asarray(prep.rgb, dtype=np.float64).ravel().tolist(), h, w, keys, vals,
+        [(int(arc.pair[0]), int(arc.pair[1])) for arc in before],
+        [arc.pts.ravel().tolist() for arc in before],
+        [np.asarray(arc.normal, dtype=np.float64).ravel().tolist() for arc in before],
+        [(None if arc.n0 is None else int(arc.n0), None if arc.n1 is None else int(arc.n1)) for arc in before],
+        [_seg_rows(arc.segments) for arc in before],
+        [(opt(arc.t0), opt(arc.t1)) for arc in before],
+        [(bool(arc.tip0), bool(arc.tip1), float(arc.trim0), float(arc.trim1)) for arc in before],
+        [None if arc.sliver is None else [bool(v) for v in arc.sliver] for arc in before],
+        [None if arc.mirror is None else (*map(float, arc.mirror[0]), *map(float, arc.mirror[1])) for arc in before],
+        params.corner_threshold, params.tol, params.snap_axis_deg,
+    )
+    kinds = {1.0: "candidate", 2.0: "shape", 3.0: "fillet"}
+    n_rows = {k: sum(1 for r in py_log if r[0] == t) for t, k in kinds.items()}
+    print(f"       rects     {path.name}: {n_rows['candidate']} candidates, "
+          f"{sum(1 for r in py_log if r[0] == 2.0 and r[2] > 0)} of {n_rows['shape']} shapes written, {n_rows['fillet']} fillets")
+    py_out: list[float] = []
+    rs_out: list[float] = []
+    if len(py_log) != len(rs_log):
+        print(f"  FAIL rects     {path.name}: {len(py_log)} log rows in Python, {len(rs_log)} in Rust")
+        return np.zeros(1), np.full(1, 1e9)
+    for pr, rr in zip(py_log, rs_log):
+        if len(pr) != len(rr) or pr[0] != rr[0] or (pr[0] == 2.0 and pr[2] != rr[2]):
+            print(f"  FAIL rects     {path.name}: {kinds.get(pr[0], pr[0])} row {pr[:12]} in Python, {list(rr[:12])} in Rust")
+            return np.zeros(1), np.full(1, 1e9)
+        py_out.extend(pr)
+        rs_out.extend(rr)
+    for k, (arc, (pts, nrm, segs, rect, (t0, t1), trims, sliver)) in enumerate(zip(after, rs_arcs)):
+        py_segs = _seg_rows(arc.segments)
+        if len(arc.pts) * 2 != len(pts) or [s for s, _ in py_segs] != [s for s, _ in segs] \
+                or (arc.rect is None) != (rect is None) or (arc.sliver is None) != (not sliver):
+            print(f"  FAIL rects     {path.name}: arc {k} {arc.pair} is {len(arc.pts)} vertices "
+                  f"{''.join(s for s, _ in py_segs)} in Python, {len(pts) // 2} vertices {''.join(s for s, _ in segs)} in Rust")
+            return np.zeros(1), np.full(1, 1e9)
+        py_out.extend(arc.pts.ravel().tolist())
+        rs_out.extend(pts)
+        py_out.extend(np.asarray(arc.normal, dtype=np.float64).ravel().tolist())
+        rs_out.extend(nrm)
+        for (_, pv), (_, rv) in zip(py_segs, segs):
+            py_out.extend(pv)
+            rs_out.extend(rv)
+        if arc.rect is not None:
+            r = arc.rect
+            py_out.extend([r.x, r.y, r.w, r.h, getattr(r, "rx", 0.0)])
+            rs_out.extend(rect)
+        for pt, rt in ((arc.t0, t0), (arc.t1, t1)):
+            if (pt is None) != (rt is None):
+                print(f"  FAIL rects     {path.name}: arc {k} {arc.pair} pinned tangent differs")
+                return np.zeros(1), np.full(1, 1e9)
+            if pt is not None:
+                py_out.extend(map(float, pt))
+                rs_out.extend(rt)
+        py_out.extend([float(arc.trim0), float(arc.trim1)])
+        rs_out.extend(trims)
+    return np.array(py_out, dtype=np.float64), np.array(rs_out, dtype=np.float64)
 
 
 @stage
