@@ -62,6 +62,8 @@ pub const UNDER_CLEAR: f64 = 0.9;
 /// tolerance, UNDER_TRIES times, before the samples are used as they stand.
 pub const UNDER_DEV: f64 = 0.3;
 pub const UNDER_TRIES: usize = 3;
+/// Offset samples closer than this are put on one point (see `under`).
+pub const UNDER_SAME: f64 = 1e-9;
 /// How far past the two pixels either side of a label edge the half-coverage
 /// search may reach, in pixels.
 pub const REACH: f64 = 0.75;
@@ -1643,8 +1645,21 @@ pub fn under(arc: &Arc, amount: f64, params: &CurveParams, walls: &[&[P]]) -> (V
     }
     let offset: Vec<P> = (0..pts.len()).map(|k| [pts[k][0] + reach[k] * normal[k][0], pts[k][1] + reach[k] * normal[k][1]]).collect();
     let clear = clearance(&offset, &pts, bleed);
-    let moved: Vec<P> = (0..offset.len()).filter(|k| clear[*k] >= UNDER_CLEAR * reach[*k] - 1e-9).map(|k| offset[k]).collect();
+    let mut moved: Vec<P> = (0..offset.len()).filter(|k| clear[*k] >= UNDER_CLEAR * reach[*k] - 1e-9).map(|k| offset[k]).collect();
     let closed = arc.closed();
+    // A smooth join is sampled once from each side and its two offsets land a
+    // rounding error apart: the second is put exactly on the first, so the
+    // fit's splits do not turn on the last bit of the offset. See the Python
+    // `_under`.
+    let same: Vec<usize> = (1..moved.len()).filter(|k| dist(moved[*k], moved[*k - 1]) <= UNDER_SAME).collect();
+    for k in same {
+        moved[k] = moved[k - 1];
+    }
+    if closed && moved.len() > 1 && dist(moved[moved.len() - 1], moved[0]) <= UNDER_SAME {
+        let first = moved[0];
+        let last = moved.len() - 1;
+        moved[last] = first;
+    }
     if moved.len() < 2 || (closed && moved.len() < 4) {
         return (arc.segments.clone(), (false, false));
     }

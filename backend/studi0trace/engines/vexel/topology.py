@@ -107,6 +107,8 @@ UNDER_CLEAR = 0.9
 # half the tolerance, this many times, before the samples are used as they stand.
 UNDER_DEV = 0.3
 UNDER_TRIES = 3
+# offset samples closer than this are put on one point (see `_under`)
+UNDER_SAME = 1e-9
 # Largest angle between a region's two arcs at a node that still counts as the
 # region closing to a point rather than turning a corner.
 WEDGE_ANGLE = 75.0
@@ -2753,6 +2755,16 @@ def _under(arc: Arc, amount: float, params: CurveParams, walls: list[np.ndarray]
         reach[_ray_gap(pts, -normal, walls, bleed) < bleed] = 0.0
     moved = pts + reach[:, None] * normal
     moved = moved[_clearance(moved, pts, bleed) >= UNDER_CLEAR * reach - 1e-9]
+    # A smooth join is sampled once from each side, and its two offsets land on
+    # one point a rounding error apart. The two engines' Bezier evaluations do
+    # not share that last bit, and the fit's splits turned on it (two vertices
+    # 4e-14 apart, or 1e-13): the second is put exactly on the first.
+    if len(moved) > 1:
+        same = np.nonzero(np.linalg.norm(np.diff(moved, axis=0), axis=1) <= UNDER_SAME)[0] + 1
+        for k in same:
+            moved[k] = moved[k - 1]
+        if arc.closed and float(np.linalg.norm(moved[-1] - moved[0])) <= UNDER_SAME:
+            moved[-1] = moved[0]
     if len(moved) < 2 or (arc.closed and len(moved) < 4):
         return list(arc.segments), (False, False)
     dense = np.vstack([moved, moved[:1]]) if arc.closed else moved
