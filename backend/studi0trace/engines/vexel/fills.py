@@ -394,6 +394,18 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
         # than solid is fitting faint ink (a sub-pixel line in an empty field), not
         # a gradient, and would paint a haze. Leave it solid so the rescue pass can
         # promote the ink. Opaque regions keep low-contrast gradients (soft shadows).
+        # The field itself no longer reaches this test: an unpainted region is
+        # solid before any gradient is fitted, a decision taken on its alpha,
+        # which both engines compute to the last bits. Here it was taken on a
+        # radial's RMS, which the two centre searches leave a hundredth of a
+        # level apart: thin-mark-512's canvas at Detailed sat 0.003 levels from
+        # the threshold, solid in one engine and a radial in the other. What
+        # is left here are small translucent regions (anti-aliasing shards of
+        # a thin line), most of them linear ramps, which the engines fit alike;
+        # a radial that lands within a hundredth of a level of the threshold
+        # can still go either way, and no margin moves a threshold off a value
+        # two optimisers disagree on. `tools/diffcheck.py fills` checks every
+        # region's choice under both the default and the Detailed fit.
         mostly_transparent = mean[3] < 0.2 * 255.0
         if mostly_transparent and best_rms > params.tol and best_rms > 0.5 * rms_solid:
             return solid

@@ -72,6 +72,8 @@ pub struct ShadowPlan {
     pub corrected: Option<Vec<[f64; 4]>>,
     /// the transparent canvas the shadows fall on (`detect_clear`), if they do
     pub canvas: Option<i32>,
+    /// (H·W) rgba255, straight: what that canvas shows under the shadows
+    pub ground: Option<Vec<[f64; 4]>>,
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -1126,6 +1128,28 @@ fn detect_clear(
         return;
     }
     plan.canvas = Some(canvas);
+    // What the canvas shows once the filters are drawn: the shadows composed
+    // over nothing, as straight colour; an edge between a caster and the canvas
+    // is placed against it. See `shadows._detect_clear`.
+    let mut ground = vec![[0.0f64; 4]; h * w];
+    for (caster, _, _, _, opacity, colour, _) in &fitted {
+        let g = &blurs[caster];
+        let clipped = [colour[0].clamp(0.0, 255.0), colour[1].clamp(0.0, 255.0), colour[2].clamp(0.0, 255.0)];
+        ground.par_iter_mut().enumerate().for_each(|(i, px)| {
+            let a = opacity * g.data[i];
+            for c in 0..3 {
+                px[c] = px[c] * (1.0 - a) + clipped[c] * a;
+            }
+            px[3] = px[3] * (1.0 - a) + 255.0 * a;
+        });
+    }
+    ground.par_iter_mut().for_each(|px| {
+        let a01 = (px[3] / 255.0).max(1e-9);
+        for c in 0..3 {
+            px[c] /= a01;
+        }
+    });
+    plan.ground = Some(ground);
     for (caster, dx, dy, sigma, opacity, colour, group) in &fitted {
         let clipped = [colour[0].clamp(0.0, 255.0), colour[1].clamp(0.0, 255.0), colour[2].clamp(0.0, 255.0)];
         plan.shadows.insert(

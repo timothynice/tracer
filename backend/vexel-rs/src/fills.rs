@@ -662,7 +662,9 @@ pub fn fit_fill(
         // In a mostly transparent region, a model only somewhat better than
         // solid is fitting faint ink (a sub-pixel line in an empty field), not
         // a gradient, and would paint a haze. Leave it solid so the rescue pass
-        // can promote the ink.
+        // can promote the ink. An unpainted region never reaches this test
+        // (see `painted` and the Python): its choice is taken on its alpha,
+        // not on a radial's RMS the two centre searches leave apart.
         let mostly_transparent = mean[3] < 0.2 * 255.0;
         if mostly_transparent && best_rms > params.tol && best_rms > 0.5 * rms_solid {
             return solid;

@@ -67,6 +67,7 @@ class ShadowPlan:
     refit: set[int] = field(default_factory=set)  # backdrops to refit on `corrected`
     corrected: np.ndarray | None = None  # rgba255 with the accepted shadows removed
     canvas: int | None = None  # the transparent canvas the shadows fall on (`_detect_clear`), if they do
+    ground: np.ndarray | None = None  # (H, W, 4) rgba255: what that canvas shows under the shadows
 
     @property
     def empty(self) -> bool:
@@ -508,6 +509,17 @@ def _detect_clear(plan, labels, fills, visible, silhouette, prep, xs, ys, areas,
     if rms >= WIN_MARGIN * band_rms:
         return
     plan.canvas = canvas
+    # What the canvas shows once the filters are drawn: the shadows composed
+    # over nothing, as straight colour. An edge between a caster and the
+    # canvas is placed against this, not against the canvas's own (unpainted)
+    # fill: a pixel half caster and half shadow is half covered, and read
+    # against nothing its shadow half counted as ink.
+    ground = np.zeros(labels.shape + (4,))
+    for caster, dx, dy, sigma, opacity, colour, _group in fitted:
+        a = (opacity * blurs[caster])[..., None]
+        ground = ground * (1.0 - a) + np.concatenate([np.clip(colour, 0, 255) * a, 255.0 * a], axis=-1)
+    alpha01 = ground[..., 3:4] / 255.0
+    plan.ground = np.concatenate([ground[..., :3] / np.maximum(alpha01, 1e-9), ground[..., 3:4]], axis=-1)
     for caster, dx, dy, sigma, opacity, colour, group in fitted:
         plan.shadows[caster] = Shadow(caster, dx, dy, sigma, np.clip(colour, 0, 255), opacity, False, rms,
                                       _filter_region(sils[caster], dx, dy, sigma))

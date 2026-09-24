@@ -1,4 +1,5 @@
 import io
+import re
 
 import numpy as np
 import pytest
@@ -133,6 +134,10 @@ def test_a_shadow_on_a_transparent_canvas_becomes_a_filter(engine):
     assert "feGaussianBlur" in svg, svg
     assert svg.count("<path") + svg.count("<rect") == 1, svg
     assert "scale(0.5)" not in svg
+    # The card's edge is placed against the shadow the canvas shows there, not
+    # against nothing, which read the shadow's half of each edge pixel as ink.
+    rect = re.search(r'<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"', svg)
+    assert rect and np.allclose([float(v) for v in rect.groups()], [28, 30, 72, 60], atol=0.05), svg
     got = _over_white(render(svg, 128, 128))
     want = _over_white(rgba.astype(float))
     assert float(np.sqrt(((got - want) ** 2).mean())) < 3.0

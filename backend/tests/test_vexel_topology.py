@@ -908,3 +908,52 @@ def test_a_vertex_one_pixel_from_either_end_of_an_arc_is_never_its_corner():
         arc = Arc(pair=(1, 2), pts=pts, n0=0, n1=1, trim0=0.0, trim1=0.0)
         py = ["L" if isinstance(s, Line) else "C" for s in _fit_arc(arc, params)]
         assert py == ["L" if k == "L" else "C" for k, _ in rs]
+
+
+def _trace_with(engine: str, rgba: np.ndarray, params: VexelParams | None = None) -> str:
+    from studi0trace.engines.vexel import engine as vexel
+    from studi0trace.engines.vexel.engine import trace_rgba
+
+    params = params or VexelParams()
+    if engine == "python":
+        return trace_rgba(rgba, params)
+    if vexel._vexel_rs is None:
+        pytest.skip("the vexel_rs extension is not built")
+    height, width = rgba.shape[:2]
+    return vexel._vexel_rs.trace(np.ascontiguousarray(rgba).tobytes(), width, height, params.model_dump())
+
+
+@pytest.mark.parametrize("engine", ["python", "rust"])
+def test_hard_edges_on_a_transparent_canvas_sit_on_their_pixel_edges(engine):
+    """The colour under a transparent pixel is inpainted and means nothing.
+    Read straight, a transparent pixel beside the pink bar (inpainted pink)
+    sat part of the way from the canvas's mean colour, a mix of the two
+    shapes' colours, to the bar's, and both shapes came out 0.3 px fat
+    (logo/triangle-bar-128: 0.45 px). Coverage is read premultiplied."""
+    n = 96
+    rgba = np.zeros((n, n, 4), np.uint8)
+    rgba[10:40, 12:84] = [6, 214, 160, 255]
+    rgba[52:62, 20:76] = [239, 71, 111, 255]
+    svg = _trace_with(engine, rgba)
+    rects = [tuple(float(v) for v in m) for m in
+             re.findall(r'<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"', svg)]
+    assert len(rects) == 2, svg
+    want = [(12, 10, 72, 30), (20, 52, 56, 10)]
+    for got, exp in zip(sorted(rects, key=lambda r: r[1]), want):
+        assert np.allclose(got, exp, atol=0.05), svg
+
+
+@pytest.mark.parametrize("engine", ["python", "rust"])
+def test_a_steep_soft_edge_over_a_shadow_has_no_spikes(engine):
+    """shadow/transparent-bg-512-ds: along the pentagon's steep sides the
+    partition gives the pentagon a column of pixels each under half covered,
+    so the step down that column finds no crossing and its vertex stayed on
+    the label edge, a pixel and a half off: every third row a spike. A vertex
+    with no crossing whose neighbours both found theirs, one of them beyond
+    the label edge on that side, takes their midpoint; the pentagon is five
+    lines."""
+    path = Path(__file__).resolve().parent.parent / "bench/corpus/synthetic/shadow/transparent-bg-512-ds.png"
+    rgba = np.asarray(Image.open(path).convert("RGBA"))
+    svg = _trace_with(engine, rgba)
+    d = re.search(r'<path d="([^"]+)"', svg).group(1)
+    assert "C" not in d and d.count("L") == 5, d

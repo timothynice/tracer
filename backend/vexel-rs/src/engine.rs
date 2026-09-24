@@ -750,6 +750,32 @@ fn shape_from_rings(
     Shape::Path { contours: rings.iter().map(|r| bnd.segments(r, Some(member))).collect() }
 }
 
+/// Bilinear samples of an (h·w) per-pixel grid at image points (qx, qy); pixel
+/// (r, c) is centred at (c + 0.5, r + 0.5), and points past the outer centres
+/// take the edge value. `engine.sample_bilinear` in the Python.
+fn sample_bilinear(grid: &[[f64; 4]], h: usize, w: usize, qx: &[f64], qy: &[f64]) -> Vec<[f64; 4]> {
+    qx.iter()
+        .zip(qy.iter())
+        .map(|(x, y)| {
+            let fx = (x - 0.5).clamp(0.0, w as f64 - 1.0);
+            let fy = (y - 0.5).clamp(0.0, h as f64 - 1.0);
+            let x0 = (fx.floor() as usize).min(w - 1);
+            let y0 = (fy.floor() as usize).min(h - 1);
+            let x1 = (x0 + 1).min(w - 1);
+            let y1 = (y0 + 1).min(h - 1);
+            let tx = fx - x0 as f64;
+            let ty = fy - y0 as f64;
+            let mut out = [0.0; 4];
+            for c in 0..4 {
+                let top = grid[y0 * w + x0][c] * (1.0 - tx) + grid[y0 * w + x1][c] * tx;
+                let bottom = grid[y1 * w + x0][c] * (1.0 - tx) + grid[y1 * w + x1][c] * tx;
+                out[c] = top * (1.0 - ty) + bottom * ty;
+            }
+            out
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit(
     l: &Labels,
@@ -798,11 +824,23 @@ fn emit(
     // curve and cannot leave a hairline between them.
     let rank: HashMap<i32, usize> = order.iter().enumerate().map(|(i, lab)| (*lab, i)).collect();
     crate::dump::labels("labels_to_topology", l);
+    // Under a drop shadow on a transparent canvas, the canvas shows the shadow:
+    // an edge there is placed against that (`shadows._detect_clear`).
+    let ground = match (shadow_plan.canvas, shadow_plan.ground.as_ref()) {
+        (Some(c), Some(g)) => Some((c, g)),
+        _ => None,
+    };
+    let place_at = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+        match ground {
+            Some((c, g)) if c == lab => sample_bilinear(g, height, width, qx, qy),
+            _ => fill_at(lab, qx, qy),
+        }
+    };
     let mut bnd = topology::build(
         l,
         &prep.rgb,
         &prep.alpha,
-        &fill_at,
+        &place_at,
         curve_params,
         if stacked { Some(&rank) } else { None },
     );

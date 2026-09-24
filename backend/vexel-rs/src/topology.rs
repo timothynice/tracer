@@ -301,6 +301,12 @@ fn chains(padded: &Labels, e: &Edges) -> Vec<Chain> {
 }
 
 /// How much of each pixel is `lab` rather than `other`, read from its colour.
+/// An rgba255 colour with its RGB scaled by its alpha: what the pixel shows.
+fn premultiplied(c: &[f64; 4]) -> [f64; 4] {
+    let a = c[3] / 255.0;
+    [c[0] * a, c[1] * a, c[2] * a, c[3]]
+}
+
 fn coverage(
     rgb: &Image,
     alpha: &Grid<f64>,
@@ -323,13 +329,16 @@ fn coverage(
             }
             let (r, c) = (r as usize, c as usize);
             let px = rgb.at(r, c);
-            let colour = [px[0], px[1], px[2], *alpha.get(r, c) * 255.0];
+            // Premultiplied, as the pixel shows: the colour under a transparent
+            // pixel is inpainted and means nothing. See `topology._premultiplied`.
+            let colour = premultiplied(&[px[0], px[1], px[2], *alpha.get(r, c) * 255.0]);
+            let (fa, fb) = (premultiplied(&f_a[k]), premultiplied(&f_b[k]));
             let mut denom = 0.0;
             let mut proj = 0.0;
             for ch in 0..4 {
-                let d = f_a[k][ch] - f_b[k][ch];
+                let d = fa[ch] - fb[ch];
                 denom += d * d;
-                proj += (colour[ch] - f_b[k][ch]) * d;
+                proj += (colour[ch] - fb[ch]) * d;
             }
             if denom > 1e-6 {
                 proj / denom.max(1e-9)
@@ -360,7 +369,7 @@ fn crossing(
     a: i32,
     b: i32,
     fill_at: FillAt,
-) -> Vec<f64> {
+) -> (Vec<f64>, Vec<i8>) {
     let n = p_in.len();
     let here_raw = coverage(rgb, alpha, p_in, a, b, fill_at);
     let there_raw = coverage(rgb, alpha, p_out, a, b, fill_at);
@@ -411,9 +420,51 @@ fn crossing(
             // the label edge: see the Python.
             let trust = ((slope - 0.15) / 0.35).clamp(0.0, 1.0);
             let over = t.clamp(0.0, 1.0);
-            (over + (t - over) * trust).clamp(-REACH, 1.0 + REACH)
+            // Where no crossing was found, which way the samples say the edge
+            // lies: -1 all four read as `b`, so it is beyond the `a` pixel; +1
+            // all read as `a`; 0 found, or the samples disagree.
+            let side = if best.is_finite() {
+                0
+            } else if level.iter().all(|v| *v < 0.5) {
+                -1
+            } else if level.iter().all(|v| *v >= 0.5) {
+                1
+            } else {
+                0
+            };
+            ((over + (t - over) * trust).clamp(-REACH, 1.0 + REACH), side)
         })
-        .collect()
+        .unzip()
+}
+
+/// A vertex whose four samples all sit on one side of a half has no crossing
+/// within reach along its own step: on a steep staircase the step meets the
+/// edge at a glancing angle, and the edge is a pixel or more beyond it. Left at
+/// the label edge it stands out of line with its neighbours: a spike. Where both
+/// neighbours found their crossing and one of them found it beyond the label
+/// edge on that same side, it takes the midpoint of its neighbours; where both
+/// sit inside their own two pixels (a shape's corner pixel, too mixed to cross
+/// a half on either axis) the label edge is the corner, and it stays. A closed
+/// ring has no ends. `topology._place` in the Python.
+fn lone_vertices(pts: &mut [P], t: &[f64], side: &[i8], closed: bool) {
+    let n = pts.len();
+    if n < 3 {
+        return;
+    }
+    let found = |k: usize| side[k] == 0;
+    let beyond_a = |k: usize| t[k] < 0.0 && side[k] == 0;
+    let beyond_b = |k: usize| t[k] > 1.0 && side[k] == 0;
+    let orig: Vec<P> = pts.to_vec();
+    let (first, last) = if closed { (0, n) } else { (1, n - 1) };
+    for k in first..last {
+        let (pk, nk) = ((k + n - 1) % n, (k + 1) % n);
+        let lone = found(pk)
+            && found(nk)
+            && ((side[k] == -1 && (beyond_a(pk) || beyond_a(nk))) || (side[k] == 1 && (beyond_b(pk) || beyond_b(nk))));
+        if lone {
+            pts[k] = [(orig[pk][0] + orig[nk][0]) / 2.0, (orig[pk][1] + orig[nk][1]) / 2.0];
+        }
+    }
 }
 
 /// Sub-pixel position, and the side-to-side step, for every lattice edge of every arc.
@@ -442,16 +493,17 @@ fn place(
                     p_out.push(pa);
                 }
             }
-            let t = if a != 0 && b != 0 {
+            let (t, side) = if a != 0 && b != 0 {
                 crossing(padded, rgb, alpha, &p_in, &p_out, a, b, fill_at)
             } else {
-                vec![0.5; ch.edges.len()]
+                (vec![0.5; ch.edges.len()], vec![0i8; ch.edges.len()])
             };
             let crowded: Vec<bool> = (0..ch.edges.len())
                 .map(|k| handed_back.contains(&p_in[k]) || handed_back.contains(&p_out[k]))
                 .collect();
             let mut pts: Vec<P> = Vec::with_capacity(ch.edges.len());
             let mut normal = Vec::with_capacity(ch.edges.len());
+            let mut placed_t = Vec::with_capacity(ch.edges.len());
             for k in 0..ch.edges.len() {
                 let c_in = [p_in[k].1 as f64 - 0.5, p_in[k].0 as f64 - 0.5];
                 let c_out = [p_out[k].1 as f64 - 0.5, p_out[k].0 as f64 - 0.5];
@@ -464,8 +516,10 @@ fn place(
                 // the other boundary has an equal call on. See the Python.
                 let tk = if crowded[k] { t[k].clamp(0.0, 1.0) } else { t[k] };
                 pts.push([c_in[0] + tk * step[0], c_in[1] + tk * step[1]]);
+                placed_t.push(tk);
                 normal.push(step);
             }
+            lone_vertices(&mut pts, &placed_t, &side, ch.n0.is_none());
             pts = unfold(&pts);
             if !handed_back.is_empty() {
                 pts = settle(&pts, &crowded);

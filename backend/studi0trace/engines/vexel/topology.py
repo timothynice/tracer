@@ -545,10 +545,29 @@ def _coverage(pad_rgba: np.ndarray, pix: np.ndarray, lab: int, other: int, fill_
         w = np.clip((kept - LOCAL_KEEP0) / (LOCAL_KEEP1 - LOCAL_KEEP0), 0.0, 1.0)[:, None]
         f_lab = f_lab + w * (l_lab - f_lab)
         f_other = f_other + w * (l_other - f_other)
+    colour, f_lab, f_other = _premultiplied(colour), _premultiplied(f_lab), _premultiplied(f_other)
     diff = f_lab - f_other
     denom = np.sum(diff * diff, axis=1)
     proj = np.sum((colour - f_other) * diff, axis=1)
     return np.where(denom > 1e-6, proj / np.maximum(denom, 1e-9), np.nan)
+
+
+def _premultiplied(rgba255: np.ndarray) -> np.ndarray:
+    """(N, 4) colour with its RGB scaled by its alpha: what the pixel shows.
+
+    The colour under a transparent pixel is inpainted (`prepare`) and means
+    nothing, and a fill of the transparent canvas carries a colour nobody
+    sees. Read straight, a transparent pixel beside a pink bar — inpainted
+    pink — sat a fifth of the way from the canvas's mean colour to the bar's,
+    and every edge on a transparent canvas came out 0.45 px outside a hard
+    edge (logo/triangle-bar-128). Between two opaque fills nothing changes.
+    Premultiplied, the canvas is nothing — or, under a drop shadow a filter
+    now draws, the shadow (`ShadowPlan.ground`, which the engine hands the
+    placement as the canvas's colour).
+    """
+    out = np.array(rgba255, dtype=np.float64, copy=True)
+    out[:, :3] *= out[:, 3:4] / 255.0
+    return out
 
 
 def _crossing(
@@ -682,22 +701,32 @@ def _place(
         if len(pts) >= 3:
             # A vertex whose four samples all sit on one side of a half has no
             # crossing within reach along its own step — on a steep staircase the
-            # step at an outer corner meets the edge at a glancing angle, and the
-            # edge is a pixel beyond it. Left at the label edge it stands out
-            # of line with both neighbours, which found the edge beyond the
-            # label edge on that same side: a spike. Such a vertex takes the
-            # midpoint of its neighbours. Where the neighbours sit inside their
-            # own two pixels — a shape's corner pixel, too mixed to cross a half
-            # on either axis — the label edge is the corner, and it stays.
-            lone = np.zeros(len(pts), dtype=bool)
-            beyond_a = (t < 0.0) & (side == 0)
-            beyond_b = (t > 1.0) & (side == 0)
-            lone[1:-1] = (((side[1:-1] == -1) & beyond_a[:-2] & beyond_a[2:])
-                          | ((side[1:-1] == 1) & beyond_b[:-2] & beyond_b[2:]))
+            # step meets the edge at a glancing angle, and the edge is a pixel or
+            # more beyond it. Left at the label edge it stands out of line with
+            # its neighbours: a spike. Where both neighbours found their crossing
+            # and one of them found it beyond the label edge on that same side,
+            # it takes the midpoint of its neighbours; one is enough, since this
+            # vertex's own samples already say the edge is past the label edge on
+            # that side (a steep edge's pixel column all under a half: the step
+            # before it crosses beyond, the step after inside its two pixels).
+            # Where both neighbours sit inside their own two pixels — a shape's
+            # corner pixel, too mixed to cross a half on either axis — the label
+            # edge is the corner, and it stays. A closed ring has no ends.
+            n = len(pts)
+            prev, nxt = np.arange(n) - 1, np.arange(n) + 1
+            inner = np.ones(n, dtype=bool)
+            if ch["n0"] is None:
+                prev, nxt = prev % n, nxt % n
+            else:
+                inner[0] = inner[-1] = False
+                prev[0], nxt[-1] = 0, n - 1
+            found = side == 0
+            beyond_a = (t < 0.0) & found
+            beyond_b = (t > 1.0) & found
+            lone = inner & found[prev] & found[nxt] & (((side == -1) & (beyond_a[prev] | beyond_a[nxt]))
+                                                       | ((side == 1) & (beyond_b[prev] | beyond_b[nxt])))
             if lone.any():
-                mid = np.zeros_like(pts)
-                mid[1:-1] = (pts[:-2] + pts[2:]) / 2.0
-                pts = np.where(lone[:, None], mid, pts)
+                pts = np.where(lone[:, None], (pts[prev] + pts[nxt]) / 2.0, pts)
         pts = _unfold(pts)
         if handed_back:
             pts = _settle(pts, crowded.tolist())
