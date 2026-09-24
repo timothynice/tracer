@@ -2614,6 +2614,17 @@ pub fn shape_svg(shape: &Shape, attrs: &str, precision: usize) -> String {
 mod line_tests {
     use super::*;
 
+    #[test]
+    fn an_isotropic_scatter_runs_first_to_last() {
+        // the Python's test_an_isotropic_scatter_runs_first_to_last
+        let (c, d) = line_through(&[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]);
+        assert!((c[0] - 0.5).abs() < 1e-12 && (c[1] - 0.5).abs() < 1e-12);
+        let h = 0.5f64.sqrt();
+        assert!((d[0] - h).abs() < 1e-12 && (d[1] - h).abs() < 1e-12, "{d:?}");
+        let (_c, d) = line_through(&[[0.0, 0.0], [2.0, 0.1], [4.0, 0.0], [6.0, 0.1]]);
+        assert!(d[1].abs() < 0.05, "{d:?}");
+    }
+
     fn kinds(segs: &[Segment]) -> String {
         segs.iter().map(|s| if matches!(s, Segment::Line { .. }) { 'L' } else { 'C' }).collect()
     }
