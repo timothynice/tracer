@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use crate::boundary::FillAt;
 use crate::core::grid::{Grid, Image};
 use crate::core::labels::Labels;
+use crate::posterize::Levels;
 use crate::curves::{
     CORNER_REACH,
     CurveParams,
@@ -675,6 +676,7 @@ fn place(
     fill_at: FillAt,
     handed_back: &std::collections::HashSet<(usize, usize)>,
     local: Option<&LocalFills>,
+    levels: Option<&Levels>,
 ) -> Vec<(Vec<P>, Vec<P>, Vec<bool>)> {
     chains
         .iter()
@@ -692,11 +694,23 @@ fn place(
                     p_out.push(pa);
                 }
             }
-            let (t, side) = if a != 0 && b != 0 {
+            let (mut t, mut side) = if a != 0 && b != 0 {
                 crossing(padded, rgb, alpha, &p_in, &p_out, a, b, fill_at, local)
             } else {
                 (vec![0.5; ch.edges.len()], vec![0i8; ch.edges.len()])
             };
+            // Between two bands of one posterised ramp the edge is where the
+            // ramp crosses their level, not where colour says: see the Python.
+            if let Some(lv) = levels.filter(|lv| a != 0 && b != 0 && lv.consecutive(a, b)) {
+                for k in 0..ch.edges.len() {
+                    let c_in = [p_in[k].1 as f64 - 0.5, p_in[k].0 as f64 - 0.5];
+                    let c_out = [p_out[k].1 as f64 - 0.5, p_out[k].0 as f64 - 0.5];
+                    if let Some(s) = lv.crossing(a, b, c_in, c_out).filter(|s| s.is_finite()) {
+                        t[k] = s;
+                        side[k] = 0;
+                    }
+                }
+            }
             let crowded: Vec<bool> = (0..ch.edges.len())
                 .map(|k| handed_back.contains(&p_in[k]) || handed_back.contains(&p_out[k]))
                 .collect();
@@ -1380,7 +1394,7 @@ fn find_root(parent: &mut HashMap<u64, u64>, mut node: u64) -> u64 {
     node
 }
 
-fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64) {
+fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64, levels: Option<&Levels>) {
     const REACH_PX: f64 = 4.1;
     const TRIM: f64 = APPROACH_TRIM;
     const LIMIT: f64 = 2.0;
@@ -1516,7 +1530,21 @@ fn junctions(arcs: &mut [Arc], padded: &Labels, corner_threshold: f64, tol: f64)
         let mut pinned: Vec<(usize, P)> = Vec::new();
         let mut tips: Vec<usize> = Vec::new();
         let plain = target;
-        if long.len() == 3 {
+        // A node where a level line of a posterised ramp ends is on that line
+        // exactly, and is never a tip. See the Python.
+        let on_level = levels.and_then(|lv| {
+            incident.iter().map(|(i, _)| *i).filter(|i| lv.sibling(arcs[*i].pair.0, arcs[*i].pair.1)).min().map(|i| (lv, arcs[i].pair))
+        });
+        if let Some((lv, (a, b))) = on_level {
+            let moved = lv.onto(a, b, target, None);
+            target = on_border(moved, arcs, &incident);
+            for axis in 0..2 {
+                if target[axis] != moved[axis] {
+                    // held on the canvas edge: reach the line along it
+                    target = lv.onto(a, b, target, Some(1 - axis));
+                }
+            }
+        } else if long.len() == 3 {
             let pairs: Vec<(i32, i32)> = long.iter().map(|s| arcs[incident[*s].0].pair).collect();
             if let Some((_lab, through)) = wedge(padded, target, &pairs, &away) {
                 // A region closing to a point does not put a corner in anything.
@@ -2552,8 +2580,9 @@ pub fn build(
     params: &CurveParams,
     rank: Option<&HashMap<i32, usize>>,
     underlay: &Underlay,
+    levels: Option<&Levels>,
 ) -> Boundary {
-    build_opt(labels, rgb, alpha, fill_at, params, rank, underlay, true, true)
+    build_opt(labels, rgb, alpha, fill_at, params, rank, underlay, true, true, levels)
 }
 
 /// `snap = false` stops after placement, for `tools/diffcheck.py` to compare the
@@ -2569,6 +2598,7 @@ pub fn build_opt(
     underlay: &Underlay,
     snap: bool,
     extend: bool,
+    levels: Option<&Levels>,
 ) -> Boundary {
     let mut padded = Grid::<i32>::new(labels.h + 2, labels.w + 2);
     for r in 0..labels.h {
@@ -2587,7 +2617,7 @@ pub fn build_opt(
     let mut timer = crate::timing::Timer::new();
     // The placement reads colour against the fills as they are beside each edge.
     let local = LocalFills::build(labels, rgb, fill_at);
-    let placed = place(&chain_list, &edges, &padded, rgb, alpha, fill_at, &handed_back, Some(&local));
+    let placed = place(&chain_list, &edges, &padded, rgb, alpha, fill_at, &handed_back, Some(&local), levels);
     timer.lap("topology: chains + place");
 
     let mut arcs: Vec<Arc> = chain_list
@@ -2633,7 +2663,7 @@ pub fn build_opt(
         arcs = early.arcs;
     }
     timer.lap("topology: symmetry");
-    junctions(&mut arcs, &padded, params.corner_threshold, params.tol);
+    junctions(&mut arcs, &padded, params.corner_threshold, params.tol, levels);
     timer.lap("topology: junctions");
     for arc in arcs.iter_mut() {
         arc.segments = fit_arc(&arc.pts, arc.closed(), arc.t0, arc.t1, (arc.trim0, arc.trim1), arc.sliver.as_deref(), arc.mirror, params);
