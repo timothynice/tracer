@@ -26,6 +26,11 @@ from studi0trace.engines.vexel.fills import Fill, Solid
 from studi0trace.engines.vexel.merge import adjacency
 
 
+# Least share of an overlap region's outline that must run along the two shapes
+# it is the overlap of (or along other overlaps): see `decompose_overlaps`.
+OVERLAP_OUTLINE = 0.5
+
+
 @dataclass
 class Decomposition:
     masks: dict[int, np.ndarray] = field(default_factory=dict)  # extended footprint per shape label
@@ -130,6 +135,30 @@ def decompose_overlaps(
         if best is not None:
             explained[c] = (best[1], best[2], best[3], best[4])
 
+    if not explained:
+        return dec
+
+    # An overlap is the part two shapes share, so its outline is theirs: the
+    # top's outline where it crosses the shape beneath, the under shape's where
+    # it passes under the top, another overlap's where three shapes meet. A
+    # region whose outline mostly runs along anything else is not these two
+    # shapes' overlap, whatever its colour: a JPEG's whole face (75 000 px)
+    # read as a 20 % white eye over a 22-pixel rim sliver whose chroma had
+    # rung, was dropped, and was repainted over its own nose and mouth.
+    perimeter: dict[int, float] = {}
+    for (a, b), (cnt, _g) in edges.items():
+        perimeter[a] = perimeter.get(a, 0.0) + cnt
+        perimeter[b] = perimeter.get(b, 0.0) + cnt
+
+    def shared(a: int, b: int) -> float:
+        return edges.get((min(a, b), max(a, b)), [0.0, 0.0])[0]
+
+    candidates = set(explained)
+    for c in sorted(explained):
+        t, x = explained[c][0], explained[c][1]
+        own = sum(shared(c, n) for n in nbrs.get(c, set()) if n in (t, x) or n in candidates)
+        if own < OVERLAP_OUTLINE * perimeter.get(c, 0.0):
+            del explained[c]
     if not explained:
         return dec
 

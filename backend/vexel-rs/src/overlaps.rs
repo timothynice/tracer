@@ -17,6 +17,10 @@ use crate::fills::Fill;
 use crate::merge::adjacency;
 use std::collections::{HashMap, HashSet};
 
+/// Least share of an overlap region's outline that must run along the two
+/// shapes it is the overlap of, or along other overlaps (`overlaps.py`).
+pub const OVERLAP_OUTLINE: f64 = 0.5;
+
 #[derive(Default)]
 pub struct Decomposition {
     /// extended footprint per shape label
@@ -206,6 +210,36 @@ pub fn decompose_overlaps(
         }
         if let Some((_, t, x, a, tc)) = best {
             explained.insert(*c, (t, x, a, tc));
+        }
+    }
+    if explained.is_empty() {
+        return dec;
+    }
+
+    // An overlap is the part two shapes share, so its outline is theirs (or
+    // another overlap's, where three meet); a region whose outline mostly runs
+    // along anything else is not these two shapes' overlap (`overlaps.py`).
+    // The counts are whole numbers, so the sums are exact in any order.
+    let mut perimeter: HashMap<i32, f64> = HashMap::new();
+    for ((a, b), (cnt, _)) in edges.iter() {
+        *perimeter.entry(*a).or_insert(0.0) += cnt;
+        *perimeter.entry(*b).or_insert(0.0) += cnt;
+    }
+    let shared = |a: i32, b: i32| -> f64 {
+        let key = if a < b { (a, b) } else { (b, a) };
+        edges.get(&key).map(|e| e.0).unwrap_or(0.0)
+    };
+    let candidates: HashSet<i32> = explained.keys().copied().collect();
+    let mut cand_keys: Vec<i32> = candidates.iter().copied().collect();
+    cand_keys.sort_unstable();
+    for c in &cand_keys {
+        let (t, x) = (explained[c].0, explained[c].1);
+        let own: f64 = nbrs
+            .get(c)
+            .map(|s| s.iter().filter(|n| **n == t || **n == x || candidates.contains(n)).map(|n| shared(*c, *n)).sum())
+            .unwrap_or(0.0);
+        if own < OVERLAP_OUTLINE * perimeter.get(c).copied().unwrap_or(0.0) {
+            explained.remove(c);
         }
     }
     if explained.is_empty() {
