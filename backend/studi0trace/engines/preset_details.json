@@ -4,74 +4,74 @@
  "vexel_backend": "rust",
  "corpus_items": 104,
  "lines": {
-  "auto": "ΔE 0.41 · 3 shapes · clean on 68% of 104 test images",
-  "balanced": "ΔE 0.42 · 3 shapes · clean on 65% of 104 test images",
+  "auto": "ΔE 0.36 · 3 shapes · clean on 68% of 104 test images",
+  "balanced": "ΔE 0.42 · 3 shapes · clean on 64% of 104 test images",
   "logo": "ΔE 0.53 · 3 shapes · clean on 73% of 104 test images",
-  "detailed": "ΔE 0.39 · 4 shapes · clean on 59% of 104 test images",
-  "dense": "ΔE 0.64 · 3 shapes · clean on 72% of 104 test images",
-  "flat": "ΔE 0.78 · 8 shapes · clean on 68% of 104 test images",
-  "cutfile": "ΔE 0.55 · 3 shapes · clean on 63% of 104 test images"
+  "detailed": "ΔE 0.39 · 4 shapes · clean on 60% of 104 test images",
+  "dense": "ΔE 0.60 · 3 shapes · clean on 72% of 104 test images",
+  "flat": "ΔE 0.75 · 8 shapes · clean on 68% of 104 test images",
+  "cutfile": "ΔE 0.54 · 3 shapes · clean on 63% of 104 test images"
  },
  "numbers": {
   "auto": {
-   "delta_e_mean": 0.4086,
+   "delta_e_mean": 0.3639,
    "shapes_median": 3,
    "clean_pct": 68.3,
-   "artifact_index_mean": 11.95,
-   "artifact_index_median": 1.56,
+   "artifact_index_mean": 12.02,
+   "artifact_index_median": 1.95,
    "items": 104,
    "picks": {
-    "balanced": 61.5,
-    "logo": 26.0,
-    "detailed": 7.7,
-    "dense": 4.8
+    "balanced": 60.6,
+    "logo": 25.0,
+    "detailed": 8.7,
+    "dense": 5.8
    }
   },
   "balanced": {
-   "delta_e_mean": 0.4212,
+   "delta_e_mean": 0.4157,
    "shapes_median": 3,
-   "clean_pct": 65.4,
-   "artifact_index_mean": 14.81,
+   "clean_pct": 64.4,
+   "artifact_index_mean": 14.71,
    "artifact_index_median": 2.38,
    "items": 104
   },
   "logo": {
-   "delta_e_mean": 0.5326,
+   "delta_e_mean": 0.53,
    "shapes_median": 3,
    "clean_pct": 73.1,
-   "artifact_index_mean": 9.61,
+   "artifact_index_mean": 9.66,
    "artifact_index_median": 0.6,
    "items": 104
   },
   "detailed": {
-   "delta_e_mean": 0.3928,
+   "delta_e_mean": 0.3884,
    "shapes_median": 4,
-   "clean_pct": 58.7,
-   "artifact_index_mean": 22.33,
-   "artifact_index_median": 3.76,
+   "clean_pct": 59.6,
+   "artifact_index_mean": 21.51,
+   "artifact_index_median": 3.45,
    "items": 104
   },
   "dense": {
-   "delta_e_mean": 0.6386,
+   "delta_e_mean": 0.6002,
    "shapes_median": 3,
    "clean_pct": 72.1,
-   "artifact_index_mean": 12.74,
+   "artifact_index_mean": 12.92,
    "artifact_index_median": 1.03,
    "items": 104
   },
   "flat": {
-   "delta_e_mean": 0.7849,
+   "delta_e_mean": 0.746,
    "shapes_median": 8,
    "clean_pct": 68.3,
-   "artifact_index_mean": 12.1,
+   "artifact_index_mean": 11.86,
    "artifact_index_median": 3.26,
    "items": 104
   },
   "cutfile": {
-   "delta_e_mean": 0.547,
+   "delta_e_mean": 0.5441,
    "shapes_median": 3,
    "clean_pct": 63.5,
-   "artifact_index_mean": 28.06,
+   "artifact_index_mean": 28.22,
    "artifact_index_median": 11.24,
    "items": 104
   }
