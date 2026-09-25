@@ -343,10 +343,11 @@ mod python {
     }
 
     #[pyfunction]
-    fn _stage_labels0(rgba: Vec<u8>, h: usize, w: usize, min_region: usize) -> Vec<i32> {
+    #[pyo3(signature = (rgba, h, w, min_region, detail=6.0))]
+    fn _stage_labels0(rgba: Vec<u8>, h: usize, w: usize, min_region: usize, detail: f64) -> Vec<i32> {
         let prep = prepare::prepare(&rgba, h, w);
         let grad = partition::discontinuity(&prep.features, 0.7);
-        partition::initial_labels(&grad, &prep.features, min_region, 1.5).data
+        partition::initial_labels(&grad, &prep.features, min_region, 1.5, detail).data
     }
 
     /// The fills every stage hook needs, fitted the way `engine` fits them.

@@ -333,7 +333,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     height, width = rgba.shape[:2]
     prep = prepare(rgba)
     grad = discontinuity(prep.features)
-    labels0 = initial_labels(grad, prep.features, min_region=p.min_region)
+    labels0 = initial_labels(grad, prep.features, min_region=p.min_region, detail=p.detail)
     # With gradients off the trace still finds and fits every ramp as one
     # region, and `posterize` cuts the fitted ramps into flat bands below.
     labels = merge_regions(labels0, prep.features, MergeParams(detail=p.detail, gradients=True), grad)

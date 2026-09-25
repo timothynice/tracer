@@ -90,8 +90,24 @@ impl Heap {
 /// Flood `image` from the non-zero pixels of `markers`. Every pixel ends up
 /// carrying a label; ties settle towards the marker reached first.
 pub fn watershed(image: &Grid<f64>, markers: &Labels) -> Labels {
+    watershed_masked(image, markers, None)
+}
+
+/// `watershed(image, markers, mask=mask)`: the flood only enters pixels of
+/// `mask` (skimage skips a neighbour outside it, and zeroes markers outside
+/// it), and the pixels outside it stay 0.
+pub fn watershed_masked(image: &Grid<f64>, markers: &Labels, mask: Option<&Grid<bool>>) -> Labels {
     let (h, w) = (image.h, image.w);
     let mut out = markers.clone();
+    let inside = |i: usize| mask.is_none_or(|m| m.data[i]);
+    if let Some(m) = mask {
+        for (o, k) in out.data.iter_mut().zip(m.data.iter()) {
+            if !*k {
+                *o = 0;
+            }
+        }
+    }
+    let open = |out: &Labels, i: usize| out.data[i] == 0 && inside(i);
     let mut heap = Heap::new();
     let mut age: u64 = 0;
 
@@ -106,10 +122,10 @@ pub fn watershed(image: &Grid<f64>, markers: &Labels) -> Labels {
             continue;
         }
         let (r, c) = (i / w, i % w);
-        let touches_unlabelled = (r > 0 && out.data[i - w] == 0)
-            || (c > 0 && out.data[i - 1] == 0)
-            || (c + 1 < w && out.data[i + 1] == 0)
-            || (r + 1 < h && out.data[i + w] == 0);
+        let touches_unlabelled = (r > 0 && open(&out, i - w))
+            || (c > 0 && open(&out, i - 1))
+            || (c + 1 < w && open(&out, i + 1))
+            || (r + 1 < h && open(&out, i + w));
         if touches_unlabelled {
             heap.push(Item { value: image.data[i], age: 0, index: i as u32 });
         }
@@ -135,7 +151,7 @@ pub fn watershed(image: &Grid<f64>, markers: &Labels) -> Labels {
             nbrs[3] = i + w;
         }
         for n in nbrs {
-            if n == usize::MAX || out.data[n] != 0 {
+            if n == usize::MAX || !open(&out, n) {
                 continue;
             }
             age += 1;

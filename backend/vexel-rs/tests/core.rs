@@ -15,7 +15,7 @@ use vexel_rs::core::morphology::{dilate_cross, erode_cross, fill_holes};
 use vexel_rs::core::optimise::{default_simplex, nelder_mead, NmOptions};
 use vexel_rs::core::rng::{choice_without_replacement, Pcg64};
 use vexel_rs::core::skeleton::medial_axis;
-use vexel_rs::core::watershed::watershed;
+use vexel_rs::core::watershed::{watershed, watershed_masked};
 
 fn approx(a: f64, b: f64, tol: f64) {
     assert!((a - b).abs() <= tol, "{a} != {b} (tolerance {tol})");
@@ -163,6 +163,25 @@ fn watershed_splits_a_ridge_between_two_markers() {
     assert!(out.data.iter().all(|v| *v != 0), "every pixel is claimed");
     assert_eq!(out.data[1], 1);
     assert_eq!(out.data[w - 2], 2);
+}
+
+#[test]
+fn a_masked_watershed_floods_only_inside_the_mask() {
+    // skimage's `watershed(image, markers, mask=mask)`: a marker outside the
+    // mask is dropped, the flood never enters a pixel outside it, and those
+    // pixels stay 0 — so a masked-out pixel is a wall the flood cannot cross
+    let w = 7;
+    let image = Grid::<f64>::new(1, w);
+    let mut markers = Grid::<i32>::new(1, w);
+    markers.data[0] = 1;
+    markers.data[w - 1] = 2;
+    let mut mask = Grid::filled(1, w, true);
+    mask.data[2] = false;
+    mask.data[w - 1] = false;
+    let out = watershed_masked(&image, &markers, Some(&mask));
+    assert_eq!(out.data, vec![1, 1, 0, 0, 0, 0, 0]);
+    let open = watershed_masked(&image, &markers, None);
+    assert_eq!(open.data, watershed(&image, &markers).data);
 }
 
 #[test]

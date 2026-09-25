@@ -284,7 +284,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     t.lap("prepare");
     let grad = discontinuity(&prep.features, 0.7);
     t.lap("discontinuity");
-    let labels0 = initial_labels(&grad, &prep.features, p.min_region, 1.5);
+    let labels0 = initial_labels(&grad, &prep.features, p.min_region, 1.5, p.detail);
     t.lap("initial_labels");
     // With gradients off the trace still finds and fits every ramp as one
     // region, and `posterize` cuts the fitted ramps into flat bands below.
