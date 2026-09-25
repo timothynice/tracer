@@ -200,6 +200,15 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   parameter, band edges are placed on the level line exactly, and bands are
   never strokes or overlaps; where the model's level lines are not the image's
   the pixels' own settled level lines are used (`diffcheck posterize`).
+- A seed area is one region only while it is one colour: `partition` erodes
+  each area 3 px, groups what is left by colour (a group needs 64 px), seeds a
+  split area by its groups and rejoins neighbouring pieces unless the boundary
+  between them is a real step (gradient ≥ 3× either piece's own and ≥ 0.25× their
+  colour difference). A weak edge meeting a strong one drops out of the ridge map
+  for a few pixels, and one strip of seed across that gap had fused a crater
+  into its moon under JPEG, before any later stage could see it. And a region is
+  an overlap of two shapes only if at least half its outline runs along them
+  (`overlaps`): a face read as a translucent eye over a sliver was dropped.
 - A stretch that is lines-first at `KIND_TOL` (0.4 px) stays lines at any
   looser `curve_tolerance`: a loose tolerance buys fewer curve segments, never
   a straight edge drawn as a bow.
