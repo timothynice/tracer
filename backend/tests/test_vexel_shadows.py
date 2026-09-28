@@ -31,6 +31,21 @@ def card_with_shadow(sigma: float = 10.0, dx: float = 0.0, dy: float = 14.0, opa
     return np.concatenate([out, np.full((n, n, 1), 255.0)], axis=-1).astype(np.uint8)
 
 
+def rounded_card_with_shadow(radius: float = 14.0, sigma: float = 10.0, dx: float = 0.0, dy: float = 14.0, opacity: float = 0.45) -> np.ndarray:
+    """`card_with_shadow` with the card's corners rounded and anti-aliased."""
+    n, ss = 192, 4
+    yy, xx = (np.mgrid[0:n * ss, 0:n * ss] + 0.5) / ss
+    x0, y0, x1, y1 = 45.0, 50.0, 150.0, 140.0
+    cx, cy = np.clip(xx, x0 + radius, x1 - radius), np.clip(yy, y0 + radius, y1 - radius)
+    shape = (((xx - cx) ** 2 + (yy - cy) ** 2) <= radius * radius).reshape(n, ss, n, ss).mean(axis=(1, 3))
+    g = ndimage.gaussian_filter(ndimage.shift(shape, (dy, dx), order=1, mode="constant"), sigma, mode="constant")
+    backdrop = np.array([243.0, 244.0, 246.0])
+    out = np.broadcast_to(backdrop, (n, n, 3)).copy()
+    out = out * (1 - (opacity * g)[..., None])  # black shadow
+    out = out * (1 - shape[..., None]) + np.array([42.0, 157.0, 143.0]) * shape[..., None]
+    return np.concatenate([np.round(out), np.full((n, n, 1), 255.0)], axis=-1).astype(np.uint8)
+
+
 def test_fit_recovers_the_parameters_that_made_the_shadow():
     n = 192
     shape = np.zeros((n, n))
@@ -117,6 +132,28 @@ def _rust(rgba: np.ndarray, params: VexelParams) -> str:
 def _over_white(rgba: np.ndarray) -> np.ndarray:
     a = rgba[..., 3:4] / 255.0
     return rgba[..., :3] * a + 255.0 * (1.0 - a)
+
+
+@pytest.mark.parametrize("engine", ["python", "rust"])
+def test_a_shadow_on_a_backdrop_leaves_its_caster_one_ring(engine):
+    """The bands a filter explains join the backdrop before the outline is
+    built, on an opaque backdrop as on a transparent canvas. Left in the label
+    map and merely skipped at paint time, the band the rescue carved out
+    stopped a pixel short of the card, so the card's own edge pixels stayed
+    with the backdrop: a one-pixel thread between card and band that cut the
+    outline into two-point arcs with a node at every step, and the card came
+    out as a path with a chamfered, nubbed corner where it met its shadow
+    (shadow/card-512's bottom corners). Against one neighbour it is a rect."""
+    if engine == "rust" and vexel._vexel_rs is None:
+        pytest.skip("the vexel_rs extension is not built")
+    rgba = rounded_card_with_shadow()
+    run = trace_rgba if engine == "python" else _rust
+    svg = run(rgba, VexelParams())
+    assert "feGaussianBlur" in svg, svg
+    assert svg.count("<path") + svg.count("<rect") == 2, svg
+    rects = re.findall(r'<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="([\d.]+)"[^>]*filter=', svg)
+    assert len(rects) == 1, svg
+    assert np.allclose([float(v) for v in rects[0]], [45, 50, 105, 90, 14], atol=0.25), svg
 
 
 @pytest.mark.parametrize("engine", ["python", "rust"])

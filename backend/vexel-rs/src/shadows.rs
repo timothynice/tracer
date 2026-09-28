@@ -68,6 +68,8 @@ pub struct ShadowPlan {
     pub absorbed: HashSet<i32>,
     /// backdrops to refit on `corrected`
     pub refit: HashSet<i32>,
+    /// the opaque backdrop the absorbed bands lie on, if they do
+    pub backdrop: Option<i32>,
     /// rgba255 with the accepted shadows removed
     pub corrected: Option<Vec<[f64; 4]>>,
     /// the transparent canvas the shadows fall on (`detect_clear`), if they do
@@ -870,6 +872,7 @@ fn try_ray(
         }
     }
     plan.refit.insert(backdrop);
+    plan.backdrop = Some(backdrop);
     for i in 0..h * w {
         for c in 0..3 {
             corrected[i][c] = (corrected[i][c] - (composed[i][c] - b0[c])).clamp(0.0, 255.0);

@@ -499,27 +499,16 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
         shadow_plan = detect_shadows(
             &l, &fills, &visible, &sil, &prep, &xs, &ys, p.min_region, true,
         );
-        if let Some(corrected) = shadow_plan.corrected.clone() {
-            // The backdrop's fill was partly modelling the shadow's faint outer
-            // reach; refit it against colours with the shadow taken back out.
-            let mut refit: Vec<i32> = shadow_plan.refit.iter().copied().collect();
-            refit.sort_unstable();
-            for lab in refit {
-                let m = labels::mask_of(&l, lab);
-                let (w, core) = interior(&m);
-                let (x, y, c) = mask_pixels(&m, &xs, &ys, &corrected);
-                fills.insert(lab, fit_fill(&x, &y, &c, &fit_params, Some(&w), Some(&core)));
-            }
-        }
-        if let (Some(canvas), false) = (shadow_plan.canvas, shadow_plan.absorbed.is_empty()) {
-            // On a transparent canvas the bands a filter explains are canvas
-            // with the shadow drawn over it: they join it, and the caster's
-            // edge there is placed against the canvas like the rest of its
-            // outline. See the Python.
+        let ground = shadow_plan.canvas.or(shadow_plan.backdrop);
+        if let (Some(ground), false) = (ground, shadow_plan.absorbed.is_empty()) {
+            // The bands a filter explains are the ground with the shadow drawn
+            // over it, a transparent canvas or an opaque backdrop: they join
+            // it, and the caster's edge there is placed against the ground
+            // like the rest of its outline. See the Python.
             let gone: HashSet<i32> = std::mem::take(&mut shadow_plan.absorbed);
             for v in l.data.iter_mut() {
                 if gone.contains(v) {
-                    *v = canvas;
+                    *v = ground;
                 }
             }
             for lab in &gone {
@@ -531,6 +520,19 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
             index = LabelIndex::build(&l);
             ids = labels::unique_ids(&l);
             enc = enclosure(&l);
+        }
+        if let Some(corrected) = shadow_plan.corrected.clone() {
+            // The backdrop's fill was partly modelling the shadow's faint outer
+            // reach, and now holds the bands; refit it against colours with
+            // the shadow taken back out.
+            let mut refit: Vec<i32> = shadow_plan.refit.iter().copied().collect();
+            refit.sort_unstable();
+            for lab in refit {
+                let m = labels::mask_of(&l, lab);
+                let (w, core) = interior(&m);
+                let (x, y, c) = mask_pixels(&m, &xs, &ys, &corrected);
+                fills.insert(lab, fit_fill(&x, &y, &c, &fit_params, Some(&w), Some(&core)));
+            }
         }
     }
 

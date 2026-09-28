@@ -467,21 +467,20 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             lambda lab: shape_mask(labels, lab, enc, stacked, invisible),
             prep, xs, ys, min_region=p.min_region,
         )
-        if shadow_plan.corrected is not None:
-            # The backdrop's fill was partly modelling the shadow's faint outer
-            # reach; refit it against colours with the shadow taken back out.
-            for lab in shadow_plan.refit:
-                m = labels == lab
-                w, core = interior(m)
-                fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w, core=core)
-        if shadow_plan.canvas is not None and shadow_plan.absorbed:
-            # On a transparent canvas the bands a filter explains are canvas
-            # with the shadow drawn over it: they join it, and the caster's edge
-            # there is placed against the canvas like the rest of its outline,
-            # not against a band that is no longer drawn (whose staircase of
-            # teeth had hidden the notches that edge was placed with).
+        ground = shadow_plan.canvas if shadow_plan.canvas is not None else shadow_plan.backdrop
+        if ground is not None and shadow_plan.absorbed:
+            # The bands a filter explains are the ground with the shadow drawn
+            # over it, a transparent canvas or an opaque backdrop: they join
+            # it, and the caster's edge there is placed against the ground like
+            # the rest of its outline, not against a band that is no longer
+            # drawn (whose staircase of teeth had hidden the notches that edge
+            # was placed with). On a backdrop the band the rescue carved out
+            # stops a pixel short of the caster, so the caster's own edge pixels
+            # stayed with the backdrop: a one-pixel thread between the two that
+            # cut the outline into two-point arcs with a node at every step of
+            # a rounded corner.
             gone = sorted(shadow_plan.absorbed)
-            labels = np.where(np.isin(labels, gone), shadow_plan.canvas, labels).astype(np.int32)
+            labels = np.where(np.isin(labels, gone), ground, labels).astype(np.int32)
             for lab in gone:
                 fills.pop(lab, None)
                 visible.pop(lab, None)
@@ -490,6 +489,14 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
             ids = [int(i) for i in np.unique(labels) if i != 0]
             enc = enclosure(labels)
             shadow_plan.absorbed = set()
+        if shadow_plan.corrected is not None:
+            # The backdrop's fill was partly modelling the shadow's faint outer
+            # reach, and now holds the bands; refit it against colours with the
+            # shadow taken back out.
+            for lab in shadow_plan.refit:
+                m = labels == lab
+                w, core = interior(m)
+                fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w, core=core)
 
     # Thin regions are drawn lines. A single line often arrives as several
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions
