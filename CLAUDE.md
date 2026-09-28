@@ -80,7 +80,10 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   symmetric. Repeated shapes (same primitive to 0.1 px, or paths whose
   outlines agree to 0.1 px after translation) are written once into `<defs>`
   and painted as `<use href x y fill>` (`vexel/reuse.py`); anything that
-  reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`.
+  reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`. A shape
+  that carries a filter is written in full: a filter on a `<use>` applies in
+  the use's own user space, which its x and y shift, so a filter region in
+  the file's units moves with the copy and clips it.
 - `upsample` (default `auto`): an input of at most 192 px whose own direct
   trace has a region thinner than 2.2 px (2·area/perimeter over the label map
   handed to topology) is traced again at 2× through a Lanczos-3 upsample and
@@ -188,7 +191,12 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   (`rescue.edge_mix`); placement reads colour premultiplied, against each
   region's fill plus its own smoothed residual (local fills, gated off where
   the two sides' local colours converge). A shadow on a transparent canvas is
-  a filter (`shadows._detect_clear`).
+  a filter (`shadows._detect_clear`). The bands a drop-shadow filter explains
+  join the ground they lie on before the outline is built, an opaque backdrop
+  as much as a transparent canvas (`ShadowPlan.backdrop`): left in the label
+  map and skipped at paint time, the rescued band stopped a pixel short of the
+  caster and the thread of backdrop between them cut the caster's outline into
+  two-point arcs, a node at every step of a rounded corner.
 - Rounded rectangles are read under blur (`vexel/rects.py`: the blur is taken
   out of each radius, r² ≈ r_read² − (1.86σ)² − 0.58), given one radius per
   shape and across shapes, one size and shared edge levels, and a corner that
@@ -206,7 +214,12 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   between them is a real step (gradient ≥ 3× either piece's own and ≥ 0.25× their
   colour difference). A weak edge meeting a strong one drops out of the ridge map
   for a few pixels, and one strip of seed across that gap had fused a crater
-  into its moon under JPEG, before any later stage could see it. And a region is
+  into its moon under JPEG, before any later stage could see it. A step is a
+  ridge: the split is kept only where the boundary is `NECK_RIDGE` times
+  steeper than the pixels `NECK_REACH` to either side at more than half its
+  pairs — a boundary through a soft band (the necks of a ring of seed round a
+  highlight) is as steep beside itself as on itself and had seeded a cap in
+  two halves with a seam through the highlight's ends. And a region is
   an overlap of two shapes only if at least half its outline runs along them
   (`overlaps`): a face read as a translucent eye over a sliver was dropped.
 - A stretch that is lines-first at `KIND_TOL` (0.4 px) stays lines at any

@@ -126,6 +126,20 @@ NECK_PROMINENCE = 3.0
 # least on the leaf's veins). A boundary carrying under a quarter of the
 # difference sits on a ramp: the two sides differ by what lies between them.
 NECK_STEP = 0.25
+# ... and a step is a ridge of the discontinuity: steeper on the boundary than
+# beside it. The two tests above compare the boundary with the pieces' middles
+# and with their colour difference, and a boundary through a soft band passes
+# both — the necks of the nail polish's cap (a ring of seed round a pill
+# highlight) lie in the cap's rim band, which is 3 ΔE per pixel steep against
+# a flat body, and its two halves, 10 ΔE apart, were seeded apart and drawn
+# with a seam through the highlight's ends. So at more than half of the pairs
+# along the boundary, the discontinuity must be at least `NECK_RIDGE` times
+# the higher of the two `NECK_REACH` pixels to either side of the pair, along
+# its axis. A ramp is as steep beside the boundary as on it (1.0 ± noise; the
+# cap's necks 0.9), a JPEG-smeared step still peaks (the moon's craters 2.6,
+# the key's collar and a heart's outline 1.5), a clean step far more.
+NECK_RIDGE = 1.25
+NECK_REACH = 3
 # Fewest pixels a piece needs, after the erosion, to be seeded apart from the
 # rest of its component: a region of its own, not the JPEG ringing a strong
 # edge leaves a few pixels inside it (pieces of 8 to 40 pixels along the rim of
@@ -261,7 +275,11 @@ def rejoin_ramps(labels: np.ndarray, markers: np.ndarray, origin: np.ndarray, gr
     the mean of its two pixels) is at least `NECK_PROMINENCE` times the median
     discontinuity over the marker of either (its lower middle value, so both
     engines take the same element), and at least `NECK_STEP` times the
-    distance between the two markers' mean feature colours. The rest are
+    distance between the two markers' mean feature colours, and at more than
+    half of its pairs at least `NECK_RIDGE` times the discontinuity
+    `NECK_REACH` pixels to either side (the higher of the two, read along the
+    pair's axis and held inside the image): a step is a ridge, and a boundary
+    through a soft band is as steep beside itself as on itself. The rest are
     joined, and a join is the union of the two basins: the flood is blind to
     labels, so it is what seeding them as one marker would have given. Sums
     run horizontal pairs then vertical ones, each in raster order, in float64.
@@ -282,20 +300,35 @@ def rejoin_ramps(labels: np.ndarray, markers: np.ndarray, origin: np.ndarray, gr
     count = np.bincount(flat_m, minlength=k)
     colour = np.stack([np.bincount(flat_m, weights=features[..., c].ravel().astype(np.float64), minlength=k)
                        for c in range(features.shape[-1])], axis=1) / np.maximum(count, 1)[:, None]
-    keys, weights = [], []
-    for la, lb, ga, gb in ((labels[:, :-1], labels[:, 1:], g[:, :-1], g[:, 1:]),
-                           (labels[:-1, :], labels[1:, :], g[:-1, :], g[1:, :])):
+    h, w = labels.shape
+    keys, weights, ridges = [], [], []
+    for axis in (1, 0):
+        if axis == 1:
+            la, lb, ga, gb = labels[:, :-1], labels[:, 1:], g[:, :-1], g[:, 1:]
+        else:
+            la, lb, ga, gb = labels[:-1, :], labels[1:, :], g[:-1, :], g[1:, :]
         a, b = la.ravel().astype(np.int64), lb.ravel().astype(np.int64)
         m = (a != b) & (origin[a] > 0) & (origin[a] == origin[b])
         a, b = a[m], b[m]
         keys.append(np.minimum(a, b) * k + np.maximum(a, b))
-        weights.append(0.5 * (ga.ravel()[m] + gb.ravel()[m]))
+        centre = 0.5 * (ga.ravel()[m] + gb.ravel()[m])
+        weights.append(centre)
+        # the discontinuity NECK_REACH pixels before the pair and after it
+        ys, xs = np.nonzero(m.reshape(la.shape))
+        if axis == 1:
+            before = g[ys, np.maximum(xs - NECK_REACH, 0)]
+            after = g[ys, np.minimum(xs + 1 + NECK_REACH, w - 1)]
+        else:
+            before = g[np.maximum(ys - NECK_REACH, 0), xs]
+            after = g[np.minimum(ys + 1 + NECK_REACH, h - 1), xs]
+        ridges.append((centre >= NECK_RIDGE * np.maximum(before, after)).astype(np.float64))
     key = np.concatenate(keys)
     if key.size == 0:
         return labels
     uniq, inv = np.unique(key, return_inverse=True)
     cnt = np.bincount(inv)
     gsum = np.bincount(inv, weights=np.concatenate(weights))
+    ridge = np.bincount(inv, weights=np.concatenate(ridges))
     parent = np.arange(k)
 
     def find(i: int) -> int:
@@ -303,11 +336,12 @@ def rejoin_ramps(labels: np.ndarray, markers: np.ndarray, origin: np.ndarray, gr
             i = int(parent[i])
         return i
 
-    for u, c, s in zip(uniq, cnt, gsum):
+    for u, c, s, r in zip(uniq, cnt, gsum, ridge):
         a, b = int(u // k), int(u % k)
         edge = s / c
         d = colour[a] - colour[b]
-        if edge >= NECK_PROMINENCE * max(interior[a], interior[b]) and edge >= NECK_STEP * float(np.sqrt(np.sum(d * d))):
+        if (edge >= NECK_PROMINENCE * max(interior[a], interior[b]) and edge >= NECK_STEP * float(np.sqrt(np.sum(d * d)))
+                and 2.0 * r > c):
             continue
         ra, rb = find(a), find(b)
         if ra != rb:

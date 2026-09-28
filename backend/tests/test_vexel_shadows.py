@@ -156,6 +156,41 @@ def test_a_shadow_on_a_backdrop_leaves_its_caster_one_ring(engine):
     assert np.allclose([float(v) for v in rects[0]], [45, 50, 105, 90, 14], atol=0.25), svg
 
 
+def two_cards_with_shadows() -> np.ndarray:
+    """Two identical rounded cards side by side, each under its own drop shadow."""
+    n, ss, radius = 256, 4, 12.0
+    yy, xx = (np.mgrid[0:n * ss, 0:n * ss] + 0.5) / ss
+    shape = np.zeros((n, n))
+    for x0 in (30.0, 146.0):
+        x1, y0, y1 = x0 + 80.0, 70.0, 150.0
+        cx, cy = np.clip(xx, x0 + radius, x1 - radius), np.clip(yy, y0 + radius, y1 - radius)
+        shape += (((xx - cx) ** 2 + (yy - cy) ** 2) <= radius * radius).reshape(n, ss, n, ss).mean(axis=(1, 3))
+    g = ndimage.gaussian_filter(ndimage.shift(shape, (12.0, 0.0), order=1, mode="constant"), 8.0, mode="constant")
+    out = np.broadcast_to(np.array([243.0, 244.0, 246.0]), (n, n, 3)).copy()
+    out = out * (1 - (0.45 * g)[..., None])
+    out = out * (1 - shape[..., None]) + np.array([28.0, 42.0, 69.0]) * shape[..., None]
+    return np.concatenate([np.round(out), np.full((n, n, 1), 255.0)], axis=-1).astype(np.uint8)
+
+
+@pytest.mark.parametrize("engine", ["python", "rust"])
+def test_a_repeated_shape_under_a_filter_is_written_in_full(engine):
+    """A `filter` on a `<use>` applies in the use's own user space, which its
+    x and y translate, so a filter region in the file's units moves with the
+    copy and clips it: of three identical rounded squares under drop shadows
+    (shadow/radii-512) one vanished and another lost half its width. A shape
+    that carries a filter is never a `<use>`."""
+    if engine == "rust" and vexel._vexel_rs is None:
+        pytest.skip("the vexel_rs extension is not built")
+    rgba = two_cards_with_shadows()
+    run = trace_rgba if engine == "python" else _rust
+    svg = run(rgba, VexelParams())
+    assert svg.count("feGaussianBlur") == 2, svg
+    assert "<use" not in svg, svg
+    got = render(svg, 256, 256)[..., :3]
+    for cx in (70, 186):
+        assert np.abs(got[110, cx] - [28.0, 42.0, 69.0]).max() < 3.0, (cx, got[110, cx])
+
+
 @pytest.mark.parametrize("engine", ["python", "rust"])
 def test_a_shadow_on_a_transparent_canvas_becomes_a_filter(engine):
     """With no backdrop colour for it to darken, the shadow is translucent ink.

@@ -149,6 +149,24 @@ def test_a_glow_pinched_by_jpeg_noise_stays_one_region():
     assert np.bincount(inside).max() > 0.99 * inside.size
 
 
+NAIL = Path(__file__).resolve().parents[1] / "bench" / "heldout" / "fluent-color" / "nail-polish-512.png"
+
+
+@pytest.mark.skipif(not NAIL.exists(), reason="held-out corpus not present")
+def test_a_ring_of_seed_round_a_highlight_is_not_split_at_its_necks():
+    """The held-out nail polish's cap: one gradient with a pill highlight in
+    the middle, so its seed is a ring whose two necks (above and below the
+    highlight) lie in the cap's soft rim band, where the ramp is steeper than
+    the flat body. Split there, the cap was two regions whose seam ran into
+    the highlight's ends and drew them as cusps. The boundary at the necks is
+    no steeper than the pixels beside it — a step is a ridge, a ramp is not."""
+    a = np.asarray(Image.open(NAIL).convert("RGBA"))
+    p = prepare(a)
+    labels = initial_labels(discontinuity(p.features), p.features, min_region=12, detail=6.0)
+    body = [labels[y, x] for y, x in ((60, 405), (60, 450), (38, 410), (38, 450), (92, 410), (92, 450))]
+    assert len(set(body)) == 1, body
+
+
 @pytest.mark.skipif(vexel._vexel_rs is None, reason="the vexel_rs extension is not built")
 @pytest.mark.parametrize("detail", [3.0, 6.0, 14.0])
 def test_the_engines_split_seeds_alike(detail):
