@@ -151,3 +151,9 @@ CLAUDE.md: one bullet (soft edges; the ridge veto; reach_the_edge).
   with the region merged into its parent; enc/order (Rust: index too) rebuilt when pixels moved.
 - Python: 11 unit tests pass; the card's shadow is a filter again; thin-mark's ring is stroked.
 - Rust twin written and `cargo check`ed; pipeline restarted (rebuild, diffcheck, bench, held-out).
+
+## Test picture at bb9971f (final code)
+- `VEXEL_BACKEND=python pytest tests` (backends file apart): 369 passed; both variants of the card
+  shadow test pass against the finished build; `pytest tests/test_vexel_backends.py`: 17 passed.
+- `VEXEL_BACKEND=rust pytest tests`: 387 passed. `cargo test`: 77 passed.
+- Pipeline (pipeline2.log): BUILD_DONE; diffcheck default in progress (0 failing so far).
