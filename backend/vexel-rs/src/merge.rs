@@ -49,6 +49,44 @@ pub fn adjacency(labels: &Labels, grad: Option<&Grid<f64>>) -> HashMap<(i32, i32
     out
 }
 
+/// `{(a, b): share of the boundary's pixel pairs on which the discontinuity
+/// is a ridge}` for a < b: the partition's test of a step (`rejoin_ramps`,
+/// `NECK_RIDGE` over `NECK_REACH`) — the pair's discontinuity at least
+/// NECK_RIDGE times the higher of the two NECK_REACH pixels to either side
+/// along its axis, held inside the image. Horizontal pairs then vertical,
+/// raster order, as the Python sums them.
+pub fn boundary_ridges(labels: &Labels, grad: &Grid<f64>) -> HashMap<(i32, i32), f64> {
+    use crate::partition::{NECK_REACH, NECK_RIDGE};
+    let (h, w) = (labels.h, labels.w);
+    let mut acc: HashMap<(i32, i32), (f64, f64)> = HashMap::new();
+    let mut visit = |a: i32, b: i32, g: f64, before: f64, after: f64| {
+        if a != b {
+            let e = acc.entry((a.min(b), a.max(b))).or_insert((0.0, 0.0));
+            e.0 += 1.0;
+            if g >= NECK_RIDGE * before.max(after) {
+                e.1 += 1.0;
+            }
+        }
+    };
+    for r in 0..h {
+        for c in 0..w.saturating_sub(1) {
+            let i = r * w + c;
+            let before = grad.data[r * w + c.saturating_sub(NECK_REACH)];
+            let after = grad.data[r * w + (c + 1 + NECK_REACH).min(w - 1)];
+            visit(labels.data[i], labels.data[i + 1], 0.5 * (grad.data[i] + grad.data[i + 1]), before, after);
+        }
+    }
+    for r in 0..h.saturating_sub(1) {
+        for c in 0..w {
+            let i = r * w + c;
+            let before = grad.data[r.saturating_sub(NECK_REACH) * w + c];
+            let after = grad.data[(r + 1 + NECK_REACH).min(h - 1) * w + c];
+            visit(labels.data[i], labels.data[i + w], 0.5 * (grad.data[i] + grad.data[i + w]), before, after);
+        }
+    }
+    acc.into_iter().map(|(k, (n, r))| (k, r / n)).collect()
+}
+
 /// A heap entry ordered exactly like the Python tuple
 /// `(distance, version[a], version[b], a, b)` under `heapq`.
 #[derive(PartialEq)]

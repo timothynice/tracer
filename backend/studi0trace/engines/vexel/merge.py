@@ -52,6 +52,46 @@ def adjacency(labels: np.ndarray, grad: np.ndarray | None = None) -> dict[tuple[
     return {(int(u // k), int(u % k)): [float(c), float(g)] for u, c, g in zip(uniq, counts, gsum)}
 
 
+def boundary_ridges(labels: np.ndarray, grad: np.ndarray) -> dict[tuple[int, int], float]:
+    """{(a, b): share of the boundary's pixel pairs on which the discontinuity
+    is a ridge} for a < b — the partition's test of a step (`partition.
+    rejoin_ramps`, `NECK_RIDGE` over `NECK_REACH`): the pair's discontinuity
+    is at least NECK_RIDGE times the higher of the two NECK_REACH pixels to
+    either side of it along its axis, held inside the image. A step is a ridge
+    of the discontinuity; a ramp is as steep beside the boundary as on it. Sums
+    run horizontal pairs then vertical, each in raster order, in float64."""
+    from studi0trace.engines.vexel.partition import NECK_REACH, NECK_RIDGE
+
+    g = grad.astype(np.float64)
+    h, w = labels.shape
+    k = int(labels.max()) + 1
+    keys, ridges = [], []
+    for axis in (1, 0):
+        if axis == 1:
+            la, lb, ga, gb = labels[:, :-1], labels[:, 1:], g[:, :-1], g[:, 1:]
+        else:
+            la, lb, ga, gb = labels[:-1, :], labels[1:, :], g[:-1, :], g[1:, :]
+        m = la != lb
+        a, b = la[m].astype(np.int64), lb[m].astype(np.int64)
+        keys.append(np.minimum(a, b) * k + np.maximum(a, b))
+        centre = 0.5 * (ga[m] + gb[m])
+        ys, xs = np.nonzero(m)
+        if axis == 1:
+            before = g[ys, np.maximum(xs - NECK_REACH, 0)]
+            after = g[ys, np.minimum(xs + 1 + NECK_REACH, w - 1)]
+        else:
+            before = g[np.maximum(ys - NECK_REACH, 0), xs]
+            after = g[np.minimum(ys + 1 + NECK_REACH, h - 1), xs]
+        ridges.append((centre >= NECK_RIDGE * np.maximum(before, after)).astype(np.float64))
+    key = np.concatenate(keys)
+    if key.size == 0:
+        return {}
+    uniq, inv = np.unique(key, return_inverse=True)
+    cnt = np.bincount(inv)
+    ridge = np.bincount(inv, weights=np.concatenate(ridges))
+    return {(int(u // k), int(u % k)): float(r / c) for u, c, r in zip(uniq, cnt, ridge)}
+
+
 def merge_regions(labels: np.ndarray, features: np.ndarray, params: MergeParams, grad: np.ndarray | None = None) -> np.ndarray:
     """Greedy merging by `stats.merge_distance` until no pair is below `params.detail`.
 

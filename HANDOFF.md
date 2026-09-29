@@ -37,5 +37,28 @@ Three distinct causes of `wobble_deg_100px`:
 - Strip junctions: make the (b,c / a,b) checkerboard vertex a pass-through of both pairs when the
   shared label is the diagonal one — evaluate on corpus first.
 
-## Done
-- nothing committed to the engine yet.
+## Step 1 (in progress): soft-edge smoothing, both engines
+- `topology._crossing` (`crossing` in Rust) now also returns, per vertex, the coverage drop from the
+  sample one pixel before the label edge to the one after it (NaN where either sample fell back).
+- `_softness(drop)`: median drop over the chain -> blur sigma = SOFT_WIDTH/drop - SOFT_BIAS
+  (1.2, 0.35: inverts erf(1.5/(σ√2)) within 8 % for σ 1..8), 0 below SOFT_SIGMA=1.0 (drop > 0.89),
+  capped at SOFT_SIGMA_MAX=4.0; drop <= 0 -> the cap. Chains on a posterised level line: no smoothing.
+- `_soften(pts, sigma, closed)`: Gaussian along the arc by vertex index, kernel to 3σ, open ends
+  fixed and the kernel renormalised where it runs off an end; closed chains wrap. Applied in
+  `_place` after `_unfold`/`_settle` (Rust `place` likewise).
+- Test: `tests/test_vexel_soft_edges.py` (a σ=3/5 ramp cut at its quarter level: the placed
+  vertices must lie on one line, be fitted as one Line, and sit between the label line and the
+  half-crossing; a crisp control keeps sub-pixel placement). Failed before (RMS 0.47 px), passes after.
+- Survey numbers behind the constants: `$SCRATCH/q3s/analyse_survey.py survey2.jsonl`.
+
+## Step 2 (planned): glow split under Detailed
+`refine_merge` declines (2,4) on glow-512-ds because the boundary gradient 2.44 > edge_limit
+0.6·3.5 = 2.1, although the union radial fits better than either part (1.81 vs 2.27/2.35). The
+gradient is the glow's own slope, not a step: apply the partition's ridge test (NECK_RIDGE 1.25 over
+NECK_REACH 3 px, more than half the pairs) so the veto holds only on a ridge. Both engines.
+
+## Step 3 (planned): rescue leaves a strip
+`rescue_features` excludes `boundary_band` from candidates, so a rescued band next to the outline
+leaves a 2-px strip of its parent between itself and the canvas; on a diagonal every row makes a
+(b,c/a,b) lattice vertex, a node, and the strip becomes dozens of 3-vertex arcs. Fix: hand the
+parent's band pixels next to a rescued region to the nearer of the two (`split_rim`), both engines.

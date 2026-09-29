@@ -16,7 +16,7 @@ import numpy as np
 from skimage.segmentation import relabel_sequential
 
 from studi0trace.engines.vexel.fills import Fill, FitParams, Solid, fit_fill
-from studi0trace.engines.vexel.merge import adjacency
+from studi0trace.engines.vexel.merge import adjacency, boundary_ridges
 from studi0trace.engines.vexel.weights import interior
 
 FitFn = Callable[[np.ndarray], tuple[Fill, float]]
@@ -66,10 +66,18 @@ def refine_merge(
     if len(smooth) < 1:
         return labels, fills, False
 
+    # No join across a visible edge: a boundary steeper than `edge_limit` that
+    # is a ridge of the discontinuity (`boundary_ridges`: a step, at more than
+    # half of its pairs). A glow's or a shadow's own slope can be as steep,
+    # and is as steep beside the boundary as on it — a ramp the partition cut
+    # somewhere along it, which the union fit is the judge of (glow-512-ds
+    # under Detailed: 2.44 against a limit of 2.1, the union radial fitting
+    # better than either part, and the core drawn as a second shape).
     edges = adjacency(labels, grad)
+    ridges = boundary_ridges(labels, grad)
     pairs = [
         (cnt, a, b) for (a, b), (cnt, gsum) in edges.items()
-        if (a in smooth or b in smooth) and cnt > 0 and gsum / cnt <= edge_limit
+        if (a in smooth or b in smooth) and cnt > 0 and (gsum / cnt <= edge_limit or ridges[(a, b)] <= 0.5)
     ]
     pairs.sort(key=lambda t: -t[0])  # longest shared boundary first
 

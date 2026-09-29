@@ -10,7 +10,7 @@
 use crate::core::grid::{Grid, Mask};
 use crate::core::labels::{self, Labels};
 use crate::fills::{fit_fill, Fill, FitParams};
-use crate::merge::adjacency;
+use crate::merge::{adjacency, boundary_ridges};
 use crate::weights::interior;
 use std::collections::{HashMap, HashSet};
 
@@ -108,11 +108,17 @@ pub fn refine_merge(
         return (labels_out, fills, false);
     }
 
+    // No join across a visible edge: a boundary steeper than `edge_limit` that
+    // is a ridge of the discontinuity at more than half of its pairs. A glow's
+    // own slope is as steep beside the boundary as on it: see the Python.
     let edges = adjacency(&labels_out, Some(grad));
+    let ridges = boundary_ridges(&labels_out, grad);
     let mut pairs: Vec<(f64, i32, i32)> = edges
         .iter()
         .filter(|((a, b), (cnt, gsum))| {
-            (smooth.contains(a) || smooth.contains(b)) && *cnt > 0.0 && gsum / cnt <= edge_limit
+            (smooth.contains(a) || smooth.contains(b))
+                && *cnt > 0.0
+                && (gsum / cnt <= edge_limit || ridges.get(&(*a, *b)).copied().unwrap_or(1.0) <= 0.5)
         })
         .map(|((a, b), (cnt, _))| (*cnt, *a, *b))
         .collect();
