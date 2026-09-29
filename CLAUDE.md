@@ -200,21 +200,27 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   caster and the thread of backdrop between them cut the caster's outline into
   two-point arcs, a node at every step of a rounded corner.
 - The colour under a pixel of alpha below `prepare.COLOUR_ALPHA_FLOOR` (8/255)
-  is not its own: an unpremultiplied file holds it quantised to steps of 255/a
-  per channel (at alpha 1 or 2 only 0, 128 and 255), about 45/a ΔE of noise
-  against the neighbours over the corpus, and below 8 a halo of it is all
-  ridge and no seed (`seed_mask`'s 8 ΔE/px), so the watershed flooded a speech
-  balloon out to the far end of its shadow's alpha-2 halo and the rescue
-  carved the halo back out as an "invisible" region that took the rim with
-  it. It is inpainted from the nearest pixel that shows, like alpha 0; the
-  alpha is kept. And carving a feature out of a host must leave no piece of
-  the host below `min_region`: the islands the host's fill passes through and
-  the one-pixel thread of the host's own edge between the feature and a third
-  region (never a candidate, never reached by the growth) join the feature
-  they share the most four-edges with (`rescue.absorb_shards`, ties to the
-  lower label) — on a diagonal the thread touched itself only at corners and
-  `_directed_rings` returned a sliver per pixel. Not flooded along the
-  discontinuity: where the two sides tie it zigzags pixel by pixel.
+  may be unpremultiply noise: a premultiplied pipeline leaves it quantised to
+  steps of 255/a per channel (at alpha 1 or 2 only 0, 128 and 255), about 45/a
+  ΔE of noise against the neighbours over the corpus, and below 8 a halo of it
+  is all ridge and no seed (`seed_mask`'s 8 ΔE/px), so the watershed flooded a
+  speech balloon out to the far end of its shadow's alpha-2 halo and the
+  rescue carved the halo back out as an "invisible" region that took the rim
+  with it. A colour on that grid (`unpremultiply_noise`, a level of rounding
+  either way) is inpainted from the nearest other pixel, like alpha 0, the
+  alpha kept; a colour off the grid is a straight-alpha file's own and stays
+  (a synthetic ramp's tail beside a disc, the 2× upsample's ringing). And a
+  four-connected piece of a region below `min_region` is not a region: the
+  shards carving a feature leaves of its host — the islands the host's fill
+  passes through, the one-pixel thread of the host's own edge between the
+  feature and a third region, a sliver each in `_directed_rings` — join the
+  nearest neighbouring region as `split_rim` hands a rim over
+  (`engine.absorb_shards`: distance, own colour, lower label; never an
+  invisible one while a visible one is as near; a label whose every piece is
+  small is a dotted line, not shards), after the shadow stage: an inset
+  shadow's bands rejoin the card there and take the card's corner bits with
+  them, and absorbed earlier those bits let the band touch the backdrop and
+  the shadow model no longer fitted.
 - Rounded rectangles are read under blur (`vexel/rects.py`: the blur is taken
   out of each radius, r² ≈ r_read² − (1.86σ)² − 0.58), given one radius per
   shape and across shapes, one size and shared edge levels, and a corner that
