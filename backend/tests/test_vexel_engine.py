@@ -136,3 +136,26 @@ def test_split_rim_does_not_depend_on_candidate_order():
     b = split_rim(labels, labels == 3, [2, 1], xs, ys, rgba, fill_at)
     assert (a == b).all()
     assert (a[:, 4] == 1).all(), "a total tie goes to the lower label"
+
+
+@pytest.mark.parametrize("params", [VexelParams(), VexelParams(detail=14.0, min_region=24, strokes=False, overlaps=False, shadows=False)])
+def test_a_faint_noise_halo_leaves_the_shape_whole_and_opaque(params):
+    """The halo an unpremultiplied soft shadow leaves (alpha 1–2 with the
+    colour under it quantised to 0/128/255) is noise, not a region: its colour
+    is read from the shape it surrounds, so the partition's edge sits on the
+    shape's edge, not at the halo's far end, the shape is not carved into an
+    invisible piece and an opaque piece, and every opaque source pixel is
+    painted opaque."""
+    from tests.conftest import noisy_halo_disc
+
+    rgba = noisy_halo_disc()
+    svg = trace_rgba(rgba, params)
+    out = render(svg, rgba.shape[1], rgba.shape[0])
+    opaque = rgba[..., 3] == 255
+    assert out[opaque, 3].min() >= 250, "an opaque source pixel is not painted"
+    assert np.abs(out[opaque, :3] - rgba[opaque, :3]).mean() < 2.0
+    ys, xs = np.mgrid[0:96, 0:96]
+    d = np.hypot(xs + 0.5 - 48, ys + 0.5 - 48)
+    faint = (rgba[..., 3] <= 2) & (d > 30 + 2.5)  # the halo, clear of the outline's own sub-pixel spill
+    assert out[faint, 3].max() <= 8, "the halo's noise was painted"
+    assert "stop-opacity" not in svg, svg

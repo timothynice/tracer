@@ -26,13 +26,34 @@ class Prepared:
         return self.alpha.shape[1]
 
 
-def inpaint_transparent(rgb: np.ndarray, alpha: np.ndarray) -> np.ndarray:
-    """Replace RGB under alpha == 0 with the nearest visible pixel's colour.
+# The alpha (0..255) under which a pixel's colour is not its own. A rasteriser
+# works premultiplied and unpremultiplies for the file, so under alpha a the
+# straight colour is quantised to steps of 255/a per channel: at alpha 1 it is
+# 0 or 255, at 2 it is 0, 128 or 255 (the white, magenta, black and
+# (128,128,255) under the soft shadow of a fluent-color emoji). Over the corpus
+# and the held-out set the colour difference between a pixel and its neighbours
+# of higher alpha runs at about 45/a ΔE: 46 at alpha 1, 18 at 2, 11 at 4, 6 at
+# 8, 3.4 at 16, 1.5 at 32. The partition seeds where the discontinuity is under
+# 8 ΔE per pixel (`seed_mask`), so below alpha 8 a halo is all ridge and no
+# seed, and the watershed floods it from whichever shape it rings: the balloon's
+# outline was placed at the halo's far end, its fill fitted to fade out, and the
+# halo carved back out as an "invisible" region that took the shape's real rim
+# with it. Such a pixel's colour is read from the nearest pixel that shows,
+# like the colour under alpha 0; its alpha is kept, and the visible weight of
+# the colour it loses is at most 8/255 of the difference.
+COLOUR_ALPHA_FLOOR = 8
 
-    PNG encoders store arbitrary (often black) RGB under transparent pixels;
+
+def inpaint_transparent(rgb: np.ndarray, alpha: np.ndarray, floor: int = COLOUR_ALPHA_FLOOR) -> np.ndarray:
+    """Replace RGB under alpha below `floor`/255 with the nearest pixel's colour
+    whose alpha reaches it.
+
+    PNG encoders store arbitrary (often black) RGB under transparent pixels,
+    and quantisation noise under nearly transparent ones (`COLOUR_ALPHA_FLOOR`);
     letting that leak into gradient fits or edge detection would be wrong.
+    `alpha` is float32 a/255, which scaled back in float32 is `a` exactly.
     """
-    invisible = alpha <= 0.0
+    invisible = alpha * 255.0 < floor
     if not invisible.any() or invisible.all():
         return rgb
     _, (rows, cols) = ndimage.distance_transform_edt(invisible, return_indices=True)

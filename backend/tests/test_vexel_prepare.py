@@ -63,3 +63,22 @@ def test_flat_image_is_one_region_and_gradient_does_not_split_on_edges():
     square = labels[20:44, 20:44]
     assert len(np.unique(square)) == 1
     assert labels[20, 20] not in np.unique(labels[:8, :])  # the square is not the ramp region
+
+
+def test_colour_under_faint_alpha_is_inpainted_from_the_nearest_pixel_that_shows():
+    """A rasteriser that works premultiplied and unpremultiplies for the file
+    leaves, under a pixel of alpha a, a colour quantised to steps of 255/a: at
+    alpha 1 or 2 only 0, 128 and 255 per channel. That colour means nothing,
+    like the colour under alpha 0, and is read from the nearest pixel whose
+    alpha is high enough for its colour to be its own."""
+    img = rgba(color=(0, 0, 0, 0))
+    img[8:24, 8:24] = (200, 50, 50, 255)  # red square
+    img[24:28, 8:24] = (255, 0, 255, 2)  # a faint halo below it, magenta noise
+    img[28:30, 8:24] = (128, 128, 255, 1)  # and fainter, another noise colour
+    img[8:24, 24:26] = (255, 255, 255, 40)  # a real anti-aliased rim: its colour is its own
+    p = prepare(img)
+    assert tuple(p.rgb[26, 16]) == (200, 50, 50)
+    assert tuple(p.rgb[29, 16]) == (200, 50, 50)
+    assert tuple(p.rgb[16, 24]) == (255, 255, 255)
+    assert np.isclose(p.alpha[26, 16], 2 / 255) and np.isclose(p.alpha[29, 16], 1 / 255)
+    assert np.isclose(p.features[26, 16, 3], 100 * 2 / 255, atol=1e-3)

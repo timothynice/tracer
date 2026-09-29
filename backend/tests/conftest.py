@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
@@ -29,6 +30,25 @@ def two_colour_image(size: int = 64) -> bytes:
     img = Image.new("RGBA", (size, size), (255, 0, 0, 255))
     ImageDraw.Draw(img).rectangle([size // 2, 0, size - 1, size - 1], fill=(0, 0, 255, 255))
     return encode(img)
+
+
+def noisy_halo_disc(size: int = 96, radius: float = 30.0, rgb=(218, 218, 218)) -> np.ndarray:
+    """An anti-aliased light grey disc on a transparent canvas, ringed by the
+    faint halo a soft shadow leaves when the file is unpremultiplied: alpha 2
+    for seven pixels out, then alpha 1 for seven more, with the colour under
+    it the quantisation noise such a file carries (0, 128 or 255 per channel).
+    Returns RGBA (H, W, 4) uint8."""
+    ys, xs = np.mgrid[0:size, 0:size]
+    d = np.hypot(xs + 0.5 - size / 2, ys + 0.5 - size / 2)
+    cover = np.clip(radius + 0.5 - d, 0.0, 1.0)
+    rgba = np.zeros((size, size, 4), np.uint8)
+    rgba[..., :3] = rgb
+    rgba[..., 3] = np.round(cover * 255).astype(np.uint8)
+    halo = (cover == 0) & (d < radius + 14)
+    noise = np.random.default_rng(7).choice(np.array([0, 128, 255], np.uint8), size=(size, size, 3))
+    rgba[halo, :3] = noise[halo]
+    rgba[halo, 3] = np.where(d[halo] < radius + 7, 2, 1)
+    return rgba
 
 
 @pytest.fixture
