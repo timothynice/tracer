@@ -69,7 +69,9 @@ fn refine_centreline(xy: &[P], closed: bool, coverage: &Grid<f64>, width: f64) -
         return xy.to_vec();
     }
     let mut out = xy.to_vec();
-    let steps = ((width / 2.0 + REFINE_REACH) / REFINE_STEP).round() as i64;
+    // truncated, as the Python's `int()`: at the 0.25 px width floor the
+    // count is 4.5, which round() would take to 5 and Python's round to 4
+    let steps = ((width / 2.0 + REFINE_REACH) / REFINE_STEP) as i64;
     let offsets: Vec<f64> = (-steps..=steps).map(|k| k as f64 * REFINE_STEP).collect();
     for _ in 0..REFINE_ITER {
         let cur = out.clone();

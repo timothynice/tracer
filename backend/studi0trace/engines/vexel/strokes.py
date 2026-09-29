@@ -258,7 +258,9 @@ def _refine_centreline(xy: np.ndarray, closed: bool, coverage: np.ndarray, width
     if n < 2:
         return xy
     out = xy.astype(float).copy()
-    steps = int(round((width / 2.0 + REFINE_REACH) / REFINE_STEP))
+    # truncated, never rounded: at the 0.25 px width floor the count is 4.5,
+    # which Python rounds to 4 and Rust to 5
+    steps = int((width / 2.0 + REFINE_REACH) / REFINE_STEP)
     offsets = [k * REFINE_STEP for k in range(-steps, steps + 1)]
     for _ in range(REFINE_ITER):
         cur = out.copy()
