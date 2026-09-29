@@ -73,8 +73,29 @@ DUMPDIR LABEL` prints a dumped region's alpha distribution and connectivity).
   Test `test_vexel_symmetry.py::test_a_copy_painted_by_a_gradient_is_written_in_full` (fails at HEAD).
 - diffcheck (first run, before the reuse fix): rgb, features, labels0, wedges all ok; arcs/under running.
 
+- man-feeding-baby's remaining wobble (x127-136 y110-152): the source edge is aliased (alpha 0 →
+  241..255 in one pixel, no partial coverage), so placement has nothing to read, the vertices stay on
+  the pixel-edge midpoints and the fitter draws a two-point cubic per step. A fitter/placement
+  question for hard-edged art (fit a line through a binary-coverage staircase), not this package's
+  mechanism; left for a follow-up.
+- The scratchpad `compare/` tree is empty here (no competitor records); VTracer numbers come from
+  the brief. `$SCRATCH/q3/wp2/heldout5/` is a 5-item held-out subset (manifest + truth SVGs) for
+  `bench/headtohead.py run --corpus … --configs vexel-auto`.
+- Commits so far: b3959a5 notes, a3933db python fix + tests, 331c1a0 rust port, 33a4d6d reuse fix.
+
+- Full pytest on the Python engine (VEXEL_BACKEND=python, backends file skipped): all passed.
+- diffcheck first run (before the reuse fix, killed with the session at exit 144 half way through
+  `arcs`): rgb, features, labels0, wedges all ok; arcs ok on every item reached (max |Δ| ≤ 1e-7).
+- COLOUR_ALPHA_FLOOR sweep (`floorsweep.py`, Python engine, Balanced, the 65 corpus+heldout items with
+  ≥ 200 px of alpha 1..31; sums): T=1 (old behaviour) ΔE 25.77 art 1780 slivers 4 pinholes 25 seam
+  365k; T=4 22.19 / 1155 / 3 / 29 / 191k; T=8 21.43 / 1042 / 3 / 14 / 164k; T=16 21.07 / 1010 / 3 / 17
+  / 136k. T=32 and the per-item deltas were lost with the session; `floorsweep2.log` re-runs 8/16/32.
+
 ## Next
-- Rebuild Rust after diffcheck finishes; pytest; `tools/diffcheck.py rgb features labels0 wedges arcs under`.
+- Rebuild Rust (running); then `tools/diffcheck.py arcs under` (rerun), pytest on the Rust backend,
+  `python -m bench run --engines vexel --no-media --workers 3` + compare + per-item
+  (`compare_items.py`), `headtohead.py run --corpus $SCRATCH/q3/wp2/heldout5 --configs vexel-auto`,
+  fragsurvey after; decide the floor from floorsweep2 per-item deltas (8 unless 16 is clean).
 - Sweep COLOUR_ALPHA_FLOOR ∈ {4, 8, 16} on the corpus bench if 8 leaves regressions.
 - `python -m bench run --engines vexel --no-media --workers 3` + compare vs bench/baselines/vexel.json;
   per-item check; heldout items with vexel-auto (`panel3.py`); re-run fragsurvey after.
