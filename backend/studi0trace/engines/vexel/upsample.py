@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from studi0trace.engines.vexel.prepare import inpaint_transparent
+
 UPSAMPLE_MAX_SIDE = 192   # px; larger inputs have the evidence they need
 THIN_WIDTH = 2.2          # px; a region narrower than this (2·area/perimeter) wants the upsample
 MIN_AREA = 6              # px²; specks below this are not features
@@ -50,8 +52,17 @@ def _pass(a: np.ndarray) -> np.ndarray:
 
 
 def upsample2x(rgba: np.ndarray) -> np.ndarray:
-    """(H, W, 4) uint8 → (2H, 2W, 4) uint8, Lanczos-3, channels straight."""
+    """(H, W, 4) uint8 → (2H, 2W, 4) uint8, Lanczos-3, channels straight.
+
+    Straight, so the colour under a transparent or nearly transparent pixel
+    is mixed into every edge: with the black a PNG stores there, a pink ring's
+    pixels at 2× ran from pink to dark pink with their alpha (a colour spread
+    of 29 levels among the pixels the field is then inpainted from, against
+    1), and the seams of that spread cut the transparent field into 300
+    regions. The RGB below INPAINT_ALPHA is inpainted first, so ink mixes
+    with ink."""
     a = rgba.astype(np.float64)
+    a[..., :3] = inpaint_transparent(a[..., :3], rgba[..., 3])
     a = _pass(a)                          # rows
     a = _pass(a.transpose(1, 0, 2)).transpose(1, 0, 2)  # columns
     return np.clip(np.floor(a + 0.5), 0.0, 255.0).astype(np.uint8)
