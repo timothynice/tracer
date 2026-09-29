@@ -101,3 +101,36 @@ def test_repeated_dots_become_use_elements():
     # a use is translated to where its copy sat: the first stays put
     assert _re.search(r'<use href="#u1" fill=', svg), "the first copy is a plain use"
     assert len(_re.findall(r'<use href="#u1" x="[\d.-]+" y="[\d.-]+"', svg)) == 8
+
+
+def test_a_copy_painted_by_a_gradient_is_written_in_full():
+    """A gradient in the file's units (`gradientUnits="userSpaceOnUse"`)
+    applies in the user space of the element it paints; for a `<use>` that is
+    the clone's space, which the use's x and y translate, so a copy 240 px to
+    the right was painted by the gradient solved for the first (two cherries:
+    the copy's colour error went from 8 to 34 levels). A shape painted by a
+    gradient is its own element, like one under a filter."""
+    import io
+    import re as _re
+
+    from PIL import Image
+
+    size = 256
+    discs = "".join(f'<circle cx="{cx}" cy="128" r="48" fill="url(#g{k})"/>' for k, cx in ((1, 64), (2, 192)))
+    grads = "".join(
+        f'<linearGradient id="g{k}" gradientUnits="userSpaceOnUse" x1="{cx - 48}" y1="128" x2="{cx + 48}" y2="128">'
+        f'<stop offset="0" stop-color="#e63946"/><stop offset="1" stop-color="#5c0a12"/></linearGradient>'
+        for k, cx in ((1, 64), (2, 192))
+    )
+    scene = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}"><defs>{grads}</defs>'
+             f'<rect width="{size}" height="{size}" fill="#fff"/>{discs}</svg>')
+    png = bytes(resvg_py.svg_to_bytes(svg_string=scene, width=size, height=size))
+    src = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA")).astype(float)
+    svg = trace(png)
+    assert not _re.search(r'<use [^>]*fill="url\(#', svg), svg[:800]
+    out = resvg_py.svg_to_bytes(svg_string=svg, width=size, height=size)
+    out = np.asarray(Image.open(io.BytesIO(bytes(out))).convert("RGBA")).astype(float)
+    ys, xs = np.mgrid[0:size, 0:size]
+    for cx in (64, 192):
+        disc = np.hypot(xs + 0.5 - cx, ys + 0.5 - 128) < 44
+        assert np.abs(out[disc, :3] - src[disc, :3]).mean() < 3.0, cx

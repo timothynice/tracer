@@ -59,8 +59,22 @@ DUMPDIR LABEL` prints a dumped region's alpha distribution and connectivity).
   dense-like params; scene `conftest.noisy_halo_disc`), `test_vexel_backends.py::
   test_both_backends_read_a_faint_noise_halo_the_same_way`.
 
+## After the fix (Rust, probe with Auto)
+- speech-balloon-512: Auto = logo, art 9.23 (was 229; VTracer 52), slivers 0, pinholes 0, f1 1.000.
+  -ds: logo, art 4.00, slivers 0. balanced 22.6 / 6.1.
+- man-feeding-baby-512: Auto = detailed, slivers 0 (was 19), art 80.3 (was 114; VTracer 51) — what
+  is left is wobble 261°/100px along x127-136 y110-150 and 13 inflections (`panels2/`), a different
+  mechanism (not yet looked at).
+- cherries-512-ds: slivers 0, art 3.5, but ΔE 0.97 → 2.29: the two cherries now trace as identical
+  circles and `reuse` wrote the second as `<use x="240" fill="url(#g3)">` — resvg resolves a
+  userSpaceOnUse gradient in the clone's translated space, so the copy got the wrong stretch of its
+  gradient (right disc colour error 8 → 34 levels). Latent bug exposed. Fixed in `reuse.py`/`reuse.rs`:
+  a shape painted by a gradient (`url(#` in its attrs) is never a `<use>`, like one under a filter.
+  Test `test_vexel_symmetry.py::test_a_copy_painted_by_a_gradient_is_written_in_full` (fails at HEAD).
+- diffcheck (first run, before the reuse fix): rgb, features, labels0, wedges all ok; arcs/under running.
+
 ## Next
-- Rebuild Rust; pytest; `tools/diffcheck.py rgb features labels0 wedges arcs under`.
+- Rebuild Rust after diffcheck finishes; pytest; `tools/diffcheck.py rgb features labels0 wedges arcs under`.
 - Sweep COLOUR_ALPHA_FLOOR ∈ {4, 8, 16} on the corpus bench if 8 leaves regressions.
 - `python -m bench run --engines vexel --no-media --workers 3` + compare vs bench/baselines/vexel.json;
   per-item check; heldout items with vexel-auto (`panel3.py`); re-run fragsurvey after.

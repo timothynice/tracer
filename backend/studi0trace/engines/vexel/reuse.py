@@ -110,12 +110,15 @@ def emit(pending: list[tuple[Shape, str]], precision: int, first_id: int = 1) ->
     group_of: list[int | None] = [None] * len(pending)
     shifts: list[np.ndarray | None] = [None] * len(pending)
     groups: list[list[int]] = []
-    # A shape that carries a filter is written in full, never defined or used:
-    # a `filter` on a `<use>` applies in the use's own user space, which its
-    # x and y translate, so a filter region given in the file's units moves
-    # with the copy and clips it (three rounded squares under drop shadows
-    # lost one square and half of another that way).
-    own = ["filter=" in attrs for _s, attrs in pending]
+    # A shape that carries a filter or a gradient is written in full, never
+    # defined or used: a `filter` or a `userSpaceOnUse` gradient on a `<use>`
+    # applies in the use's own user space, which its x and y translate, so a
+    # filter region given in the file's units moves with the copy and clips
+    # it (three rounded squares under drop shadows lost one square and half
+    # of another that way), and a gradient solved in the file's units paints
+    # the copy with the wrong stretch of itself (a cherry 240 px right of its
+    # twin went from 8 to 34 levels of colour error).
+    own = ["filter=" in attrs or "url(#" in attrs for _s, attrs in pending]
     for i in range(len(pending)):
         if group_of[i] is not None or own[i]:
             continue
