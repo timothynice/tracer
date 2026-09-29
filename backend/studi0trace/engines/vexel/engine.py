@@ -32,7 +32,7 @@ from studi0trace.engines.vexel.partition import discontinuity, initial_labels
 from studi0trace.engines.vexel.posterize import Levels, posterize_fills
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.refine import refine_merge
-from studi0trace.engines.vexel.rescue import edge_mix, rescue_features
+from studi0trace.engines.vexel.rescue import boundary_band, edge_mix, rescue_features
 from studi0trace.engines.vexel.upsample import halve, upsample2x, wants_upsample
 from studi0trace.engines.vexel.strokes import is_thin, stroke_fidelity, stroke_geometry, stroke_svg
 from studi0trace.engines.vexel.weights import interior, interior_weights
@@ -212,6 +212,37 @@ def split_rim(labels: np.ndarray, rim: np.ndarray, cands: list[int], xs: np.ndar
     out = labels.copy()
     out[rim] = np.asarray(cands)[np.argmin(off, axis=0)]
     return out
+
+
+def reach_the_edge(labels: np.ndarray, before: np.ndarray, rescued: list[int], xs: np.ndarray, ys: np.ndarray,
+                   rgba255: np.ndarray, fill_at) -> np.ndarray:
+    """A rescued region reaches the outline of the region it was carved from.
+
+    The rescue leaves its parent's edge band alone (`rescue.boundary_band`:
+    the anti-aliasing there disagrees with the parent's fill for the edge's
+    reason), so a band rescued beside the parent's outline stopped two pixels
+    short of it, and a strip of the parent ran on between the band and the
+    canvas: the wrong colour along the outline, and on a diagonal a lattice
+    vertex where the strip's two boundaries touch at every row — a node each,
+    and the outline drawn as dozens of three-vertex arcs (the chin of fluent's
+    heart-eyes, the shadow band of over-gradient). Here every band pixel of
+    the parent within two pixels of a rescued region goes to whichever of the
+    two is nearer, the pixel's own colour breaking a tie (`split_rim`).
+    Rescued regions are visited in order of their label.
+    """
+    band = boundary_band(before)
+    for r in rescued:
+        m = labels == r
+        if not m.any():
+            continue
+        parent = int(np.argmax(np.bincount(before[m])))
+        near = ndimage.binary_dilation(m, _CROSS, iterations=2)
+        strip = band & near & (labels == parent)
+        if not strip.any():
+            continue
+        scratch = int(labels.max()) + 1
+        labels = split_rim(np.where(strip, scratch, labels), strip, [parent, r], xs, ys, rgba255, fill_at)
+    return labels
 
 
 def _ring_area(poly: np.ndarray) -> float:
@@ -407,13 +438,19 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # part of a feature, and does not count towards promoting one.
     explained = edge_mix(labels, rgba255, pred, prep.alpha, residual > 1.0)
     dump.labels("labels_clear", labels)
+    before_rescue = labels
     labels, rescued = rescue_features(labels, residual, threshold=1.0, min_region=p.min_region, explained=explained, core=core_map)
-    dump.labels("labels_rescue", labels)
     if rescued:
         ids = [int(i) for i in np.unique(labels) if i != 0]
         fills.clear()
         visible.clear()
         fit_regions(ids)
+        # A rescued band beside its parent's outline takes the parent's edge
+        # band there, so it reaches the outline (the fills are fitted on the
+        # cores, which the band is not part of, so they stand).
+        labels = reach_the_edge(labels, before_rescue, rescued, xs, ys, rgba255,
+                                lambda lab, qx, qy: fills[lab].evaluate(qx, qy))
+    dump.labels("labels_rescue", labels)
 
     # Join gradient fragments (glows, off-centre radials) that one real fill explains.
     labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
