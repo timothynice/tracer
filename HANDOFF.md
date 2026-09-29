@@ -96,3 +96,44 @@ parent's band pixels next to a rescued region to the nearer of the two (`split_r
   (`strokes.is_thin`, both engines); the ring is stroked again in every variant (isolate_thin.py).
 - Then: rebuild Rust, diffcheck (default + placed nodes arcs segments), bench run + compare, held-out
   Auto run + survey3.py, full pytest on both backends, cargo test, report.
+
+## Report draft (numbers to fill from the pipeline: diffcheck2/3.log, bench/compare.log, heldout/records.jsonl)
+
+Root causes
+1. Soft boundary: across a ramp several pixels wide the placement's four coverage samples never
+   cross a half, so every vertex of the chain falls to t = 0.5 (the lattice edge) and `_fit_arc`
+   draws the label staircase at 0.4-0.6 px; where the fitted fills agree at the boundary there is
+   nothing to read at all (heart-eyes chin 2|7: median 3-px drop 0.05, 0 % found).
+2. `refine_merge`'s edge veto took a glow's own slope for a step: under Detailed (limit 0.6·3.5 =
+   2.1) the boundary between the glow's core and halo reads 2.44 although the union radial fits
+   better than either part (1.81 vs 2.27/2.35), so the core stayed a second shape with a soft,
+   wobbling circular edge.
+3. `rescue_features` leaves the parent's edge band out of a rescued component, so a band rescued
+   beside the parent's outline stopped two pixels short of it and a strip of the parent ran on
+   between them; on a diagonal every row makes a (b,c / a,b) lattice vertex, `_chains` calls each a
+   node, and the outline became dozens of three-vertex arcs (heart-eyes: 31 such chains along the
+   chin; over-gradient: 186).
+
+Changes (Python and Rust, one commit each)
+- topology `_crossing`/`crossing`: also returns the per-vertex coverage drop across 3 px (NaN where
+  an outer sample fell back). `_softness`: median drop -> blur sigma = SOFT_WIDTH/drop - SOFT_BIAS
+  (1.2, 0.35; inverts erf(1.5/(σ√2)) within 8 % for σ 1..8 px), 0 under SOFT_SIGMA = 1.0 (drop >
+  0.89), capped at SOFT_SIGMA_MAX = 4.0 (a Gaussian of σ pulls a circle of radius R in by σ²/2R);
+  drop <= 0 -> the cap. `_soften`: Gaussian along the arc by vertex index to 3σ, open ends fixed,
+  kernel renormalised at the ends, closed chains wrap; never a chain shorter than the kernel
+  (2·ceil(3σ)+1 vertices: a stub between the spokes of wedge-fan-128's hub pulled onto its chord
+  left a pinhole), never a chain placed on a posterised level line. Constants from the survey of
+  652 chains over 28 images ($SCRATCH/q3s/survey2.jsonl): vertex noise about a local line 0.08 px
+  at drop >= 0.95, 0.12 at 0.8-0.9, 0.22 at 0.7-0.8, 0.4-0.55 below 0.7; wobble/100 px 78 -> 400
+  -> 950 -> 1500-2200 along the same bins.
+- merge `boundary_ridges` + refine: a pair steeper than edge_limit is vetoed only where the boundary
+  is a ridge at more than half its pairs (NECK_RIDGE 1.25 over NECK_REACH 3, the partition's neck
+  test) against the *lower* of the two side samples (a small region's far sample is its other
+  edge: thin-mark-128's 14 px core joined its backdrop across a step of 54 with the higher).
+- engine `reach_the_edge`: after the rescue refit, the parent's band pixels within two of a rescued
+  region, on the outline side of it (nearer the parent's old boundary with a neighbour at least as
+  large as the rescued region than the rescued pixels within two are; exact EDT, local min) go to
+  the nearer of parent/rescued by `split_rim`; thin rescued regions (`strokes.is_thin`) are skipped.
+
+Tests: tests/test_vexel_soft_edges.py (3), test_vexel_refine_merge.py (3), test_vexel_reach_edge.py (5).
+CLAUDE.md: one bullet (soft edges; the ridge veto; reach_the_edge).
