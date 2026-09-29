@@ -55,6 +55,17 @@ def test_only_the_band_within_two_pixels_of_the_rescued_region_is_asked():
     assert (out[10:] == labels[10:]).all() and (out[:8] == 1).all()
 
 
+def test_a_thin_rescued_region_is_left_to_the_stroke_stage():
+    """A 1.5 px ring is drawn as a stroke along its middle; one pixel of band
+    on its flank was a wart the medial axis could not carry (thin-mark-128)."""
+    labels, before, xs, ys, rgba = _scene()
+    labels[10:16, 4:20] = 2
+    labels[10:11, 4:20] = 3                            # a one-pixel line, two short of the canvas
+    rgba[8:11, 4:20] = INK
+    out = reach_the_edge(labels, before, [3], xs, ys, rgba, _fill_at)
+    assert (out == labels).all()
+
+
 def test_a_small_neighbour_on_the_way_is_not_an_outline_to_reach():
     """Nine pixels of dot on a rescued line: the two pixels of band between
     them are the stroke stage's to bridge, and joined to the dot the ring of

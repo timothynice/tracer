@@ -90,9 +90,9 @@ parent's band pixels next to a rescued region to the nearer of the two (`split_r
   samples (a small region's far sample is its other edge: thin-mark-128's 14 px core had joined its
   backdrop across a step of 54); `reach_the_edge` reaches only the outline of a neighbour at least
   as large as the rescued region (a ten-pixel dot on a ring is not an outline). Tests for both.
-- Still open: thin-mark-128 (upsample never) loses its stroked ring with reach_the_edge on: three
+- Fixed: thin-mark-128 (upsample never) lost its stroked ring with reach_the_edge on: three
   backdrop band pixels beside ring fragments 8/9 (reddish, so split_rim hands them over) are a
-  one-pixel wart on a 1.5 px line and the stroke stage refuses the ring. Next: skip thin rescued
-  regions in reach_the_edge (they are stroked along their middle; the strip is for bands).
+  one-pixel wart on a 1.5 px line and the stroke stage refused the ring. reach_the_edge now skips a thin rescued region
+  (`strokes.is_thin`, both engines); the ring is stroked again in every variant (isolate_thin.py).
 - Then: rebuild Rust, diffcheck (default + placed nodes arcs segments), bench run + compare, held-out
   Auto run + survey3.py, full pytest on both backends, cargo test, report.

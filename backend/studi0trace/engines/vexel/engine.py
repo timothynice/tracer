@@ -238,7 +238,10 @@ def reach_the_edge(labels: np.ndarray, before: np.ndarray, rescued: list[int], x
     the harm runs along a long outline (a canvas, a backdrop); the two pixels
     of ring between a rescued ring fragment and a ten-pixel dot on the ring
     are the stroke stage's to bridge, and joined to the dot the ring could no
-    longer be stroked. Rescued regions are visited in order of their label.
+    longer be stroked. A thin rescued region (`strokes.is_thin`) is left as it
+    is: it is drawn as a stroke along its middle, which no strip disturbs, and
+    one reddish pixel of band on the flank of that ring was a wart its medial
+    axis could not carry. Rescued regions are visited in order of their label.
     """
     band = boundary_band(before)
     sizes = np.bincount(before.ravel())
@@ -246,7 +249,7 @@ def reach_the_edge(labels: np.ndarray, before: np.ndarray, rescued: list[int], x
     diamond = np.abs(dy) + np.abs(dx) <= 2  # the pixels within two steps, as the cross dilation reaches
     for r in rescued:
         m = labels == r
-        if not m.any():
+        if not m.any() or is_thin(m):
             continue
         parent = int(np.argmax(np.bincount(before[m])))
         big = (before != parent) & (sizes[before] >= int(m.sum()))

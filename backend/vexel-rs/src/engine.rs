@@ -16,7 +16,7 @@ use crate::prepare::{prepare, Prepared};
 use crate::refine::refine_merge;
 use crate::rescue::rescue_features;
 use crate::shadows::{detect_shadows, shadow_filter_svg, ShadowPlan};
-use crate::strokes::{is_thin_at, stroke_fidelity, stroke_geometry, stroke_svg};
+use crate::strokes::{is_thin, is_thin_at, stroke_fidelity, stroke_geometry, stroke_svg};
 use crate::timing::Timer;
 use crate::weights::{interior, interior_at, interior_weights_at};
 use rayon::prelude::*;
@@ -182,7 +182,8 @@ fn reach_the_edge(
     for r in rescued {
         let m = labels::mask_of(l, r);
         let n_r = m.data.iter().filter(|v| **v).count();
-        if n_r == 0 {
+        // a thin region is stroked along its middle and left as it is: see the Python
+        if n_r == 0 || is_thin(&m) {
             continue;
         }
         // the label the region was carved from: the commonest under it, the
