@@ -225,6 +225,20 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 - A stretch that is lines-first at `KIND_TOL` (0.4 px) stays lines at any
   looser `curve_tolerance`: a loose tolerance buys fewer curve segments, never
   a straight edge drawn as a bow.
+- A soft edge has no position finer than its blur. `_crossing` also returns
+  how far coverage drops across the three pixels it samples (1.0 on a crisp
+  edge); `_place` reads the blur width off the chain's median drop
+  (`SOFT_WIDTH / drop − SOFT_BIAS`) and smooths the placed vertices along the
+  arc by a Gaussian of that width (from 1 px, capped at 4, never a chain
+  shorter than the kernel, never a posterised level line), in both engines
+  (`_soften`, `soften`; `diffcheck placed`). Without it every vertex of a
+  ramp fell to the lattice edge and the fit drew the label staircase as a
+  wobble. Two other things make a soft band wobble and are fixed at their
+  source, not here: `refine_merge`'s edge veto holds only on a *ridge*
+  (`merge.boundary_ridges`, the partition's `NECK_RIDGE` test — a glow's own
+  slope is not a step), and a rescued band takes its parent's edge band up to
+  the outline (`engine.reach_the_edge`), or a strip of the parent runs on
+  between them and puts a node at every row of a diagonal.
 - Presets are measured, never described by hand: `bench.presets_eval
   --write-details` rewrites `engines/preset_details.json`. Auto (`auto.py`,
   `/vectorize auto=true`) traces the candidates concurrently and keeps the
