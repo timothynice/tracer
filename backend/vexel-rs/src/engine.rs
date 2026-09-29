@@ -7,7 +7,7 @@ use crate::core::morphology::dilate_cross;
 use crate::curves::{fit_shape, CurveParams, Shape};
 use crate::fills::{fit_fill, Fill, FitParams, INVISIBLE_ALPHA};
 use crate::merge::{adjacency, merge_regions, MergeParams};
-use crate::order::{enclosure, paint_order, shape_labels, shape_mask, Enclosure};
+use crate::order::{boundary_band, enclosure, paint_order, shape_labels, shape_mask, Enclosure};
 use crate::topology::{self, Boundary};
 use crate::overlaps::decompose_overlaps;
 use crate::partition::{discontinuity, initial_labels};
@@ -154,6 +154,57 @@ fn split_rim(
         .collect();
     for (i, v) in assign {
         l.data[i] = v;
+    }
+}
+
+/// A rescued region reaches the outline of the region it was carved from: every
+/// edge-band pixel of the parent (`boundary_band` of the map before the rescue)
+/// within two pixels of a rescued region goes to whichever of the two is
+/// nearer, the pixel's own colour breaking a tie (`split_rim`). Rescued regions
+/// are visited in order of their label. `engine.reach_the_edge` in the Python.
+#[allow(clippy::too_many_arguments)]
+fn reach_the_edge(
+    l: &mut Labels,
+    before: &Labels,
+    rescued: &[i32],
+    xs: &Grid<f64>,
+    ys: &Grid<f64>,
+    rgba255: &[[f64; 4]],
+    fill_at: &dyn Fn(i32, &[f64], &[f64]) -> Vec<[f64; 4]>,
+) {
+    let band = boundary_band(before);
+    let mut rescued: Vec<i32> = rescued.to_vec();
+    rescued.sort_unstable();
+    for r in rescued {
+        let m = labels::mask_of(l, r);
+        if !m.data.iter().any(|v| *v) {
+            continue;
+        }
+        // the label the region was carved from: the commonest under it, the
+        // lower on a tie (numpy's argmax takes the first)
+        let mut count: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
+        for i in 0..l.len() {
+            if m.data[i] {
+                *count.entry(before.data[i]).or_insert(0) += 1;
+            }
+        }
+        let parent = count.iter().fold((0i32, 0usize), |best, (k, n)| if *n > best.1 { (*k, *n) } else { best }).0;
+        let near = crate::core::morphology::dilate_cross_n(&m, 2);
+        let strip = Grid {
+            h: l.h,
+            w: l.w,
+            data: (0..l.len()).map(|i| band.data[i] && near.data[i] && l.data[i] == parent).collect(),
+        };
+        if !strip.data.iter().any(|v| *v) {
+            continue;
+        }
+        let scratch = l.data.iter().copied().max().unwrap_or(0) + 1;
+        for i in 0..l.len() {
+            if strip.data[i] {
+                l.data[i] = scratch;
+            }
+        }
+        split_rim(l, &strip, &[parent, r], xs, ys, rgba255, fill_at);
     }
 }
 
@@ -398,16 +449,21 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     let explained = crate::rescue::edge_mix(&l, &rgba255, &pred, &prep.alpha, &over);
     t.lap("residual");
     crate::dump::labels("labels_clear", &l);
+    let before_rescue = l.clone();
     let (rescued_labels, rescued) = rescue_features(&l, &residual, 1.0, p.min_region, Some(&explained), Some(&core_map));
     l = rescued_labels;
-    crate::dump::labels("labels_rescue", &l);
     if !rescued.is_empty() {
         index = LabelIndex::build(&l);
         ids = labels::unique_ids(&l);
         let out = fit_regions(&ids, &l, &index, &xs, &ys, &rgba255, &prep.alpha, &fit_params);
         fills = out.fills;
         visible = out.visible;
+        // A rescued band beside its parent's outline takes the parent's edge
+        // band there, so it reaches the outline: see the Python.
+        let fill_now = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> { fills[&lab].evaluate(qx, qy) };
+        reach_the_edge(&mut l, &before_rescue, &rescued, &xs, &ys, &rgba255, &fill_now);
     }
+    crate::dump::labels("labels_rescue", &l);
 
     t.lap("rescue + refit");
     // Join gradient fragments (glows, off-centre radials) that one real fill explains.

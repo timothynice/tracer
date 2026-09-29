@@ -51,14 +51,36 @@ Three distinct causes of `wobble_deg_100px`:
   half-crossing; a crisp control keeps sub-pixel placement). Failed before (RMS 0.47 px), passes after.
 - Survey numbers behind the constants: `$SCRATCH/q3s/analyse_survey.py survey2.jsonl`.
 
-## Step 2 (planned): glow split under Detailed
+## Step 2 (done, Python + Rust): glow split under Detailed
 `refine_merge` declines (2,4) on glow-512-ds because the boundary gradient 2.44 > edge_limit
 0.6·3.5 = 2.1, although the union radial fits better than either part (1.81 vs 2.27/2.35). The
 gradient is the glow's own slope, not a step: apply the partition's ridge test (NECK_RIDGE 1.25 over
 NECK_REACH 3 px, more than half the pairs) so the veto holds only on a ridge. Both engines.
 
-## Step 3 (planned): rescue leaves a strip
+## Step 3 (done, Python + Rust, Rust not yet rebuilt/diffchecked): rescue leaves a strip
 `rescue_features` excludes `boundary_band` from candidates, so a rescued band next to the outline
 leaves a 2-px strip of its parent between itself and the canvas; on a diagonal every row makes a
 (b,c/a,b) lattice vertex, a node, and the strip becomes dozens of 3-vertex arcs. Fix: hand the
 parent's band pixels next to a rescued region to the nearer of the two (`split_rim`), both engines.
+
+## Results so far (Python engine, before -> after)
+- heart-eyes-512 logo (Auto's pick): artifact 50.17 -> 4.49, dE 1.689 -> 1.681, f1 0.987; balanced 72.6 -> 14.9
+- glow-512-ds detailed: artifact 54.76 -> 0.00, dE 0.382 -> 0.380, paths 6 -> 3
+- over-gradient-512 balanced: artifact 45.9 -> 3.43
+- u1f61b-512 balanced: artifact 24.1 -> 15.3
+- wedge-fan-128: the stroke test's pinhole appeared with smoothing of hub stubs; fixed by the
+  kernel-length rule (a chain shorter than 2*ceil(3σ)+1 vertices is not smoothed).
+- Tests added: tests/test_vexel_soft_edges.py, test_vexel_refine_merge.py, test_vexel_reach_edge.py.
+- diffcheck (placed nodes arcs segments) on the smoothing alone: 0 failing so far (run in progress
+  when this was written; rerun everything after the Rust rebuild).
+
+## Next
+1. Wait for the diffcheck run to end, `maturin develop --release`, run `tools.diffcheck` (default
+   stages) and `placed nodes arcs segments`: 0 failing pairs required.
+2. `python -m bench run --engines vexel --no-media --workers 3 --label q3soft --out $SCRATCH/q3s/bench`
+   then `bench compare bench/baselines/vexel.json .../results.json`; per-item check for outline_px / dE
+   regressions > 0.02 and the wordmark.
+3. Held-out: `VEXEL_BACKEND=rust RAYON_NUM_THREADS=1 python bench/headtohead.py run --corpus
+   bench/heldout --out $SCRATCH/q3s/heldout --configs vexel-auto --workers 3`, then
+   `$SCRATCH/q3/survey.py` for wobble wins vs VTracer (target >= 90 of 120).
+4. Full pytest (both backends), cargo test, CLAUDE.md bullet, final report.
