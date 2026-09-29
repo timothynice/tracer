@@ -244,12 +244,14 @@ def _rust_fill(kind: str, vals: list[float]):
     by side."""
     if kind == "solid":
         return Solid(rgba=np.asarray(vals[:4], dtype=float))
-    head, rest = (4, vals[4:]) if kind == "linear" else (3, vals[3:])
+    head, rest = (4, vals[4:]) if kind == "linear" else (5, vals[5:])
     stops = [Stop(offset=rest[i], rgba=np.asarray(rest[i + 1 : i + 5], dtype=float))
              for i in range(0, len(rest), 5)]
     if kind == "linear":
         return Linear(*vals[:4], stops=stops)
-    return Radial(*vals[:3], stops=stops)
+    cx, cy, r, fx, fy = vals[:5]
+    focal = {} if (fx == cx and fy == cy) else {"fx": fx, "fy": fy}
+    return Radial(cx, cy, r, stops=stops, **focal)
 
 
 # The fill fits the stage runs: the regions and FitParams of the default preset

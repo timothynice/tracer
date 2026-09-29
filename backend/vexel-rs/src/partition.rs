@@ -31,9 +31,61 @@ pub fn discontinuity(features: &Image, sigma: f64) -> Grid<f64> {
     }
 }
 
+/// The local discontinuity floor (`partition.noise_floor`): the median of
+/// `grad` over `NOISE_WINDOW`. Where it is under `CLEAN_FLOOR` the area is
+/// clean and the ridge threshold is `G_LOW_MIN`, the junction test's
+/// `G_SEED_MIN`; elsewhere they stay `g_low` and `g_seed` (`partition.py` says why).
+pub const NOISE_WINDOW: usize = 9;
+pub const CLEAN_FLOOR: f32 = 0.1;
+pub const G_LOW_MIN: f32 = 0.75;
+pub const G_SEED_MIN: f32 = 1.5;
+
+pub fn noise_floor(grad: &Grid<f64>, features: &Image, g_low: f64) -> Grid<f64> {
+    let (h, w) = (grad.h, grad.w);
+    let inf = Grid::filled(h, w, f64::INFINITY);
+    let (ridge, _) = ridges_and_valleys(features, grad, g_low, &inf);
+    let band = dilate_cross_n(&ridge, 2);
+    let half = (NOISE_WINDOW / 2) as isize;
+    let mut out = Grid::new(h, w);
+    let mut win: Vec<f32> = Vec::with_capacity(NOISE_WINDOW * NOISE_WINDOW);
+    for r in 0..h {
+        for c in 0..w {
+            win.clear();
+            for dr in -half..=half {
+                let rr = (r as isize + dr).clamp(0, h as isize - 1) as usize;
+                for dc in -half..=half {
+                    let cc = (c as isize + dc).clamp(0, w as isize - 1) as usize;
+                    let i = rr * w + cc;
+                    if !band.data[i] {
+                        win.push(grad.data[i] as f32);
+                    }
+                }
+            }
+            out.data[r * w + c] = if win.is_empty() {
+                g_low
+            } else {
+                win.sort_by(|a, b| a.total_cmp(b));
+                win[(win.len() - 1) / 2] as f64
+            };
+        }
+    }
+    out
+}
+
+/// The ridge threshold at each pixel: `g_low` where the floor is high, down to
+/// `G_LOW_MIN` where the image is clean; `g_low` under transparent pixels
+/// (`features[3] < 50`), whose inpainted colour has seams that are not edges.
+fn threshold_at(g_low: f32, floor_min: f32, floor: f32, alpha: f64) -> f32 {
+    if alpha >= 50.0 && floor < CLEAN_FLOOR {
+        floor_min
+    } else {
+        g_low
+    }
+}
+
 /// (ridge, valley) masks from non-maximum / non-minimum tests along the
 /// structure-tensor gradient orientation.
-pub fn ridges_and_valleys(features: &Image, grad: &Grid<f64>, g_low: f64) -> (Mask, Mask) {
+pub fn ridges_and_valleys(features: &Image, grad: &Grid<f64>, g_low: f64, floor: &Grid<f64>) -> (Mask, Mask) {
     let mut t = Timer::new();
     let (h, w) = (grad.h, grad.w);
     let n = h * w;
@@ -87,7 +139,8 @@ pub fn ridges_and_valleys(features: &Image, grad: &Grid<f64>, g_low: f64) -> (Ma
                 let gmf = at(-1.5f32 * dy, -1.5f32 * dx);
                 let g32 = g as f32;
                 let prominent = g32 > 1.10f32 * gp.max(gm) || g32 > 1.10f32 * gpf.max(gmf);
-                let is_ridge = g32 > g_low as f32 && g32 >= gp && g32 >= gm && prominent;
+                let g_low_eff = threshold_at(g_low as f32, G_LOW_MIN, floor.data[i] as f32, features.at(r, c)[3]);
+                let is_ridge = g32 > g_low_eff && g32 >= gp && g32 >= gm && prominent;
                 let is_valley = g32 <= gp && g32 <= gm && !is_ridge;
                 *slot = is_ridge as u8 | ((is_valley as u8) << 1);
             }
@@ -103,12 +156,15 @@ pub fn ridges_and_valleys(features: &Image, grad: &Grid<f64>, g_low: f64) -> (Ma
 /// still carry a high gradient, so the gradient test keeps neighbouring regions
 /// from leaking into one seed.
 pub fn seed_mask(features: &Image, grad: &Grid<f64>, g_low: f64, g_seed: f64) -> Mask {
-    let (ridge, valley) = ridges_and_valleys(features, grad, g_low);
+    let floor = noise_floor(grad, features, g_low);
+    let (ridge, valley) = ridges_and_valleys(features, grad, g_low, &floor);
     let band = dilate_cross(&ridge);
     let near_band = dilate_cross_n(&band, 2);
     let mut out = Grid::filled(grad.h, grad.w, false);
+    let w = grad.w;
     for i in 0..grad.len() {
-        let leaky = near_band.data[i] && grad.data[i] >= g_seed;
+        let g_seed_eff = threshold_at(g_seed as f32, G_SEED_MIN, floor.data[i] as f32, features.at(i / w, i % w)[3]);
+        let leaky = near_band.data[i] && (grad.data[i] as f32) >= g_seed_eff;
         out.data[i] = (!band.data[i] && !leaky) || valley.data[i];
     }
     out

@@ -33,9 +33,63 @@ def discontinuity(features: np.ndarray, sigma: float = 0.7) -> np.ndarray:
     return ndimage.gaussian_filter(grad, sigma) if sigma > 0 else grad
 
 
-def ridges_and_valleys(features: np.ndarray, grad: np.ndarray, g_low: float) -> tuple[np.ndarray, np.ndarray]:
+# The discontinuity floor an edge must stand above is local, not one number
+# for every image: `g_low` (1.5) was set for JPEG, whose ringing and block
+# edges put 0.5-1.5 ΔE/px of noise inside every smooth area, and it hid every
+# crisp step under 2.7 ΔE in a clean render (sixteen tiles 2.9 ΔE apart came
+# out as two shapes, their ridge of 1.6 sitting at the threshold and their
+# junctions leaking). So where the area is clean outright — the median
+# discontinuity over the `NOISE_WINDOW` around the pixel, leaving out the
+# pixels within two of any ridge found at `g_low`, is under `CLEAN_FLOOR`, a
+# tenth of a level — the ridge threshold is `G_LOW_MIN` and the junction
+# test's `G_SEED_MIN`; everywhere else, and under transparent pixels whose
+# inpainted colour has seams, they stay `g_low` and `g_seed`. The ridges are
+# left out because a window astride two crossing edges is not noisy, it is a
+# junction, and read whole its median (0.3-0.4 on the tiles) hid exactly the
+# junctions that leaked. A floor scaled by the median instead (three times
+# it) let JPEG's ringing, whose median is low and whose peaks are high (0.27
+# and 1.45 at the 90th percentile inside a q75 disc), grow ridges that cut
+# the disc's seed to pieces.
+NOISE_WINDOW = 9
+CLEAN_FLOOR = 0.1
+G_LOW_MIN = 0.75
+G_SEED_MIN = 1.5
+
+
+def noise_floor(grad: np.ndarray, features: np.ndarray, g_low: float) -> np.ndarray:
+    """The local discontinuity floor: the lower-middle median of `grad` over
+    the NOISE_WINDOW round each pixel, leaving out the pixels within two of a
+    ridge found at `g_low`; `g_low` where the window has nothing else."""
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    ridge, _ = ridges_and_valleys(features, grad, g_low, np.full(grad.shape, np.inf, np.float32))
+    band = ndimage.binary_dilation(ridge, _CROSS, iterations=2)
+    half = NOISE_WINDOW // 2
+    values = np.where(band, np.float32(np.inf), grad.astype(np.float32))
+    win = sliding_window_view(np.pad(values, half, mode="edge"), (NOISE_WINDOW, NOISE_WINDOW))
+    win = win.reshape(grad.shape[0], grad.shape[1], NOISE_WINDOW * NOISE_WINDOW)
+    count = sliding_window_view(np.pad((~band).astype(np.int32), half, mode="edge"), (NOISE_WINDOW, NOISE_WINDOW))
+    count = count.reshape(grad.shape[0], grad.shape[1], NOISE_WINDOW * NOISE_WINDOW).sum(axis=2)
+    median = np.take_along_axis(np.sort(win, axis=2), (np.maximum(count - 1, 0) // 2)[..., None], axis=2)[..., 0]
+    return np.where(count > 0, median, np.float32(g_low)).astype(np.float32)
+
+
+def threshold_at(g_low: float, floor_min: float, floor: np.ndarray, features: np.ndarray) -> np.ndarray:
+    """The per-pixel threshold: `floor_min` where the area is clean (its floor
+    under CLEAN_FLOOR and the pixel not transparent), `g_low` elsewhere."""
+    clean = (features[..., 3] >= 50.0) & (floor < CLEAN_FLOOR)
+    return np.where(clean, np.float32(floor_min), np.float32(g_low)).astype(np.float32)
+
+
+def ridges_and_valleys(features: np.ndarray, grad: np.ndarray, g_low: float,
+                       floor: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """(ridge, valley) boolean masks from non-maximum / non-minimum tests along
-    the structure-tensor gradient orientation."""
+    the structure-tensor gradient orientation. `floor` is `noise_floor(grad)`;
+    the ridge threshold is `g_low` where the floor is high and drops towards
+    `G_LOW_MIN` where the image is clean."""
+    if floor is None:
+        floor = noise_floor(grad, features, g_low)
+    g_low_eff = threshold_at(g_low, G_LOW_MIN, floor, features)
     jxx = np.zeros(grad.shape, np.float32)
     jyy = np.zeros(grad.shape, np.float32)
     jxy = np.zeros(grad.shape, np.float32)
@@ -62,7 +116,7 @@ def ridges_and_valleys(features: np.ndarray, grad: np.ndarray, g_low: float) -> 
     # the stroke's other ridge) or against the far samples (a wide edge whose peak
     # straddles two pixels). Quantisation bumps fail both.
     prominent = (grad > 1.10 * np.maximum(g_plus, g_minus)) | (grad > 1.10 * np.maximum(g_plus_far, g_minus_far))
-    ridge = (grad > g_low) & (grad >= g_plus) & (grad >= g_minus) & prominent
+    ridge = (grad > g_low_eff) & (grad >= g_plus) & (grad >= g_minus) & prominent
     valley = (grad <= g_plus) & (grad <= g_minus) & ~ridge
     return ridge, valley
 
@@ -78,14 +132,16 @@ def seed_mask(features: np.ndarray, grad: np.ndarray, g_low: float, g_seed: floa
     low gradient. NMS loses ridge pixels at T-junctions (where two edges meet the
     orientation estimate flips); those gap pixels still carry a high gradient, so
     the gradient test keeps neighbouring regions from leaking into one seed."""
-    ridge, valley = ridges_and_valleys(features, grad, g_low)
+    floor = noise_floor(grad, features, g_low)
+    ridge, valley = ridges_and_valleys(features, grad, g_low, floor)
     band = ndimage.binary_dilation(ridge, _CROSS)
     # Junction gaps sit right next to ridge segments, so the gradient test is only
     # applied within two pixels of the band; a steep but smooth ramp far from any
     # ridge keeps its seeds. Valleys (minima across the edge direction) can never
     # be edge pixels and always seed - that is what keeps thin stroke cores alive.
     near_band = ndimage.binary_dilation(band, _CROSS, iterations=2)
-    leaky = near_band & (grad >= g_seed)
+    g_seed_eff = threshold_at(g_seed, G_SEED_MIN, floor, features)
+    leaky = near_band & (grad >= g_seed_eff)
     return (~band & ~leaky) | valley
 
 

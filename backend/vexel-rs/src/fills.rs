@@ -59,8 +59,27 @@ pub struct Stop {
 pub enum Fill {
     Solid { rgba: [f64; 4] },
     Linear { x1: f64, y1: f64, x2: f64, y2: f64, stops: Vec<Stop> },
-    Radial { cx: f64, cy: f64, r: f64, stops: Vec<Stop> },
+    /// A radial gradient; with a focal point (`fx`, `fy`) off the centre it is
+    /// SVG's focal radial (`fills.Radial`): the colour at P is the stop at the
+    /// t for which P lies on the circle of radius t·r centred at F + t·(C − F).
+    Radial { cx: f64, cy: f64, r: f64, fx: f64, fy: f64, stops: Vec<Stop> },
 }
+
+/// SVG's focal radial parameter (`fills.focal_param`): with Q = P − F and
+/// D = C − F, the positive root of (r² − |D|²)·t² − 2(Q·D)·t − |Q|² = 0.
+pub fn focal_param(x: f64, y: f64, cx: f64, cy: f64, fx: f64, fy: f64, r: f64) -> f64 {
+    let (qx, qy) = (x - fx, y - fy);
+    let (dx, dy) = (cx - fx, cy - fy);
+    let a = (r * r - (dx * dx + dy * dy)).max(1e-9);
+    let qd = qx * dx + qy * dy;
+    ((qd * qd + a * (qx * qx + qy * qy)).sqrt() - qd) / a
+}
+
+/// The focal search's gates (`fills.py` says why).
+pub const FOCAL_MIN_RMS: f64 = 0.5;
+pub const FOCAL_MIN_PIXELS: usize = 400;
+pub const FOCAL_MARGIN: f64 = 0.25;
+pub const FOCAL_REACH: f64 = 0.85;
 
 #[derive(Clone, Copy)]
 pub struct FitParams {
@@ -117,7 +136,13 @@ impl Fill {
                 let denom = dx * dx + dy * dy;
                 if denom > 0.0 { ((x - x1) * dx + (y - y1) * dy) / denom } else { 0.0 }
             }
-            Fill::Radial { cx, cy, r, .. } => ((x - cx).hypot(y - cy)) / r.max(1e-9),
+            Fill::Radial { cx, cy, r, fx, fy, .. } => {
+                if fx == cx && fy == cy {
+                    ((x - cx).hypot(y - cy)) / r.max(1e-9)
+                } else {
+                    focal_param(x, y, *cx, *cy, *fx, *fy, *r)
+                }
+            }
         }
     }
 
@@ -601,7 +626,7 @@ pub fn fit_fill(
                 if rmax < 1e-6 {
                     return (
                         f64::INFINITY,
-                        Fill::Radial { cx: cen[0] + gx0, cy: cen[1] + gy0, r: 1.0, stops: Vec::new() },
+                        Fill::Radial { cx: cen[0] + gx0, cy: cen[1] + gy0, r: 1.0, fx: cen[0] + gx0, fy: cen[1] + gy0, stops: Vec::new() },
                     );
                 }
                 let r: Vec<f64> = if full.is_some() {
@@ -613,7 +638,7 @@ pub fn fit_fill(
                 let r_chk: Option<Vec<f64>> = full.as_ref().map(|_| r_all.iter().map(|v| v / rmax).collect());
                 let chk: Option<Check> = r_chk.as_ref().map(|rc| (rc.as_slice(), ca, wa));
                 let stops = ramp_fit(&tn, &c, &w, params.max_stops, params.tol, rmax, chk);
-                let rad = Fill::Radial { cx: cen[0] + gx0, cy: cen[1] + gy0, r: rmax, stops };
+                let rad = Fill::Radial { cx: cen[0] + gx0, cy: cen[1] + gy0, r: rmax, fx: cen[0] + gx0, fy: cen[1] + gy0, stops };
                 let pred = rad.evaluate(&x, &y);
                 (rms(&pred, &c, &w), rad)
             };
@@ -632,6 +657,69 @@ pub fn fit_fill(
                 let best = nelder_mead(objective, start, &opts);
                 let (r, rad) = radial_for(&best);
                 candidates.push((r, rad));
+
+                // --- focal radial: the same search with the focal point free ---
+                if r > FOCAL_MIN_RMS * params.tol && na >= FOCAL_MIN_PIXELS {
+                    let span = span_x.max(span_y).max(1.0);
+                    let focal_objective = |v: &[f64]| -> f64 {
+                        let rmax = (0..na).map(|i| (xr[i] - v[0]).hypot(yr[i] - v[1])).fold(f64::NEG_INFINITY, f64::max).max(1e-9);
+                        if (v[2] - v[0]).hypot(v[3] - v[1]) > FOCAL_REACH * rmax {
+                            return f64::INFINITY;
+                        }
+                        let t: Vec<f64> = (0..na).map(|i| focal_param(xr[i], yr[i], v[0], v[1], v[2], v[3], rmax)).collect();
+                        let tmax = t.iter().copied().fold(f64::NEG_INFINITY, f64::max).max(1e-9);
+                        let mut basis = Mat::zeros(na, 4);
+                        for i in 0..na {
+                            let tn = t[i] / tmax;
+                            let sw = wa[i].sqrt();
+                            basis.set(i, 0, sw);
+                            basis.set(i, 1, tn * sw);
+                            basis.set(i, 2, tn * tn * sw);
+                            basis.set(i, 3, tn * tn * tn * sw);
+                        }
+                        let cf = lstsq(&basis, &b_all);
+                        let mut pred = vec![0.0f64; na * 4];
+                        for i in 0..na {
+                            let tn = t[i] / tmax;
+                            let raw = [1.0, tn, tn * tn, tn * tn * tn];
+                            for (j, bij) in raw.iter().enumerate() {
+                                for ch in 0..4 {
+                                    pred[i * 4 + ch] += bij * cf.at(j, ch);
+                                }
+                            }
+                        }
+                        rms_flat(&pred, ca, wa)
+                    };
+                    let focal_for = |v: &[f64]| -> (f64, Fill) {
+                        let rmax = (0..na).map(|i| (xr[i] - v[0]).hypot(yr[i] - v[1])).fold(f64::NEG_INFINITY, f64::max).max(1e-9);
+                        let t_all: Vec<f64> = (0..na).map(|i| focal_param(xr[i], yr[i], v[0], v[1], v[2], v[3], rmax)).collect();
+                        let t_core: Vec<f64> = if full.is_some() {
+                            (0..ns).map(|i| focal_param(x[i] - gx0, y[i] - gy0, v[0], v[1], v[2], v[3], rmax)).collect()
+                        } else {
+                            t_all.clone()
+                        };
+                        let chk: Option<Check> = if full.is_some() { Some((t_all.as_slice(), ca, wa)) } else { None };
+                        let stops = ramp_fit(&t_core, &c, &w, params.max_stops, params.tol, rmax, chk);
+                        let foc = Fill::Radial { cx: v[0] + gx0, cy: v[1] + gy0, r: rmax, fx: v[2] + gx0, fy: v[3] + gy0, stops };
+                        let pred = foc.evaluate(&x, &y);
+                        (rms(&pred, &c, &w), foc)
+                    };
+                    let x0 = vec![best[0], best[1], best[0], best[1]];
+                    let mut simplex = vec![x0.clone()];
+                    for i in 0..4 {
+                        let mut v = x0.clone();
+                        v[i] += 0.1 * span;
+                        simplex.push(v);
+                    }
+                    let opts_f = NmOptions { xatol: 0.05, fatol: 0.01, maxiter: 200, maxfev: usize::MAX };
+                    let bestf = nelder_mead(focal_objective, simplex, &opts_f);
+                    if bestf.iter().all(|v| v.is_finite()) {
+                        let (rf, foc) = focal_for(&bestf);
+                        if rf.is_finite() && rf < r - FOCAL_MARGIN * params.tol {
+                            candidates.push((rf, foc));
+                        }
+                    }
+                }
             }
         }
     }
@@ -757,13 +845,14 @@ impl Fill {
                 ),
                 format!("fill=\"url(#{})\"", gid),
             ),
-            Fill::Radial { cx, cy, r, stops } => (
+            Fill::Radial { cx, cy, r, fx, fy, stops } => (
                 format!(
-                    "<radialGradient id=\"{}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\">{}</radialGradient>",
+                    "<radialGradient id=\"{}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\"{}>{}</radialGradient>",
                     gid,
                     fmt(*cx, p),
                     fmt(*cy, p),
                     fmt(*r, p),
+                    if fx == cx && fy == cy { String::new() } else { format!(" fx=\"{}\" fy=\"{}\"", fmt(*fx, p), fmt(*fy, p)) },
                     stops_svg(stops, p)
                 ),
                 format!("fill=\"url(#{})\"", gid),

@@ -29,6 +29,14 @@ from studi0trace.engines.vexel.merge import adjacency
 # Least share of an overlap region's outline that must run along the two shapes
 # it is the overlap of (or along other overlaps): see `decompose_overlaps`.
 OVERLAP_OUTLINE = 0.5
+# The evidence of translucency is the shift between the top shape's colour
+# over the backdrop and over the shape beneath, (1 − α)·|backdrop − X|; it must
+# be at least this many fit tolerances. Any colour between two others is their
+# blend at some alpha, and a flat tile 4 levels from its neighbours was read as
+# the next tile at 96 % over it: a shift of 7 (4 levels in each channel), two
+# tolerances and change, inside the noise of a fill; the venn's 90 % discs
+# over saturated colours shift by 15 and more.
+OVERLAP_SHIFT = 3.0
 
 
 @dataclass
@@ -58,7 +66,7 @@ def _simpler(union: np.ndarray, part: np.ndarray, curve_params: CurveParams) -> 
     return _solidity(union) > _solidity(part) + 0.06
 
 
-def _blend(t_vis: np.ndarray, c_vis: np.ndarray, x_vis: np.ndarray, bg: np.ndarray | None) -> tuple[float, np.ndarray, float] | None:
+def _blend(t_vis: np.ndarray, c_vis: np.ndarray, x_vis: np.ndarray, bg: np.ndarray | None, tol: float) -> tuple[float, np.ndarray, float] | None:
     """Solve C = α·Tc + (1−α)·X for (α, Tc, rms residual); colours rgba 0–255."""
     if t_vis[3] < 250:  # semi-transparent over transparency: alpha is the opacity
         alpha = float(t_vis[3] / 255.0)
@@ -77,6 +85,8 @@ def _blend(t_vis: np.ndarray, c_vis: np.ndarray, x_vis: np.ndarray, bg: np.ndarr
         alpha = 1.0 - one_minus
         if not 0.12 <= alpha <= 0.97:
             return None
+        if one_minus * float(np.sqrt(den)) < OVERLAP_SHIFT * tol:
+            return None  # too nearly opaque for the blend to be evidence of anything
         tc = (t_vis[:3] - one_minus * bg[:3]) / alpha
         if (tc < -12).any() or (tc > 267).any():
             return None
@@ -127,7 +137,7 @@ def decompose_overlaps(
             for x in cand:
                 if t == x:
                     continue
-                res = _blend(fills[t].rgba, fills[c].rgba, fills[x].rgba, bg_colour)
+                res = _blend(fills[t].rgba, fills[c].rgba, fills[x].rgba, bg_colour, tol)
                 if res is None or res[2] > tol:
                     continue
                 if best is None or res[2] < best[0]:

@@ -35,6 +35,21 @@ def test_two_translucent_squares_are_decomposed():
     assert dec.above == [(2, 3)]
 
 
+def test_tiles_a_few_levels_apart_are_not_translucent_overlaps():
+    """Three flat tiles in a row, 4 ΔE apart: the middle one lies between its
+    neighbours' colours, and any colour between two others is their blend at
+    some alpha. Read as an overlap it was drawn translucent at alpha 0.5 over
+    a neighbour (flat/low-contrast-512). The two parents of a blend must differ
+    by `OVERLAP_CONTRAST` for alpha to mean anything."""
+    lab = np.ones((60, 120), np.int32)
+    lab[10:50, 10:40] = 2
+    lab[10:50, 40:80] = 3
+    lab[10:50, 80:110] = 4
+    fills = {1: _solid(250, 250, 250), 2: _solid(154, 154, 154), 3: _solid(158, 158, 158), 4: _solid(162, 162, 162)}
+    dec = decompose_overlaps(lab, fills, {i: True for i in fills}, CurveParams(), tol=3.0)
+    assert not dec.removed and not dec.fills, (dec.removed, dec.fills)
+
+
 def test_a_region_bounded_by_other_shapes_is_not_an_overlap():
     """What the JPEG Claus's face was taken for: a big region whose colour
     happens to solve as 20 % of a small white eye over a 22-pixel rim sliver.

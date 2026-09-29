@@ -72,7 +72,11 @@ fn dist3(a: &[f64], b: &[f64]) -> f64 {
 }
 
 /// Solve `C = α·Tc + (1−α)·X` for (α, Tc, rms residual); colours rgba 0–255.
-fn blend(t_vis: &[f64; 4], c_vis: &[f64; 4], x_vis: &[f64; 4], bg: Option<&[f64; 4]>) -> Option<(f64, [f64; 3], f64)> {
+/// The shift translucency makes, (1 − α)·|backdrop − X|, must be this many fit
+/// tolerances (`overlaps.OVERLAP_SHIFT`).
+pub const OVERLAP_SHIFT: f64 = 3.0;
+
+fn blend(t_vis: &[f64; 4], c_vis: &[f64; 4], x_vis: &[f64; 4], bg: Option<&[f64; 4]>, tol: f64) -> Option<(f64, [f64; 3], f64)> {
     let (alpha, tc): (f64, [f64; 3]);
     if t_vis[3] < 250.0 {
         // semi-transparent over transparency: alpha is the opacity
@@ -94,6 +98,9 @@ fn blend(t_vis: &[f64; 4], c_vis: &[f64; 4], x_vis: &[f64; 4], bg: Option<&[f64;
         let a = 1.0 - one_minus;
         if !(0.12..=0.97).contains(&a) {
             return None;
+        }
+        if one_minus * den.sqrt() < OVERLAP_SHIFT * tol {
+            return None; // too nearly opaque for the blend to be evidence of anything
         }
         let mut t = [0.0f64; 3];
         for i in 0..3 {
@@ -196,7 +203,7 @@ pub fn decompose_overlaps(
                 if t == x {
                     continue;
                 }
-                let Some(res) = blend(&solid_rgba(*t).unwrap(), &solid_rgba(*c).unwrap(), &solid_rgba(*x).unwrap(), bg_colour.as_ref())
+                let Some(res) = blend(&solid_rgba(*t).unwrap(), &solid_rgba(*c).unwrap(), &solid_rgba(*x).unwrap(), bg_colour.as_ref(), tol)
                 else {
                     continue;
                 };

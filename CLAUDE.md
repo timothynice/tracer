@@ -203,6 +203,16 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   meets a neighbour becomes a cusp; a Line-curve-Line corner elsewhere is one
   circular arc of the mark's radius (`topology._rectify`, `_fillets`;
   `vexel-rs/src/rects.rs`, `topology/rectify.rs`; `diffcheck rects`).
+- A radial fill may be SVG's focal radial (`fills.Radial.fx/fy`,
+  `focal_param`): a lit sphere's highlight sits off its centre, and the
+  concentric fit put its brightest ring in the wrong place. The focal search
+  runs only when the concentric radial leaves `FOCAL_MIN_RMS` tolerances of
+  error over `FOCAL_MIN_PIXELS`, keeps the focal point within `FOCAL_REACH`
+  of the radius (where the parameter is well conditioned) and must win by
+  `FOCAL_MARGIN`. Anything that reads a radial's geometry has to honour the
+  focal point: a level line is the circle of radius t·r centred at
+  F + t·(C − F) (`posterize`), the Rust renderer's start point is F, and the
+  diffcheck wire carries `[cx, cy, r, fx, fy]` with F = C when concentric.
 - `gradients=False` posterises the fitted model, not the pixels
   (`posterize.posterize_fills`): each ramp is cut at equal-ΔE levels of its own
   parameter, band edges are placed on the level line exactly, and bands are
@@ -222,6 +232,19 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   two halves with a seam through the highlight's ends. And a region is
   an overlap of two shapes only if at least half its outline runs along them
   (`overlaps`): a face read as a translucent eye over a sliver was dropped.
+  And a blend is evidence of translucency only when the shift it makes,
+  (1 − α)·|backdrop − X|, is `OVERLAP_SHIFT` fit tolerances: a flat tile four
+  levels from its neighbours was drawn as the next tile at 96 % over it.
+- A crisp edge is a real boundary however small its step. The partition's
+  ridge threshold and junction test drop to `G_LOW_MIN`/`G_SEED_MIN` where the
+  area is clean outright (the median discontinuity round the pixel, ridges
+  left out, under `CLEAN_FLOOR`; `partition.noise_floor`), and the merge
+  refuses a gradient across a boundary that stands `EDGE_PROMINENCE` times
+  above both regions' interior discontinuity, is at least `EDGE_FLOOR`, and
+  is a ridge at more than half its pairs, merging only colours within
+  `EDGE_SAME` as solids (`merge.ridge_pairs`, `interior_floor`). Sixteen tiles
+  2.9 ΔE apart came out as two shapes before. JPEG's ringing keeps every old
+  threshold: its floor is never clean and its interiors are never flat.
 - A stretch that is lines-first at `KIND_TOL` (0.4 px) stays lines at any
   looser `curve_tolerance`: a loose tolerance buys fewer curve segments, never
   a straight edge drawn as a bow.

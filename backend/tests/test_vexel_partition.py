@@ -149,6 +149,25 @@ def test_a_glow_pinched_by_jpeg_noise_stays_one_region():
     assert np.bincount(inside).max() > 0.99 * inside.size
 
 
+TILES = Path(__file__).resolve().parents[1] / "bench" / "corpus" / "synthetic" / "flat" / "low-contrast-512.png"
+
+
+@pytest.mark.skipif(not TILES.exists(), reason="bench corpus not present")
+def test_subtle_crisp_tiles_in_a_clean_render_are_separate_seeds():
+    """Sixteen flat tiles 2.9 ΔE apart. Their ridge (1.6) sat at `g_low` and
+    NMS drops it where two edges cross, so five seeds leaked across the
+    junctions. Where the area is clean — the median discontinuity round the
+    pixel, ridges left out, under a tenth of a level — the ridge threshold
+    and the junction test drop to `G_LOW_MIN` and `G_SEED_MIN`; JPEG's
+    ringing keeps `g_low` (`test_a_low_contrast_disc_cut_by_a_strong_edge_survives_jpeg`)."""
+    a = np.asarray(Image.open(TILES).convert("RGBA"))
+    p = prepare(a)
+    labels = initial_labels(discontinuity(p.features), p.features, min_region=12, detail=6.0)
+    assert labels.max() >= 14, labels.max()
+    centres = labels[64::128, 64::128]  # one sample per tile
+    assert len(np.unique(centres)) >= 14, centres
+
+
 NAIL = Path(__file__).resolve().parents[1] / "bench" / "heldout" / "fluent-color" / "nail-polish-512.png"
 
 

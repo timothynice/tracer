@@ -128,8 +128,9 @@ impl Levels {
                     }
                 }
             }
-            Fill::Radial { cx, cy, r, .. } => {
-                let centre = [*cx, *cy];
+            Fill::Radial { cx, cy, r, fx, fy, .. } => {
+                // a focal radial's level line is centred at F + level·(C − F)
+                let centre = [fx + level * (cx - fx), fy + level * (cy - fy)];
                 let radius = level * r;
                 let off = [out[0] - centre[0], out[1] - centre[1]];
                 match along {
