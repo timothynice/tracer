@@ -214,7 +214,18 @@ def split_rim(labels: np.ndarray, rim: np.ndarray, cands: list[int], xs: np.ndar
     return out
 
 
-def reach_the_edge(labels: np.ndarray, before: np.ndarray, rescued: list[int], xs: np.ndarray, ys: np.ndarray,
+def _contacts(labels: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """How many four-neighbour pairs each label has with the pixels of `m`."""
+    k = int(labels.max()) + 1
+    out = np.zeros(k, dtype=np.int64)
+    for la, lb, ma, mb in ((labels[:, :-1], labels[:, 1:], m[:, :-1], m[:, 1:]),
+                           (labels[:-1, :], labels[1:, :], m[:-1, :], m[1:, :])):
+        out += np.bincount(lb[ma & ~mb], minlength=k)
+        out += np.bincount(la[mb & ~ma], minlength=k)
+    return out
+
+
+def reach_the_edge(labels: np.ndarray, rescued: np.ndarray, xs: np.ndarray, ys: np.ndarray,
                    rgba255: np.ndarray, fill_at) -> np.ndarray:
     """A rescued region reaches the outline of the region it was carved from.
 
@@ -227,35 +238,53 @@ def reach_the_edge(labels: np.ndarray, before: np.ndarray, rescued: list[int], x
     and the outline drawn as dozens of three-vertex arcs (the chin of fluent's
     heart-eyes, the shadow band of over-gradient). Here every band pixel of
     the parent within two pixels of a rescued region, on the outline's side of
-    it — nearer the parent's old boundary than the rescued pixels beside it
-    are (exact distances; the least over the rescued pixels within two, so
-    nothing rests on which of two equidistant pixels is found first) — goes to
-    whichever of the two is nearer, the pixel's own colour breaking a tie
-    (`split_rim`). The band between a rescued ring and the parent's body is
-    not on the outline's side and stays: the 1.5 px ring of thin-mark-128 is
-    a stroke only at its own width. And the outline reached is that of a
-    neighbour at least as large as the rescued region: the strip that does
-    the harm runs along a long outline (a canvas, a backdrop); the two pixels
-    of ring between a rescued ring fragment and a ten-pixel dot on the ring
-    are the stroke stage's to bridge, and joined to the dot the ring could no
-    longer be stroked. A thin rescued region (`strokes.is_thin`) is left as it
-    is: it is drawn as a stroke along its middle, which no strip disturbs, and
-    one reddish pixel of band on the flank of that ring was a wart its medial
-    axis could not carry. Rescued regions are visited in order of their label.
+    it — nearer the parent's boundary (the map with the region merged back
+    into its parent) than the rescued pixels beside it are (exact distances;
+    the least over the rescued pixels within two, so nothing rests on which of
+    two equidistant pixels is found first) — goes to whichever of the two is
+    nearer, the pixel's own colour breaking a tie (`split_rim`). The band
+    between a rescued ring and the parent's body is not on the outline's side
+    and stays: the 1.5 px ring of thin-mark-128 is a stroke only at its own
+    width. The outline reached is that of a neighbour at least as large as the
+    rescued region: the strip that does the harm runs along a long outline (a
+    canvas, a backdrop); the two pixels of ring between a rescued ring fragment
+    and a ten-pixel dot on the ring are the stroke stage's to bridge, and
+    joined to the dot the ring could no longer be stroked. A thin rescued
+    region (`strokes.is_thin`) is left as it is: it is drawn as a stroke along
+    its middle, which no strip disturbs, and one reddish pixel of band on the
+    flank of that ring was a wart its medial axis could not carry.
+
+    `rescued` marks the pixels the rescue promoted; a region most of whose
+    pixels are among them is a rescued region, whatever it has been renumbered
+    to since. This runs once the shadow stage has claimed its bands: a drop
+    shadow's band beside its caster is the caster's to explain as a filter,
+    and given the backdrop's rim along the caster it no longer was. Its parent
+    is the label it touches most (the lower on a tie). Regions are visited in
+    order of their label.
     """
-    band = boundary_band(before)
-    sizes = np.bincount(before.ravel())
+    counts = np.bincount(labels.ravel())
+    inside = np.bincount(labels.ravel(), weights=rescued.ravel().astype(np.float64), minlength=counts.size)
     dy, dx = np.mgrid[-2:3, -2:3]
     diamond = np.abs(dy) + np.abs(dx) <= 2  # the pixels within two steps, as the cross dilation reaches
-    for r in rescued:
-        m = labels == r
-        if not m.any() or is_thin(m):
+    for r in range(1, counts.size):
+        if counts[r] == 0 or 2.0 * inside[r] <= counts[r]:
             continue
-        parent = int(np.argmax(np.bincount(before[m])))
-        big = (before != parent) & (sizes[before] >= int(m.sum()))
+        m = labels == r
+        if is_thin(m):
+            continue
+        contacts = _contacts(labels, m)
+        contacts[0] = 0
+        contacts[r] = 0
+        if not contacts.any():
+            continue
+        parent = int(np.argmax(contacts))
+        merged = np.where(m, parent, labels)
+        sizes = np.bincount(merged.ravel())
+        big = (merged != parent) & (merged != 0) & (sizes[merged] >= int(m.sum()))
         if not big.any():
             continue
-        to_edge = ndimage.distance_transform_edt(~big)  # to the parent's old boundary with a large neighbour
+        band = boundary_band(merged)
+        to_edge = ndimage.distance_transform_edt(~big)  # to the parent's boundary with a large neighbour
         near = ndimage.binary_dilation(m, _CROSS, iterations=2)
         beside = ndimage.grey_erosion(np.where(m, to_edge, np.inf), footprint=diamond, mode="constant", cval=np.inf)
         strip = band & near & (labels == parent) & (to_edge < beside)
@@ -459,19 +488,14 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # part of a feature, and does not count towards promoting one.
     explained = edge_mix(labels, rgba255, pred, prep.alpha, residual > 1.0)
     dump.labels("labels_clear", labels)
-    before_rescue = labels
     labels, rescued = rescue_features(labels, residual, threshold=1.0, min_region=p.min_region, explained=explained, core=core_map)
+    rescued_pixels = np.isin(labels, rescued) if rescued else None
+    dump.labels("labels_rescue", labels)
     if rescued:
         ids = [int(i) for i in np.unique(labels) if i != 0]
         fills.clear()
         visible.clear()
         fit_regions(ids)
-        # A rescued band beside its parent's outline takes the parent's edge
-        # band there, so it reaches the outline (the fills are fitted on the
-        # cores, which the band is not part of, so they stand).
-        labels = reach_the_edge(labels, before_rescue, rescued, xs, ys, rgba255,
-                                lambda lab, qx, qy: fills[lab].evaluate(qx, qy))
-    dump.labels("labels_rescue", labels)
 
     # Join gradient fragments (glows, off-centre radials) that one real fill explains.
     labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
@@ -555,6 +579,17 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 m = labels == lab
                 w, core = interior(m)
                 fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w, core=core)
+
+    # A rescued band beside its parent's outline takes the parent's edge band
+    # there, so it reaches the outline (the fills are fitted on the cores,
+    # which the band is not part of, so they stand). After the shadow stage:
+    # a band a filter explains has joined its ground.
+    if p.gradients and rescued_pixels is not None:
+        reached = reach_the_edge(labels, rescued_pixels, xs, ys, rgba255, fill_at)
+        if reached is not labels and bool((reached != labels).any()):
+            labels = reached
+            enc = enclosure(labels)
+            order = paint_order(enc)
 
     # Thin regions are drawn lines. A single line often arrives as several
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions

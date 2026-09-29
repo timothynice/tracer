@@ -31,7 +31,7 @@ def _scene():
 
 def test_a_rescued_band_takes_its_parents_edge_band_up_to_the_outline():
     labels, before, xs, ys, rgba = _scene()
-    out = reach_the_edge(labels, before, [3], xs, ys, rgba, _fill_at)
+    out = reach_the_edge(labels, labels == 3, xs, ys, rgba, _fill_at)
     assert (out[8:10, 6:18] == 3).all(), out[8:10]
     # the band now touches the canvas
     assert ((out[8] == 3) & (out[7] == 1)).any()
@@ -43,14 +43,14 @@ def test_a_rescued_band_takes_its_parents_edge_band_up_to_the_outline():
 def test_the_parent_keeps_a_band_pixel_nearer_to_it():
     """Two pixels from the rescued region but one from the parent's body: stays."""
     labels, before, xs, ys, rgba = _scene()
-    out = reach_the_edge(labels, before, [3], xs, ys, rgba, _fill_at)
+    out = reach_the_edge(labels, labels == 3, xs, ys, rgba, _fill_at)
     assert out[8, 3] == 2 and out[8, 20] == 2, (out[8, 3], out[8, 20])
 
 
 def test_only_the_band_within_two_pixels_of_the_rescued_region_is_asked():
     labels, before, xs, ys, rgba = _scene()
     labels[8:10, 4:20] = 3                             # already at the outline
-    out = reach_the_edge(labels, before, [3], xs, ys, rgba, _fill_at)
+    out = reach_the_edge(labels, labels == 3, xs, ys, rgba, _fill_at)
     assert (out[8:10, :2] == 2).all() and (out[8:10, 22:] == 2).all()
     assert (out[10:] == labels[10:]).all() and (out[:8] == 1).all()
 
@@ -62,7 +62,7 @@ def test_a_thin_rescued_region_is_left_to_the_stroke_stage():
     labels[10:16, 4:20] = 2
     labels[10:11, 4:20] = 3                            # a one-pixel line, two short of the canvas
     rgba[8:11, 4:20] = INK
-    out = reach_the_edge(labels, before, [3], xs, ys, rgba, _fill_at)
+    out = reach_the_edge(labels, labels == 3, xs, ys, rgba, _fill_at)
     assert (out == labels).all()
 
 
@@ -79,5 +79,5 @@ def test_a_small_neighbour_on_the_way_is_not_an_outline_to_reach():
     xs, ys = xs.astype(np.float64) + 0.5, ys.astype(np.float64) + 0.5
     rgba = np.tile(GREY, (h, w, 1))
     rgba[10:13, 0:14] = INK
-    out = reach_the_edge(labels, before, [3], xs, ys, rgba, _fill_at)
+    out = reach_the_edge(labels, labels == 3, xs, ys, rgba, _fill_at)
     assert (out == labels).all()

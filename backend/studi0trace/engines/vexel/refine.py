@@ -73,10 +73,17 @@ def refine_merge(
     # somewhere along it, which the union fit is the judge of (glow-512-ds
     # under Detailed: 2.44 against a limit of 2.1, the union radial fitting
     # better than either part, and the core drawn as a second shape).
+    # A pair let through only because its boundary is a ramp is held to a
+    # higher bar: one fill has to explain the union at least as well as two
+    # explain the parts, with no tolerance to spare. Within the tolerance
+    # alone, a drop shadow's band joined its flat backdrop as a radial that
+    # was "good enough", and there was no band left for the shadow stage to
+    # read as a filter (tests/test_vexel_shadows.py, the card on a backdrop);
+    # the glow's union is better than either of its parts.
     edges = adjacency(labels, grad)
     ridges = boundary_ridges(labels, grad)
     pairs = [
-        (cnt, a, b) for (a, b), (cnt, gsum) in edges.items()
+        (cnt, a, b, gsum / cnt > edge_limit) for (a, b), (cnt, gsum) in edges.items()
         if (a in smooth or b in smooth) and cnt > 0 and (gsum / cnt <= edge_limit or ridges[(a, b)] <= 0.5)
     ]
     pairs.sort(key=lambda t: -t[0])  # longest shared boundary first
@@ -90,7 +97,7 @@ def refine_merge(
             i = alias[i]
         return i
 
-    for _, a, b in pairs:
+    for _, a, b, steep in pairs:
         if attempts >= max_attempts:
             break
         a, b = root(a), root(b)
@@ -101,7 +108,8 @@ def refine_merge(
         f_union, r_union = fit(union)
         if isinstance(f_union, Solid) and not (isinstance(fills[a], Solid) and isinstance(fills[b], Solid)):
             continue  # a gradient collapsing to a solid is not "explained"
-        if r_union <= max(params.tol, 1.15 * max(rms[a], rms[b])):
+        bar = max(rms[a], rms[b]) if steep else max(params.tol, 1.15 * max(rms[a], rms[b]))
+        if r_union <= bar:
             labels = np.where(labels == b, a, labels)
             fills[a] = f_union
             rms[a] = r_union
