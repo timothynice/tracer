@@ -114,7 +114,11 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   to one direction (axis within `snap_axis_deg`, exactly perpendicular to a
   heavier cluster within a degree). Lines turn about their node end or their
   midpoint; nodes never move, so rings still close. A line with a node at both
-  ends is left alone.
+  ends is left alone. No snap — this stage's, `_snap_axis`'s in the arc fit or
+  `snap_axis_lines`'s on a closed contour — may move a line's end further
+  than `SNAP_END_MOVE` (0.15 px, what the placement knows an edge to): a
+  side drawn 1.3° off vertical is inside the snap angle, and turning a 330 px
+  one onto the axis took 3.6 px off each end of a glyph's bar.
 - Junction nodes are placed where the incident arcs' approach lines cross, at
   any angle, and held on the canvas edge; the vertices inside a node's approach
   window are never fitted (`NODE_TRIM`, `TIP_TRIM`, capped at `TRIM_SHARE` of
@@ -134,8 +138,22 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   tiebreaker; `core/skeleton.rs` sorts by the same key. Never break the
   tie by raster index: on a two-pixel line that thins the same side first
   everywhere and puts the centreline half a pixel off, enough for
-  `stroke_fidelity` to fail a ring the random order passes. `tools/diffcheck.py
-  strokes` compares the two per thin group.
+  `stroke_fidelity` to fail a ring the random order passes. The skeleton is
+  only the start: `_refine_centreline` moves every vertex along its normal to
+  the bilinear coverage centroid across the stroke (±(w/2+1) px at 0.25 px,
+  two passes), and `stroke_fidelity` predicts each pixel's coverage from its
+  exact distance to that polyline — never from a rasterised centreline, which
+  scored a line half a pixel off the lattice at the 0.2 gate whichever way
+  the tie-break fell. `tools/diffcheck.py strokes` compares the two per thin
+  group.
+- A pixel's stored colour is believed only from 8-bit alpha 32 up (straight
+  alpha quantises it to ±128/alpha levels; a resampled asset rings every edge
+  with alpha 1–15 noise): `prepare.inpaint_transparent` gives every pixel
+  below `INPAINT_ALPHA` the colour of the nearest pixel at or above it, and
+  `upsample2x` inpaints the same way before it resamples, since its channels
+  are straight and the black under transparency would otherwise be mixed into
+  every edge at 2×. Inpainted from noise, the transparent field carried seams
+  the partition read as edges: a serrated triangle, a ring in 39 fragments.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
   the fills to a colour level; where the two are allowed to differ, the
