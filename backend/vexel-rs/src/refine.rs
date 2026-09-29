@@ -111,16 +111,18 @@ pub fn refine_merge(
     // No join across a visible edge: a boundary steeper than `edge_limit` that
     // is a ridge of the discontinuity at more than half of its pairs. A glow's
     // own slope is as steep beside the boundary as on it: see the Python.
+    // A pair let through only because its boundary is a ramp (steep, not a
+    // ridge) is held to a higher bar below: see the Python.
     let edges = adjacency(&labels_out, Some(grad));
     let ridges = boundary_ridges(&labels_out, grad);
-    let mut pairs: Vec<(f64, i32, i32)> = edges
+    let mut pairs: Vec<(f64, i32, i32, bool)> = edges
         .iter()
         .filter(|((a, b), (cnt, gsum))| {
             (smooth.contains(a) || smooth.contains(b))
                 && *cnt > 0.0
                 && (gsum / cnt <= edge_limit || ridges.get(&(*a, *b)).copied().unwrap_or(1.0) <= 0.5)
         })
-        .map(|((a, b), (cnt, _))| (*cnt, *a, *b))
+        .map(|((a, b), (cnt, gsum))| (*cnt, *a, *b, gsum / cnt > edge_limit))
         .collect();
     // longest shared boundary first; the key is negated in the Python, and the
     // tie order is the dict's — sorting on the labels too keeps this stable
@@ -136,7 +138,7 @@ pub fn refine_merge(
         i
     };
 
-    for (_, a0, b0) in pairs {
+    for (_, a0, b0, steep) in pairs {
         if attempts >= max_attempts {
             break;
         }
@@ -156,7 +158,10 @@ pub fn refine_merge(
         if matches!(f_union, Fill::Solid { .. }) && !(a_solid && b_solid) {
             continue; // a gradient collapsing to a solid is not "explained"
         }
-        let bar = params.tol.max(1.15 * rms[&a].max(rms[&b]));
+        // across a steep ramp one fill must explain the union at least as
+        // well as two explain the parts, no tolerance to spare: see the Python
+        let worst = rms[&a].max(rms[&b]);
+        let bar = if steep { worst } else { params.tol.max(1.15 * worst) };
         if r_union <= bar {
             for v in labels_out.data.iter_mut() {
                 if *v == b {

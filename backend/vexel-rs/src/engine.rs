@@ -157,58 +157,94 @@ fn split_rim(
     }
 }
 
+/// How many four-neighbour pairs each label has with the pixels of `m`.
+fn contacts(l: &Labels, m: &Mask) -> HashMap<i32, usize> {
+    let (h, w) = (l.h, l.w);
+    let mut out: HashMap<i32, usize> = HashMap::new();
+    for r in 0..h {
+        for c in 0..w {
+            let i = r * w + c;
+            if c + 1 < w && m.data[i] != m.data[i + 1] {
+                let other = if m.data[i] { l.data[i + 1] } else { l.data[i] };
+                *out.entry(other).or_insert(0) += 1;
+            }
+            if r + 1 < h && m.data[i] != m.data[i + w] {
+                let other = if m.data[i] { l.data[i + w] } else { l.data[i] };
+                *out.entry(other).or_insert(0) += 1;
+            }
+        }
+    }
+    out
+}
+
 /// A rescued region reaches the outline of the region it was carved from: every
-/// edge-band pixel of the parent (`boundary_band` of the map before the rescue)
-/// within two pixels of a rescued region goes to whichever of the two is
-/// nearer, the pixel's own colour breaking a tie (`split_rim`). Rescued regions
-/// are visited in order of their label. `engine.reach_the_edge` in the Python.
+/// edge-band pixel of the parent (`boundary_band` of the map with the region
+/// merged back into its parent) within two pixels of it, on the outline's side
+/// (nearer the parent's boundary with a neighbour at least as large as the
+/// region than the rescued pixels within two are; exact distances, the least
+/// over those pixels) goes to whichever of the two is nearer, the pixel's own
+/// colour breaking a tie (`split_rim`). A thin region is left to the stroke
+/// stage. `rescued` marks the pixels the rescue promoted: a region most of
+/// whose pixels are among them is a rescued region, whatever it has been
+/// renumbered to since; its parent is the label it touches most (the lower on
+/// a tie). Regions in order of their label. `engine.reach_the_edge` in the
+/// Python, which says why.
 #[allow(clippy::too_many_arguments)]
 fn reach_the_edge(
     l: &mut Labels,
-    before: &Labels,
-    rescued: &[i32],
+    rescued: &Mask,
     xs: &Grid<f64>,
     ys: &Grid<f64>,
     rgba255: &[[f64; 4]],
     fill_at: &dyn Fn(i32, &[f64], &[f64]) -> Vec<[f64; 4]>,
-) {
-    let band = boundary_band(before);
-    let mut sizes: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
-    for v in &before.data {
-        *sizes.entry(*v).or_insert(0) += 1;
+) -> bool {
+    let (h, w) = (l.h, l.w);
+    let mut counts: HashMap<i32, (usize, usize)> = HashMap::new(); // label -> (pixels, rescued pixels)
+    for i in 0..l.len() {
+        let e = counts.entry(l.data[i]).or_insert((0, 0));
+        e.0 += 1;
+        if rescued.data[i] {
+            e.1 += 1;
+        }
     }
-    let mut rescued: Vec<i32> = rescued.to_vec();
-    rescued.sort_unstable();
-    for r in rescued {
+    let mut targets: Vec<i32> = counts.iter().filter(|(k, (n, r))| **k > 0 && 2 * r > *n).map(|(k, _)| *k).collect();
+    targets.sort_unstable();
+    let mut moved = false;
+    for r in targets {
         let m = labels::mask_of(l, r);
         let n_r = m.data.iter().filter(|v| **v).count();
-        // a thin region is stroked along its middle and left as it is: see the Python
         if n_r == 0 || is_thin(&m) {
             continue;
         }
-        // the label the region was carved from: the commonest under it, the
-        // lower on a tie (numpy's argmax takes the first)
-        let mut count: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
-        for i in 0..l.len() {
-            if m.data[i] {
-                *count.entry(before.data[i]).or_insert(0) += 1;
+        let mut touch = contacts(l, &m);
+        touch.remove(&0);
+        touch.remove(&r);
+        let mut parent: Option<(i32, usize)> = None;
+        let mut keys: Vec<i32> = touch.keys().copied().collect();
+        keys.sort_unstable();
+        for k in keys {
+            let n = touch[&k];
+            if parent.map_or(true, |(_, best)| n > best) {
+                parent = Some((k, n));
             }
         }
-        let parent = count.iter().fold((0i32, 0usize), |best, (k, n)| if *n > best.1 { (*k, *n) } else { best }).0;
-        // the parent's old boundary with a neighbour at least as large as the
-        // rescued region: the outline side is nearer it than the rescued
-        // pixels beside are (the least over those within two steps)
+        let Some((parent, _)) = parent else { continue };
+        let merged = Grid { h, w, data: (0..l.len()).map(|i| if m.data[i] { parent } else { l.data[i] }).collect() };
+        let mut sizes: HashMap<i32, usize> = HashMap::new();
+        for v in &merged.data {
+            *sizes.entry(*v).or_insert(0) += 1;
+        }
         let big = Grid {
-            h: l.h,
-            w: l.w,
-            data: (0..l.len()).map(|i| before.data[i] != parent && sizes[&before.data[i]] >= n_r).collect(),
+            h,
+            w,
+            data: (0..l.len()).map(|i| merged.data[i] != parent && merged.data[i] != 0 && sizes[&merged.data[i]] >= n_r).collect(),
         };
         if !big.data.iter().any(|v| *v) {
             continue;
         }
+        let band = boundary_band(&merged);
         let to_edge = crate::core::edt::edt_to_true(&big);
         let near = crate::core::morphology::dilate_cross_n(&m, 2);
-        let (h, w) = (l.h, l.w);
         let mut beside = vec![f64::INFINITY; l.len()];
         for i in 0..l.len() {
             if !m.data[i] {
@@ -245,7 +281,9 @@ fn reach_the_edge(
             }
         }
         split_rim(l, &strip, &[parent, r], xs, ys, rgba255, fill_at);
+        moved = true;
     }
+    moved
 }
 
 struct FitOut {
@@ -489,21 +527,23 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     let explained = crate::rescue::edge_mix(&l, &rgba255, &pred, &prep.alpha, &over);
     t.lap("residual");
     crate::dump::labels("labels_clear", &l);
-    let before_rescue = l.clone();
     let (rescued_labels, rescued) = rescue_features(&l, &residual, 1.0, p.min_region, Some(&explained), Some(&core_map));
     l = rescued_labels;
+    // the pixels the rescue promoted, for `reach_the_edge` after the shadow stage
+    let rescued_pixels: Option<Mask> = if rescued.is_empty() {
+        None
+    } else {
+        let set: HashSet<i32> = rescued.iter().copied().collect();
+        Some(Grid { h: height, w: width, data: l.data.iter().map(|v| set.contains(v)).collect() })
+    };
+    crate::dump::labels("labels_rescue", &l);
     if !rescued.is_empty() {
         index = LabelIndex::build(&l);
         ids = labels::unique_ids(&l);
         let out = fit_regions(&ids, &l, &index, &xs, &ys, &rgba255, &prep.alpha, &fit_params);
         fills = out.fills;
         visible = out.visible;
-        // A rescued band beside its parent's outline takes the parent's edge
-        // band there, so it reaches the outline: see the Python.
-        let fill_now = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> { fills[&lab].evaluate(qx, qy) };
-        reach_the_edge(&mut l, &before_rescue, &rescued, &xs, &ys, &rgba255, &fill_now);
     }
-    crate::dump::labels("labels_rescue", &l);
 
     t.lap("rescue + refit");
     // Join gradient fragments (glows, off-centre radials) that one real fill explains.
@@ -633,6 +673,26 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     }
 
     t.lap("shadows");
+    // A rescued band beside its parent's outline takes the parent's edge band
+    // there, so it reaches the outline; after the shadow stage, since a band a
+    // filter explains has joined its ground. See the Python.
+    if p.gradients {
+        if let Some(rp) = rescued_pixels.as_ref() {
+            let fill_now = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+                match levels.model(lab).or_else(|| fills.get(&lab)) {
+                    Some(f) => f.evaluate(qx, qy),
+                    None => vec![[0.0; 4]; qx.len()],
+                }
+            };
+            let moved = reach_the_edge(&mut l, rp, &xs, &ys, &rgba255, &fill_now);
+            if moved {
+                index = LabelIndex::build(&l);
+                enc = enclosure(&l);
+                order = paint_order(&enc);
+            }
+        }
+    }
+    t.lap("reach");
     // Thin regions are drawn lines. A single line often arrives as several
     // regions (split at junctions, broken by anti-aliasing gaps), so thin
     // regions that touch and share an ink colour are grouped and stroked together.

@@ -137,3 +137,17 @@ Changes (Python and Rust, one commit each)
 
 Tests: tests/test_vexel_soft_edges.py (3), test_vexel_refine_merge.py (3), test_vexel_reach_edge.py (5).
 CLAUDE.md: one bullet (soft edges; the ridge veto; reach_the_edge).
+
+## 2026-09-29, later: two more regressions found by the full suites, both fixed (both engines)
+- tests/test_vexel_shadows.py::test_a_shadow_on_a_backdrop_leaves_its_caster_one_ring failed on both
+  backends; the base commit passes it. Two independent causes (pairwise isolation,
+  $SCRATCH/q3s/isolate_shadow2.py): (a) the ridge-relaxed refine join ate the shadow band into the
+  backdrop as a radial "within tol" -> a pair let through only because its boundary is a ramp must now
+  be explained at least as well as its parts (r_union <= max(rms_a, rms_b), no tolerance slack; the
+  glow still joins: 1.81 vs 2.27/2.35); (b) reach_the_edge handed the band the backdrop's rim along
+  the card and the shadow detector refused it -> reach_the_edge now runs after the shadow stage (a
+  band a filter explains has joined its ground), on the pixels the rescue promoted (a region most of
+  whose pixels are among them; parent = the label it touches most), with the band taken from the map
+  with the region merged into its parent; enc/order (Rust: index too) rebuilt when pixels moved.
+- Python: 11 unit tests pass; the card's shadow is a filter again; thin-mark's ring is stroked.
+- Rust twin written and `cargo check`ed; pipeline restarted (rebuild, diffcheck, bench, held-out).
