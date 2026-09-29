@@ -31,9 +31,36 @@ DUMPDIR LABEL` prints a dumped region's alpha distribution and connectivity).
 4. Other items: man-feeding-baby-512 has 28 px of alpha ≤ 8 — its 19 slivers are a different
    mechanism (panel logs in `$SCRATCH/q3/wp2/panel-*.log`). cherries-512(-ds) have a ~1.5 k px halo.
 
-## Plan
-- Fix A at the source in `prepare` (both engines): inpaint colour under alpha too low for the colour
-  to mean anything (threshold from a survey of colour noise vs alpha level over corpus + heldout).
-- Fix C generically: before topology, a four-connected fragment of a label below `min_region`
-  enclosed by other regions joins its surroundings (both engines).
-- Tests first (tests/test_vexel_*.py), diffcheck `labels0 wedges arcs under`, bench run + compare.
+5. **man-feeding-baby-512 (Auto = detailed, 19 slivers) and cherries-512-ds (Auto = logo, 14
+   slivers) are the rescue-thread mechanism**: a band rescued along the host's edge with a third
+   region starts 2 px in (`boundary_band` excludes candidates) and grows 1 px back, leaving a 1-px
+   thread of the host between the feature and the third region; on a diagonal it is 8-connected
+   only and topology makes a sliver per pixel (`aaabccccbb` in the baby's labels_to_topology at
+   x148-172 y58-88; `cccccccbaa` in the cherries at x203-250 y112-158).
+6. **Fragment survey** (`$SCRATCH/q3/wp2/fragsurvey.py`, Rust, 4 Auto presets × 224 images =
+   896 traces, `frags-before.log`): four-connected pieces of a label below min_region: 0 at
+   labels_merge and labels_clear, 11 376 at labels_rescue, 8 240 surviving to labels_to_topology in
+   203 of 896 traces. The rescue is the only fragment factory.
+7. **Alpha-noise survey** (`alphasurvey.py`, corpus + heldout): median ΔE between a pixel at alpha a
+   and its neighbours of higher alpha ≈ 45/a: 46 (a=1), 18 (2), 11 (4), 6 (8), 3.4 (16), 1.5 (32).
+   `seed_mask` needs grad < 8 to seed, so below alpha 8 a halo is all ridge and no seed.
+
+## Done (commit a3933db = Python side + tests; Rust port in progress)
+- `prepare.COLOUR_ALPHA_FLOOR = 8`: colour under alpha < 8/255 is inpainted from the nearest pixel
+  at or above it (alpha kept). Rust `prepare.rs` twin takes the file's u8 alpha.
+- `rescue.absorb_shards`: after promotion, every four-connected piece of a host label below
+  min_region joins the feature it shares the most four-edges with (ties → lower label); a shard
+  touching no feature joins its most-shared neighbour. Integer rule, no watershed (a watershed
+  flood zigzagged a thread where the two sides tie). Rust `rescue.rs` twin, same rule.
+- Tests (all failed before the fix, pass on Python now): `test_vexel_prepare.py::
+  test_colour_under_faint_alpha_is_inpainted_from_the_nearest_pixel_that_shows`,
+  `test_vexel_rescue.py::test_carving_a_feature_leaves_the_host_in_no_shards`,
+  `test_vexel_engine.py::test_a_faint_noise_halo_leaves_the_shape_whole_and_opaque` (default and
+  dense-like params; scene `conftest.noisy_halo_disc`), `test_vexel_backends.py::
+  test_both_backends_read_a_faint_noise_halo_the_same_way`.
+
+## Next
+- Rebuild Rust; pytest; `tools/diffcheck.py rgb features labels0 wedges arcs under`.
+- Sweep COLOUR_ALPHA_FLOOR ∈ {4, 8, 16} on the corpus bench if 8 leaves regressions.
+- `python -m bench run --engines vexel --no-media --workers 3` + compare vs bench/baselines/vexel.json;
+  per-item check; heldout items with vexel-auto (`panel3.py`); re-run fragsurvey after.
