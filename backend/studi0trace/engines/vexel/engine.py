@@ -226,18 +226,36 @@ def reach_the_edge(labels: np.ndarray, before: np.ndarray, rescued: list[int], x
     vertex where the strip's two boundaries touch at every row — a node each,
     and the outline drawn as dozens of three-vertex arcs (the chin of fluent's
     heart-eyes, the shadow band of over-gradient). Here every band pixel of
-    the parent within two pixels of a rescued region goes to whichever of the
-    two is nearer, the pixel's own colour breaking a tie (`split_rim`).
-    Rescued regions are visited in order of their label.
+    the parent within two pixels of a rescued region, on the outline's side of
+    it — nearer the parent's old boundary than the rescued pixels beside it
+    are (exact distances; the least over the rescued pixels within two, so
+    nothing rests on which of two equidistant pixels is found first) — goes to
+    whichever of the two is nearer, the pixel's own colour breaking a tie
+    (`split_rim`). The band between a rescued ring and the parent's body is
+    not on the outline's side and stays: the 1.5 px ring of thin-mark-128 is
+    a stroke only at its own width. And the outline reached is that of a
+    neighbour at least as large as the rescued region: the strip that does
+    the harm runs along a long outline (a canvas, a backdrop); the two pixels
+    of ring between a rescued ring fragment and a ten-pixel dot on the ring
+    are the stroke stage's to bridge, and joined to the dot the ring could no
+    longer be stroked. Rescued regions are visited in order of their label.
     """
     band = boundary_band(before)
+    sizes = np.bincount(before.ravel())
+    dy, dx = np.mgrid[-2:3, -2:3]
+    diamond = np.abs(dy) + np.abs(dx) <= 2  # the pixels within two steps, as the cross dilation reaches
     for r in rescued:
         m = labels == r
         if not m.any():
             continue
         parent = int(np.argmax(np.bincount(before[m])))
+        big = (before != parent) & (sizes[before] >= int(m.sum()))
+        if not big.any():
+            continue
+        to_edge = ndimage.distance_transform_edt(~big)  # to the parent's old boundary with a large neighbour
         near = ndimage.binary_dilation(m, _CROSS, iterations=2)
-        strip = band & near & (labels == parent)
+        beside = ndimage.grey_erosion(np.where(m, to_edge, np.inf), footprint=diamond, mode="constant", cval=np.inf)
+        strip = band & near & (labels == parent) & (to_edge < beside)
         if not strip.any():
             continue
         scratch = int(labels.max()) + 1

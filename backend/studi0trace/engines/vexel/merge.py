@@ -56,10 +56,16 @@ def boundary_ridges(labels: np.ndarray, grad: np.ndarray) -> dict[tuple[int, int
     """{(a, b): share of the boundary's pixel pairs on which the discontinuity
     is a ridge} for a < b — the partition's test of a step (`partition.
     rejoin_ramps`, `NECK_RIDGE` over `NECK_REACH`): the pair's discontinuity
-    is at least NECK_RIDGE times the higher of the two NECK_REACH pixels to
-    either side of it along its axis, held inside the image. A step is a ridge
-    of the discontinuity; a ramp is as steep beside the boundary as on it. Sums
-    run horizontal pairs then vertical, each in raster order, in float64."""
+    is at least NECK_RIDGE times that of the NECK_REACH pixels to either side
+    of it along its axis, held inside the image. A step is a ridge of the
+    discontinuity; a ramp is as steep beside the boundary as on it, on both
+    sides. `rejoin_ramps` compares with the higher of the two sides, its
+    pieces being wide (eroded three pixels each); here it is the lower: a
+    region a few pixels across has its other edge within reach, its far
+    sample is that edge, and against the higher of the two a step of 54 read
+    as a ramp (thin-mark-128's 14 px core joined its backdrop). Against the
+    quiet side a step is a ridge whatever lies beyond the other. Sums run
+    horizontal pairs then vertical, each in raster order, in float64."""
     from studi0trace.engines.vexel.partition import NECK_REACH, NECK_RIDGE
 
     g = grad.astype(np.float64)
@@ -82,7 +88,7 @@ def boundary_ridges(labels: np.ndarray, grad: np.ndarray) -> dict[tuple[int, int
         else:
             before = g[np.maximum(ys - NECK_REACH, 0), xs]
             after = g[np.minimum(ys + 1 + NECK_REACH, h - 1), xs]
-        ridges.append((centre >= NECK_RIDGE * np.maximum(before, after)).astype(np.float64))
+        ridges.append((centre >= NECK_RIDGE * np.minimum(before, after)).astype(np.float64))
     key = np.concatenate(keys)
     if key.size == 0:
         return {}

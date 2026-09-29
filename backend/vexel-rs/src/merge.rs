@@ -52,9 +52,10 @@ pub fn adjacency(labels: &Labels, grad: Option<&Grid<f64>>) -> HashMap<(i32, i32
 /// `{(a, b): share of the boundary's pixel pairs on which the discontinuity
 /// is a ridge}` for a < b: the partition's test of a step (`rejoin_ramps`,
 /// `NECK_RIDGE` over `NECK_REACH`) — the pair's discontinuity at least
-/// NECK_RIDGE times the higher of the two NECK_REACH pixels to either side
-/// along its axis, held inside the image. Horizontal pairs then vertical,
-/// raster order, as the Python sums them.
+/// NECK_RIDGE times the *lower* of the two NECK_REACH pixels to either side
+/// along its axis, held inside the image (a small region's far sample is its
+/// other edge: see the Python). Horizontal pairs then vertical, raster order,
+/// as the Python sums them.
 pub fn boundary_ridges(labels: &Labels, grad: &Grid<f64>) -> HashMap<(i32, i32), f64> {
     use crate::partition::{NECK_REACH, NECK_RIDGE};
     let (h, w) = (labels.h, labels.w);
@@ -63,7 +64,7 @@ pub fn boundary_ridges(labels: &Labels, grad: &Grid<f64>) -> HashMap<(i32, i32),
         if a != b {
             let e = acc.entry((a.min(b), a.max(b))).or_insert((0.0, 0.0));
             e.0 += 1.0;
-            if g >= NECK_RIDGE * before.max(after) {
+            if g >= NECK_RIDGE * before.min(after) {
                 e.1 += 1.0;
             }
         }

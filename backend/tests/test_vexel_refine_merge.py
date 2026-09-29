@@ -77,3 +77,19 @@ def test_a_step_under_a_gradient_is_still_never_explained_away():
     assert gsum / cnt > 2.1, gsum / cnt
     out, out_fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, params, 2.1)
     assert not changed and len(np.unique(out)) == 2
+
+
+def test_a_small_region_across_a_step_is_a_ridge_against_its_quiet_side():
+    """A 14 px disc forty levels off a flat backdrop: the sample four pixels
+    into the disc is its far edge, and against the higher of the two sides the
+    boundary read as a ramp (thin-mark-128's core joined its backdrop across a
+    step of 54). Against the lower side it is the ridge it is."""
+    from studi0trace.engines.vexel.merge import boundary_ridges
+
+    r = _radius()
+    rgb = np.full((SIZE, SIZE, 3), 120.0)
+    rgb = np.where((r <= 7.0)[..., None], rgb - 40.0, rgb)
+    labels = np.where(r <= 7.0, 2, 1).astype(np.int32)
+    xs, ys, rgba255, grad = _inputs(rgb)
+    (share,) = boundary_ridges(labels, grad).values()
+    assert share > 0.5, share

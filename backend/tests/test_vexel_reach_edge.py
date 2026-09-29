@@ -53,3 +53,20 @@ def test_only_the_band_within_two_pixels_of_the_rescued_region_is_asked():
     out = reach_the_edge(labels, before, [3], xs, ys, rgba, _fill_at)
     assert (out[8:10, :2] == 2).all() and (out[8:10, 22:] == 2).all()
     assert (out[10:] == labels[10:]).all() and (out[:8] == 1).all()
+
+
+def test_a_small_neighbour_on_the_way_is_not_an_outline_to_reach():
+    """Nine pixels of dot on a rescued line: the two pixels of band between
+    them are the stroke stage's to bridge, and joined to the dot the ring of
+    thin-mark-128 could no longer be stroked."""
+    h, w = 24, 24
+    before = np.full((h, w), 2, np.int32)
+    before[10:13, 11:14] = 1                           # a dot, nine pixels
+    labels = before.copy()
+    labels[10:13, 0:9] = 3                             # a rescued line, 27 px, stopping two short of the dot
+    ys, xs = np.mgrid[0:h, 0:w]
+    xs, ys = xs.astype(np.float64) + 0.5, ys.astype(np.float64) + 0.5
+    rgba = np.tile(GREY, (h, w, 1))
+    rgba[10:13, 0:14] = INK
+    out = reach_the_edge(labels, before, [3], xs, ys, rgba, _fill_at)
+    assert (out == labels).all()

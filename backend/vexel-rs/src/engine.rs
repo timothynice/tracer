@@ -173,11 +173,16 @@ fn reach_the_edge(
     fill_at: &dyn Fn(i32, &[f64], &[f64]) -> Vec<[f64; 4]>,
 ) {
     let band = boundary_band(before);
+    let mut sizes: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+    for v in &before.data {
+        *sizes.entry(*v).or_insert(0) += 1;
+    }
     let mut rescued: Vec<i32> = rescued.to_vec();
     rescued.sort_unstable();
     for r in rescued {
         let m = labels::mask_of(l, r);
-        if !m.data.iter().any(|v| *v) {
+        let n_r = m.data.iter().filter(|v| **v).count();
+        if n_r == 0 {
             continue;
         }
         // the label the region was carved from: the commonest under it, the
@@ -189,11 +194,45 @@ fn reach_the_edge(
             }
         }
         let parent = count.iter().fold((0i32, 0usize), |best, (k, n)| if *n > best.1 { (*k, *n) } else { best }).0;
-        let near = crate::core::morphology::dilate_cross_n(&m, 2);
-        let strip = Grid {
+        // the parent's old boundary with a neighbour at least as large as the
+        // rescued region: the outline side is nearer it than the rescued
+        // pixels beside are (the least over those within two steps)
+        let big = Grid {
             h: l.h,
             w: l.w,
-            data: (0..l.len()).map(|i| band.data[i] && near.data[i] && l.data[i] == parent).collect(),
+            data: (0..l.len()).map(|i| before.data[i] != parent && sizes[&before.data[i]] >= n_r).collect(),
+        };
+        if !big.data.iter().any(|v| *v) {
+            continue;
+        }
+        let to_edge = crate::core::edt::edt_to_true(&big);
+        let near = crate::core::morphology::dilate_cross_n(&m, 2);
+        let (h, w) = (l.h, l.w);
+        let mut beside = vec![f64::INFINITY; l.len()];
+        for i in 0..l.len() {
+            if !m.data[i] {
+                continue;
+            }
+            let (r0, c0) = ((i / w) as i64, (i % w) as i64);
+            for dr in -2i64..=2 {
+                for dc in -2i64..=2 {
+                    if dr.abs() + dc.abs() > 2 {
+                        continue;
+                    }
+                    let (rr, cc) = (r0 + dr, c0 + dc);
+                    if rr >= 0 && cc >= 0 && (rr as usize) < h && (cc as usize) < w {
+                        let j = rr as usize * w + cc as usize;
+                        beside[j] = beside[j].min(to_edge.data[i]);
+                    }
+                }
+            }
+        }
+        let strip = Grid {
+            h,
+            w,
+            data: (0..l.len())
+                .map(|i| band.data[i] && near.data[i] && l.data[i] == parent && to_edge.data[i] < beside[i])
+                .collect(),
         };
         if !strip.data.iter().any(|v| *v) {
             continue;
