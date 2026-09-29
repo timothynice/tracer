@@ -999,3 +999,58 @@ def test_a_steep_soft_edge_over_a_shadow_has_no_spikes(engine):
     svg = _trace_with(engine, rgba)
     d = re.search(r'<path d="([^"]+)"', svg).group(1)
     assert "C" not in d and d.count("L") == 5, d
+
+
+def _slanted_bar(size: int = 320, skew_deg: float = 1.3) -> np.ndarray:
+    """u2049's "!" bar: a rounded bar with a darker bevel strip down one side,
+    both skewed `skew_deg`, so the outer sides are that far off the axis —
+    inside `snap_axis_deg` — but drift 7 px over the height, far more than the
+    placement's noise. The strip's edge makes a node at each end of the bar's
+    outer arc, and the slanted side is a line between two corner curves inside
+    that arc, held by no node: exactly what `_snap_axis` turns."""
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">'
+           f'<rect x="60" y="10" width="118" height="{size - 20}" rx="14" fill="#cc3333" transform="skewX({-skew_deg})"/>'
+           f'<rect x="60" y="10" width="100" height="{size - 20}" rx="14" fill="#f44336" transform="skewX({-skew_deg})"/></svg>')
+    png = resvg_py.svg_to_bytes(svg_string=svg, width=size, height=size)
+    return np.asarray(Image.open(io.BytesIO(bytes(png))).convert("RGBA"))
+
+
+def _uncovered(rgba_in: np.ndarray, svg: str) -> int:
+    h, w = rgba_in.shape[:2]
+    png = resvg_py.svg_to_bytes(svg_string=svg, width=w, height=h)
+    out = np.asarray(Image.open(io.BytesIO(bytes(png))).convert("RGBA"))
+    return int(((rgba_in[..., 3] >= 200) & (out[..., 3] < 100)).sum())
+
+
+def test_an_axis_snap_never_moves_a_line_end_further_than_the_placement_knows():
+    """The bar's sides are 1.3° off vertical: within the snap angle, but a
+    300 px line turned onto the axis about its midpoint moves each end 3.3 px.
+    The placement knows an edge to a tenth of a pixel, so a line that would
+    have to move more than that is not on the axis and stays where its pixels
+    are (u2049's "!" bar lost a 3 px strip down each side to this snap)."""
+    from studi0trace.engines.vexel.curves import Cubic, snap_axis_lines
+    from studi0trace.engines.vexel.topology import _snap_axis
+
+    def bar(long: float, rise: float):
+        return [Cubic(np.array([-5.0, -5.0]), np.array([-3.0, -3.0]), np.array([-1.0, -1.0]), np.array([0.0, 0.0])),
+                Line(np.array([0.0, 0.0]), np.array([rise, long])),
+                Cubic(np.array([rise, long]), np.array([rise + 1, long + 1]), np.array([rise + 3, long + 3]), np.array([rise + 5, long + 5]))]
+
+    # 300 px at 1.25°: the ends would move 3.3 px — left alone
+    segs = _snap_axis(bar(300.0, 6.5), 1.5)
+    assert segs[1].p0[0] == 0.0 and segs[1].p1[0] == 6.5
+    segs = snap_axis_lines(bar(300.0, 6.5), 1.5)
+    assert segs[1].p0[0] == 0.0 and segs[1].p1[0] == 6.5
+    # 10 px at 1.15°: the ends move 0.1 px — snapped, and the neighbours follow
+    segs = _snap_axis(bar(10.0, 0.2), 1.5)
+    assert segs[1].p0[0] == segs[1].p1[0] == 0.1 and segs[0].p1[0] == 0.1 and segs[2].p0[0] == 0.1
+    segs = snap_axis_lines(bar(10.0, 0.2), 1.5)
+    assert segs[1].p0[0] == segs[1].p1[0] == 0.1
+
+
+@pytest.mark.parametrize("engine", ["python", "rust"])
+def test_a_slightly_slanted_bar_keeps_its_sides_where_its_pixels_are(engine):
+    rgba_in = _slanted_bar()
+    params = VexelParams(detail=10.0, min_region=16, curve_tolerance=0.6, corner_threshold=70.0)
+    svg = _trace_with(engine, rgba_in, params)
+    assert _uncovered(rgba_in, svg) < 20, svg[:400]

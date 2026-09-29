@@ -49,6 +49,7 @@ from studi0trace.engines.vexel.symmetry import reflect, ring_symmetries
 from studi0trace.engines.vexel.curves import (
     CORNER_REACH,
     MERGE_DEG,
+    SNAP_END_MOVE,
     CircArc,
     Cubic,
     CurveParams,
@@ -3225,7 +3226,9 @@ def _reflect_segment(seg: Segment, c: np.ndarray, d: np.ndarray) -> Segment:
 def _snap_axis(segments: list[Segment], snap_deg: float) -> list[Segment]:
     """Make a nearly horizontal or vertical line exactly so, as `curves.snap_axis_lines`
     does for a whole contour — but never moving the arc's own ends, which are
-    nodes that the arcs on the other side have already been fitted to."""
+    nodes that the arcs on the other side have already been fitted to, and
+    never moving an end further than `curves.SNAP_END_MOVE`: a line that would
+    have to is not on the axis, it is drawn a degree off it."""
     n = len(segments)
     for i, seg in enumerate(segments):
         if not isinstance(seg, Line):
@@ -3239,6 +3242,8 @@ def _snap_axis(segments: list[Segment], snap_deg: float) -> list[Segment]:
         if head and tail:
             continue
         value = seg.p1[axis] if head else (seg.p0[axis] if tail else (seg.p0[axis] + seg.p1[axis]) / 2)
+        if max(abs(seg.p0[axis] - value), abs(seg.p1[axis] - value)) > SNAP_END_MOVE:
+            continue
         if not head:
             seg.p0[axis] = value
             segments[i - 1].p1 = seg.p0.copy()

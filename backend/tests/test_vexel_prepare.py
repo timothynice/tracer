@@ -63,3 +63,26 @@ def test_flat_image_is_one_region_and_gradient_does_not_split_on_edges():
     square = labels[20:44, 20:44]
     assert len(np.unique(square)) == 1
     assert labels[20, 20] not in np.unique(labels[:8, :])  # the square is not the ramp region
+
+
+def test_inpainting_ignores_the_colour_of_nearly_transparent_pixels():
+    """An 8-bit straight-alpha pixel's colour is stored to ±128/alpha levels: at
+    alpha 2 it is noise. A downsampled asset rings every edge with such pixels,
+    and inpainting the transparent field from them laid seams of that noise
+    across it that the partition read as edges (thin-mark-512-ds's triangle
+    came out serrated). The field, and the noise pixels themselves, take the
+    colour of the nearest pixel whose alpha makes its colour trustworthy."""
+    img = rgba(color=(0, 0, 0, 0))
+    img[8:24, 8:24] = (200, 50, 50, 255)
+    ys, xs = np.mgrid[0:32, 0:32]
+    rim = ((xs == 7) | (xs == 24) | (ys == 7) | (ys == 24)) & (xs >= 7) & (xs <= 24) & (ys >= 7) & (ys <= 24)
+    img[rim] = (255, 0, 255, 2)  # un-premultiplication garbage at alpha 2
+    p = prepare(img)
+    assert tuple(p.rgb[0, 0]) == (200, 50, 50), "the transparent field is inpainted from the square, not the rim"
+    assert tuple(p.rgb[7, 12]) == (200, 50, 50), "a noise pixel's colour is replaced too"
+    assert p.alpha[7, 12] == np.float32(2 / 255), "its alpha is kept"
+    # a genuinely translucent shape keeps its own colour: nothing above it to inpaint from
+    soft = rgba(color=(0, 0, 0, 0))
+    soft[8:24, 8:24] = (10, 20, 30, 40)
+    assert tuple(prepare(soft).rgb[12, 12]) == (10, 20, 30)
+    assert tuple(prepare(soft).rgb[0, 0]) == (10, 20, 30)
