@@ -145,10 +145,10 @@ def rescue_features(
     per image, nearly all of it on glows and shadows (logomark-128 +252,
     inset-well-128 +80, radii-128 +59), whose bands `edge_mix` does not read
     as a mix of the two fills beside them.
-    The pieces of a host that carving a feature out leaves below `min_region`
-    — islands inside the feature, the one-pixel thread of the host's own edge
-    between the feature and a third region — join the feature
-    (`absorb_shards`).
+    Carving a feature out leaves pieces of the host below `min_region` —
+    islands inside the feature, the one-pixel thread of the host's own edge
+    between the feature and a third region; `engine.absorb_shards` hands them
+    to their surroundings once the shadow stage has had its say.
     Returns (new labels, ids of the rescued regions).
     """
     candidates = (residual > threshold) & ~boundary_band(labels)
@@ -173,77 +173,13 @@ def rescue_features(
     out = labels.copy()
     next_id = int(labels.max()) + 1
     rescued: list[int] = []
-    taken = np.zeros(labels.shape, bool)
     for comp in np.nonzero(keep)[0]:
         m = comps == comp
         # slightly grow the component so its own anti-aliasing pixels come along
         m = ndimage.binary_dilation(m, _CROSS) & ((residual > threshold * 0.5) | m)
         out[m] = next_id
-        taken |= m
         rescued.append(next_id)
         next_id += 1
-    out = absorb_shards(out, [int(v) for v in np.unique(labels[taken])], rescued, min_region)
     out, fwd, _ = relabel_sequential(out)
     rescued = [int(fwd[i]) for i in rescued]
     return out.astype(np.int32), rescued
-
-
-def absorb_shards(labels: np.ndarray, hosts: list[int], features: list[int], min_region: int) -> np.ndarray:
-    """Every four-connected piece of a host label below `min_region` joins the
-    feature it touches.
-
-    Carving a feature out of a host leaves the host's pixels the feature did
-    not take: the ones its fill happens to pass through, now islands inside
-    the feature, and, where the feature runs along the host's edge with a
-    third region, the host's own edge pixels — a candidate is never within a
-    pixel of a label change and the growth brings back one — a thread one
-    pixel wide between the feature and that region. On a diagonal edge the
-    thread touches itself only at corners, and the four-connected boundary
-    build (`topology._directed_rings`) returned it as one sliver per pixel:
-    69 along a speech balloon's bevel, 19 along a sleeve. A per-label size
-    check never sees either: the host itself is large.
-
-    Both are the feature's: the thread is the feature's own anti-aliasing,
-    which the growth reaches everywhere but there. So a shard joins the
-    feature it shares the most four-edges with, the lower label on a tie, and
-    only a shard touching no feature joins the neighbour it shares the most
-    with. Not the discontinuity: flooded along it, a thread on an edge where
-    the two sides tie went pixel by pixel to whichever side was pushed first.
-    """
-    if not hosts or min_region <= 1:
-        return labels
-    host_px = np.isin(labels, hosts)
-    comp = cc_label(np.where(host_px, labels, 0), connectivity=1, background=0)
-    sizes = np.bincount(comp.ravel())
-    small = sizes < min_region
-    small[0] = False
-    shard = small[comp]
-    if not shard.any():
-        return labels
-    out = labels.copy()
-    feature = np.zeros(int(out.max()) + 1, bool)
-    feature[features] = True
-    for _ in range(4):  # a shard ringed by other shards waits for them
-        pairs: list[np.ndarray] = []
-        for src, dst in (((slice(None), slice(None, -1)), (slice(None), slice(1, None))),
-                         ((slice(None, -1), slice(None)), (slice(1, None), slice(None)))):
-            for a, b in ((src, dst), (dst, src)):
-                m = shard[a] & ~shard[b]
-                pairs.append(np.stack([comp[a][m], out[b][m]], axis=1))
-        edges = np.concatenate(pairs)
-        if edges.size == 0:
-            break
-        keys, counts = np.unique(edges, axis=0, return_counts=True)
-        # per shard: a feature over anything else, then the most edges, then the lower label
-        order = np.lexsort((keys[:, 1], -counts, ~feature[keys[:, 1]], keys[:, 0]))
-        keys, counts = keys[order], counts[order]
-        first = np.ones(keys.shape[0], bool)
-        first[1:] = keys[1:, 0] != keys[:-1, 0]
-        choice = np.zeros(sizes.size, np.int64)
-        choice[keys[first, 0]] = keys[first, 1]
-        done = shard & (choice[comp] > 0)
-        out[done] = choice[comp[done]]
-        shard &= ~done
-        if not shard.any():
-            break
-    return out

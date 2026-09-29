@@ -138,6 +138,56 @@ def test_split_rim_does_not_depend_on_candidate_order():
     assert (a[:, 4] == 1).all(), "a total tie goes to the lower label"
 
 
+def test_shards_of_a_host_join_their_surroundings_but_a_family_of_small_pieces_stays():
+    """The rescue carves a band (3) out of a host (1) along its edge with a
+    third region (2) and leaves the host's edge row as a diagonal thread of
+    one-pixel pieces, and two islands inside the band. Every piece joins the
+    nearest neighbouring region — the thread pixels are each one step from
+    both 2 and 3, so their own colour decides: mostly the band's colour, they
+    join the band — and no piece of any label below min_region remains. A
+    label whose every piece is small (a dotted line the rescue found as one
+    feature) is left whole; a shard never joins an invisible region while a
+    visible one is as near."""
+    from scipy import ndimage
+
+    from studi0trace.engines.vexel.engine import absorb_shards
+
+    h = w = 48
+    ys, xs = np.mgrid[0:h, 0:w]
+    s = xs + ys
+    labels = np.where(s >= 56, 2, 1).astype(np.int32)
+    labels[(s >= 44) & (s <= 54)] = 3  # the band
+    labels[25, 20] = 1  # islands
+    labels[32, 14] = 1
+    labels[4, 40:44] = 4  # a dotted line: four pieces of four pixels, one label
+    labels[4, 46:48] = 4
+    labels[6, 40:44] = 4
+    labels[6, 46:48] = 4
+    fills = {1: (200.0, 200.0, 200.0), 2: (20.0, 20.0, 20.0), 3: (120.0, 120.0, 120.0), 4: (255.0, 0.0, 0.0)}
+    rgba = np.zeros((h, w, 4)); rgba[..., 3] = 255.0
+    for lab, c in fills.items():
+        rgba[labels == lab, :3] = c
+    rgba[s == 55, :3] = (90.0, 90.0, 90.0)  # the thread: a mix, mostly the band's grey
+    fx, fy = xs.astype(float) + 0.5, ys.astype(float) + 0.5
+
+    def fill_at(lab, qx, qy):
+        return np.tile(np.array(fills[lab] + (255.0,)), (len(qx), 1))
+
+    out = absorb_shards(labels, 6, set(), fx, fy, rgba, fill_at)
+    assert out is not None
+    assert (out[s == 55] == 3).all() and out[25, 20] == 3 and out[32, 14] == 3
+    assert (out[labels == 4] == 4).all(), "a family of small pieces is not shards"
+    for lab in (1, 2, 3):
+        comp, n = ndimage.label(out == lab)
+        assert n == 1, lab
+    # nothing to do: None
+    assert absorb_shards(out, 6, set(), fx, fy, rgba, fill_at) is None
+    # the thread, coloured like region 2, goes to 2; an invisible 2 loses it to the band
+    rgba[s == 55, :3] = (40.0, 40.0, 40.0)
+    assert (absorb_shards(labels, 6, set(), fx, fy, rgba, fill_at)[s == 55] == 2).all()
+    assert (absorb_shards(labels, 6, {2}, fx, fy, rgba, fill_at)[s == 55] == 3).all()
+
+
 @pytest.mark.parametrize("params", [VexelParams(), VexelParams(detail=14.0, min_region=24, strokes=False, overlaps=False, shadows=False)])
 def test_a_faint_noise_halo_leaves_the_shape_whole_and_opaque(params):
     """The halo an unpremultiplied soft shadow leaves (alpha 1–2 with the

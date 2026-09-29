@@ -91,11 +91,40 @@ DUMPDIR LABEL` prints a dumped region's alpha distribution and connectivity).
   365k; T=4 22.19 / 1155 / 3 / 29 / 191k; T=8 21.43 / 1042 / 3 / 14 / 164k; T=16 21.07 / 1010 / 3 / 17
   / 136k. T=32 and the per-item deltas were lost with the session; `floorsweep2.log` re-runs 8/16/32.
 
+## Round 2 (after the first full verification)
+- diffcheck over all 96 corpus PNGs: rgb, features, labels0, wedges, arcs, under all 0 failing
+  (run in `--filter` batches: the harness kills any background job at ~exit 144 after ~30 min).
+  pytest full suite: Python backend all pass; Rust backend all pass; cargo test ok.
+- First corpus bench (bench-after/, compare_items.py): totals ΔE 43.1→40.1, artifact 1337→1021,
+  seam 433k→251k, outline 28.2→23.8, score 99.965→100.096, but regressions: shadow/inset-card-512(-ds)
+  ΔE 0.054→0.363 F1 1→0.82 elements 2→4, inset-well, disc-512 ΔE, thin-mark-128 art 134→175 slivers
+  3→7 elements 19→42, alpha-fade-512 art 1.3→6 elements 3→5, blobs-128, sticker-512-ds, logomark-128
+  seam. Ablation (`ablate.py`): inset-card/inset-well/disc = the shard rule; thin-mark-128/alpha-fade
+  = the alpha floor; nothing from the reuse fix.
+- Cause 1 (shards): on inset-card the shards are the card's own outer AA row at the four rounded
+  corners (1–4 px bits between the inset band and the backdrop). Given to the band, the band pokes
+  through to the backdrop, is no longer enclosed by the card, and the inset-shadow model fails
+  (filters 0, paths 4). At HEAD the shadow stage absorbed the bands before topology, reconnecting
+  those bits. FIX: the absorb moved out of the rescue into `engine.absorb_shards`, run after the
+  shadow stage (both engines): every 4-piece below min_region of a label that has a piece ≥
+  min_region; each pixel to the nearest neighbouring region as `split_rim` does (distance, own
+  colour, lower label), never its own label, never an invisible one while a visible one is as near;
+  a label whose every piece is small (dotted line) is left alone. Test
+  `test_vexel_engine.py::test_shards_of_a_host_join_their_surroundings_but_a_family_of_small_pieces_stays`;
+  the rescue test now pins the thread/islands the rescue leaves.
+- Cause 2 (floor): thin-mark-128 is ≤192 px → 2× Lanczos upsample of the RAW rgba, so the black
+  under alpha 0 bleeds into the ringing's colour; unconditional inpainting of alpha<8 turned the <8
+  ring pink while the 8–33 ring kept black-mixed colour → a dozen faint regions. alpha-fade-512's
+  tail is a synthetic straight-alpha ramp whose faint pixels are real colour; nearest ≥8 pixel is the
+  green disc → green tail pieces. FIX: inpaint only where the colour is unpremultiply noise, i.e. on
+  the 255/a grid (every channel = round(k·255/a) ± GRID_TOL 1.0) — `prepare.unpremultiply_noise`,
+  Rust `is_unpremultiply_noise`; off-grid faint colours are kept. Prepare test extended (off-grid
+  kept, ±1 rounding counted); `conftest.noisy_halo_disc` now draws alpha-1 noise from {0,255} only.
+- Rust rebuilt with both; Python changed-test set passes (7). Rust verification pending.
+
 ## Next
-- Rebuild Rust (running); then `tools/diffcheck.py arcs under` (rerun), pytest on the Rust backend,
-  `python -m bench run --engines vexel --no-media --workers 3` + compare + per-item
-  (`compare_items.py`), `headtohead.py run --corpus $SCRATCH/q3/wp2/heldout5 --configs vexel-auto`,
-  fragsurvey after; decide the floor from floorsweep2 per-item deltas (8 unless 16 is clean).
+- pytest (Rust), diffcheck all six stages in batches, bench run + compare + per-item, heldout5,
+  update CLAUDE.md bullet (rescue → engine.absorb_shards, grid rule), final commit, report.
 - Sweep COLOUR_ALPHA_FLOOR ∈ {4, 8, 16} on the corpus bench if 8 leaves regressions.
 - `python -m bench run --engines vexel --no-media --workers 3` + compare vs bench/baselines/vexel.json;
   per-item check; heldout items with vexel-auto (`panel3.py`); re-run fragsurvey after.

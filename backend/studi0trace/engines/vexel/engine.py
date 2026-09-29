@@ -214,6 +214,69 @@ def split_rim(labels: np.ndarray, rim: np.ndarray, cands: list[int], xs: np.ndar
     return out
 
 
+def absorb_shards(labels: np.ndarray, min_region: int, invisible: set[int], xs: np.ndarray, ys: np.ndarray,
+                  rgba255: np.ndarray, fill_at) -> np.ndarray | None:
+    """Every four-connected piece below `min_region` of a label that has a
+    piece at least that big joins its surroundings; None when there is none.
+
+    The partition never makes one: a watershed label is four-connected and a
+    small one is absorbed whole. Carving a feature out of a host does — the
+    host's pixels the feature's fill happens to pass through, now islands
+    inside it, and where the feature runs along the host's edge with a third
+    region, the host's own edge pixels (a rescue candidate is never within a
+    pixel of a label change and the growth brings back one), a thread one
+    pixel wide between the two. On a diagonal the thread touches itself only
+    at corners, and the four-connected boundary build
+    (`topology._directed_rings`) returned it as one sliver per pixel: 69 along
+    a speech balloon's bevel, 19 along a sleeve. A per-label size check never
+    sees either: the host itself is large. A label whose every piece is small
+    is a family, not shards — a dotted line the rescue found as one feature.
+
+    Each pixel goes to the nearest neighbouring region as `split_rim` hands a
+    rim over: distance, then the pixel's own colour, then the lower label,
+    never its own label and never an invisible one while a visible one is as
+    near. Not the discontinuity: flooded along it, a thread on an edge where
+    the two sides tie went pixel by pixel to whichever side was pushed first.
+    This runs after the shadow stage on purpose: an inset shadow's bands
+    rejoin the card there and reconnect the card's edge bits at the corners;
+    absorbed earlier, those bits joined the band, the band touched the
+    backdrop, and the shadow model no longer fitted.
+    """
+    if min_region <= 1:
+        return None
+    shard = np.zeros(labels.shape, bool)
+    for lab in np.unique(labels):
+        if lab == 0:
+            continue
+        comp, n = ndimage.label(labels == lab)
+        if n <= 1:
+            continue
+        sizes = np.bincount(comp.ravel())
+        if sizes[1:].max() < min_region:
+            continue
+        small = sizes < min_region
+        small[0] = False
+        shard |= small[comp]
+    if not shard.any():
+        return None
+    ring = ndimage.binary_dilation(shard, _CROSS) & ~shard
+    cands = sorted(int(v) for v in np.unique(labels[ring]) if v != 0)
+    seen = [c for c in cands if c not in invisible]
+    if not seen:
+        seen = cands
+    # to a region's distance map a shard of its own label is not the region
+    body = np.where(shard, 0, labels)
+    dists = np.stack([ndimage.distance_transform_edt(body != n)[shard] for n in seen])
+    dists[np.asarray(seen)[:, None] == labels[shard][None, :]] = np.inf
+    qx, qy, colour = xs[shard], ys[shard], rgba255[shard][:, :3]
+    off = np.stack([np.linalg.norm(colour - fill_at(n, qx, qy)[:, :3], axis=1) for n in seen])
+    nearest = dists.min(axis=0)
+    off = np.where(dists <= nearest + 1e-9, off, np.inf)
+    out = labels.copy()
+    out[shard] = np.asarray(seen)[np.argmin(off, axis=0)]
+    return out
+
+
 def _ring_area(poly: np.ndarray) -> float:
     if len(poly) < 3:
         return 0.0
@@ -497,6 +560,15 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 m = labels == lab
                 w, core = interior(m)
                 fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w, core=core)
+
+    # A piece of a region below min_region is not a region: the shards the
+    # rescue leaves of a host join their surroundings, now that the shadow
+    # stage has had its say (an inset shadow's bands rejoin the card here, and
+    # the card's own edge bits at the corners rejoin the card with them).
+    shards = absorb_shards(labels, p.min_region, invisible, xs, ys, rgba255, fill_at)
+    if shards is not None:
+        labels = shards
+        enc = enclosure(labels)
 
     # Thin regions are drawn lines. A single line often arrives as several
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions

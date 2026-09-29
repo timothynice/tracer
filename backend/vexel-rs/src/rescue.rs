@@ -11,7 +11,6 @@ use crate::core::grid::{Grid, Mask};
 use crate::core::labels::{self, Labels};
 use crate::core::morphology::dilate_cross;
 use crate::order::boundary_band;
-use std::collections::{BTreeSet, HashMap};
 
 /// How far an edge's rendering reaches into the regions either side: the
 /// support radius of the resamplers artwork goes through (bilinear 1, bicubic
@@ -169,7 +168,6 @@ pub fn rescue_features(
     let mut out = l.clone();
     let first_id = l.data.iter().copied().max().unwrap_or(0) + 1;
     let mut rescued: Vec<i32> = Vec::new();
-    let mut hosts: BTreeSet<i32> = BTreeSet::new();
     for (n, comp) in keep.into_iter().enumerate() {
         let next_id = first_id + n as i32;
         let m = Grid {
@@ -181,120 +179,15 @@ pub fn rescue_features(
         let grown = dilate_cross(&m);
         for i in 0..out.len() {
             if grown.data[i] && (residual.data[i] > threshold * 0.5 || m.data[i]) {
-                hosts.insert(l.data[i]);
                 out.data[i] = next_id;
             }
         }
         rescued.push(next_id);
     }
-    let hosts: Vec<i32> = hosts.into_iter().collect();
-    absorb_shards(&mut out, &hosts, &rescued, min_region);
     let (out, fwd) = labels::relabel_sequential(&out);
     let rescued = rescued
         .into_iter()
         .filter_map(|i| fwd.get(&i).copied())
         .collect();
     (out, rescued)
-}
-
-/// Every four-connected piece of a host label below `min_region` joins the
-/// feature it touches: the islands the host's fill passes through inside the
-/// feature, and the one-pixel thread of the host's own edge left between the
-/// feature and a third region, which on a diagonal the four-connected
-/// boundary build returned as one sliver per pixel. A shard joins the feature
-/// it shares the most four-edges with, the lower label on a tie; only a shard
-/// touching no feature joins the neighbour it shares the most with. See
-/// `rescue.absorb_shards`.
-fn absorb_shards(l: &mut Labels, hosts: &[i32], features: &[i32], min_region: usize) {
-    if hosts.is_empty() || min_region <= 1 {
-        return;
-    }
-    let (h, w) = (l.h, l.w);
-    let n = h * w;
-    // the four-connected pieces of every host, numbered across hosts; sizes by piece
-    let mut comp = vec![0u32; n];
-    let mut sizes: Vec<usize> = vec![0];
-    for &host in hosts {
-        let pieces = labels::label_mask(&labels::mask_of(l, host), 1);
-        let k = pieces.data.iter().copied().max().unwrap_or(0) as usize;
-        let base = sizes.len() - 1;
-        sizes.resize(base + 1 + k, 0);
-        for i in 0..n {
-            if pieces.data[i] > 0 {
-                let id = base + pieces.data[i] as usize;
-                comp[i] = id as u32;
-                sizes[id] += 1;
-            }
-        }
-    }
-    let mut shard: Vec<bool> = (0..n).map(|i| comp[i] > 0 && sizes[comp[i] as usize] < min_region).collect();
-    if !shard.iter().any(|b| *b) {
-        return;
-    }
-    let max_label = l.data.iter().copied().max().unwrap_or(0).max(0) as usize;
-    let mut is_feature = vec![false; max_label + 1];
-    for &f in features {
-        if f >= 0 && (f as usize) <= max_label {
-            is_feature[f as usize] = true;
-        }
-    }
-    for _ in 0..4 {
-        // a shard ringed by other shards waits for them
-        // per (piece, neighbouring label): the four-edges they share
-        let mut counts: HashMap<(u32, i32), usize> = HashMap::new();
-        for y in 0..h {
-            for x in 0..w {
-                let i = y * w + x;
-                if !shard[i] {
-                    continue;
-                }
-                let mut visit = |j: usize| {
-                    if !shard[j] {
-                        *counts.entry((comp[i], l.data[j])).or_insert(0) += 1;
-                    }
-                };
-                if x > 0 {
-                    visit(i - 1);
-                }
-                if x + 1 < w {
-                    visit(i + 1);
-                }
-                if y > 0 {
-                    visit(i - w);
-                }
-                if y + 1 < h {
-                    visit(i + w);
-                }
-            }
-        }
-        if counts.is_empty() {
-            break;
-        }
-        // per piece: a feature over anything else, then the most edges, then the lower label
-        let mut best: HashMap<u32, (bool, usize, i32)> = HashMap::new();
-        for (&(c, lab), &cnt) in &counts {
-            let key = (is_feature[lab.max(0) as usize], cnt, lab);
-            let better = match best.get(&c) {
-                None => true,
-                Some(&(f, m, l0)) => (key.0, key.1) > (f, m) || ((key.0, key.1) == (f, m) && lab < l0),
-            };
-            if better {
-                best.insert(c, key);
-            }
-        }
-        let mut left = false;
-        for i in 0..n {
-            if shard[i] {
-                if let Some(&(_, _, lab)) = best.get(&comp[i]) {
-                    l.data[i] = lab;
-                    shard[i] = false;
-                } else {
-                    left = true;
-                }
-            }
-        }
-        if !left {
-            break;
-        }
-    }
 }

@@ -157,6 +157,98 @@ fn split_rim(
     }
 }
 
+/// Every four-connected piece below `min_region` of a label that has a piece
+/// at least that big joins its surroundings: each pixel to the nearest
+/// neighbouring region as `split_rim` hands a rim over (distance, then the
+/// pixel's own colour, then the lower label), never its own label and never
+/// an invisible one while a visible one is as near. The shards the rescue
+/// leaves of a host — islands inside the feature, the one-pixel thread of
+/// the host's edge between the feature and a third region, a sliver each in
+/// the four-connected boundary build. Runs after the shadow stage on purpose
+/// (see `engine.absorb_shards`). Returns whether anything moved.
+fn absorb_shards(
+    l: &mut Labels,
+    min_region: usize,
+    invisible: &HashSet<i32>,
+    xs: &Grid<f64>,
+    ys: &Grid<f64>,
+    rgba255: &[[f64; 4]],
+    fill_at: &dyn Fn(i32, &[f64], &[f64]) -> Vec<[f64; 4]>,
+) -> bool {
+    if min_region <= 1 {
+        return false;
+    }
+    let n = l.len();
+    let mut shard = vec![false; n];
+    for lab in labels::unique_ids(l) {
+        let pieces = labels::label_mask(&labels::mask_of(l, lab), 1);
+        let k = pieces.data.iter().copied().max().unwrap_or(0) as usize;
+        if k <= 1 {
+            continue;
+        }
+        let mut sizes = vec![0usize; k + 1];
+        for v in &pieces.data {
+            sizes[*v as usize] += 1;
+        }
+        if sizes[1..].iter().copied().max().unwrap_or(0) < min_region {
+            continue; // a family of small pieces, not shards
+        }
+        for i in 0..n {
+            let c = pieces.data[i] as usize;
+            if c > 0 && sizes[c] < min_region {
+                shard[i] = true;
+            }
+        }
+    }
+    if !shard.iter().any(|b| *b) {
+        return false;
+    }
+    let shard_mask = Grid { h: l.h, w: l.w, data: shard.clone() };
+    let ring = dilate_cross(&shard_mask);
+    let mut cands: BTreeSet<i32> = BTreeSet::new();
+    for i in 0..n {
+        if ring.data[i] && !shard[i] && l.data[i] != 0 {
+            cands.insert(l.data[i]);
+        }
+    }
+    let mut seen: Vec<i32> = cands.iter().copied().filter(|c| !invisible.contains(c)).collect();
+    if seen.is_empty() {
+        seen = cands.into_iter().collect();
+    }
+    // to a region's distance map a shard of its own label is not the region
+    let body = Grid { h: l.h, w: l.w, data: (0..n).map(|i| if shard[i] { 0 } else { l.data[i] }).collect() };
+    let dists: Vec<Grid<f64>> = seen
+        .par_iter()
+        .map(|c| crate::core::edt::edt_to_true(&labels::mask_of(&body, *c)))
+        .collect();
+    let assign: Vec<(usize, i32)> = (0..n)
+        .filter(|i| shard[*i])
+        .map(|i| {
+            let own = l.data[i];
+            let dist = |k: usize| if seen[k] == own { f64::INFINITY } else { dists[k].data[i] };
+            let nearest = (0..seen.len()).map(dist).fold(f64::INFINITY, f64::min);
+            let mut best = 0usize;
+            let mut best_off = f64::INFINITY;
+            for k in 0..seen.len() {
+                if dist(k) > nearest + 1e-9 {
+                    continue;
+                }
+                let f = fill_at(seen[k], &[xs.data[i]], &[ys.data[i]])[0];
+                let off = (0..3).map(|c| (rgba255[i][c] - f[c]).powi(2)).sum::<f64>().sqrt();
+                if off < best_off {
+                    best_off = off;
+                    best = k;
+                }
+            }
+            (i, seen[best])
+        })
+        .collect();
+    for (i, v) in assign {
+        l.data[i] = v;
+    }
+    true
+}
+
 struct FitOut {
     fills: HashMap<i32, Fill>,
     visible: HashMap<i32, bool>,
@@ -537,6 +629,26 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     }
 
     t.lap("shadows");
+
+    // A piece of a region below min_region is not a region: the shards the
+    // rescue leaves of a host join their surroundings, now that the shadow
+    // stage has had its say. See the Python.
+    {
+        let fills_snapshot = fills.clone();
+        let levels_snapshot = levels.clone();
+        let fill_at = move |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+            match levels_snapshot.model(lab).or_else(|| fills_snapshot.get(&lab)) {
+                Some(f) => f.evaluate(qx, qy),
+                None => vec![[0.0; 4]; qx.len()],
+            }
+        };
+        if absorb_shards(&mut l, p.min_region, &invisible, &xs, &ys, &rgba255, &fill_at) {
+            index = LabelIndex::build(&l);
+            ids = labels::unique_ids(&l);
+            enc = enclosure(&l);
+        }
+    }
+    t.lap("shards");
     // Thin regions are drawn lines. A single line often arrives as several
     // regions (split at junctions, broken by anti-aliasing gaps), so thin
     // regions that touch and share an ink colour are grouped and stroked together.

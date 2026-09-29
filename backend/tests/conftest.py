@@ -45,9 +45,13 @@ def noisy_halo_disc(size: int = 96, radius: float = 30.0, rgb=(218, 218, 218)) -
     rgba[..., :3] = rgb
     rgba[..., 3] = np.round(cover * 255).astype(np.uint8)
     halo = (cover == 0) & (d < radius + 14)
-    noise = np.random.default_rng(7).choice(np.array([0, 128, 255], np.uint8), size=(size, size, 3))
-    rgba[halo, :3] = noise[halo]
-    rgba[halo, 3] = np.where(d[halo] < radius + 7, 2, 1)
+    rng = np.random.default_rng(7)
+    inner = halo & (d < radius + 7)  # alpha 2: 0, 128 or 255 per channel
+    outer = halo & ~inner  # alpha 1: 0 or 255 only
+    rgba[inner, :3] = rng.choice(np.array([0, 128, 255], np.uint8), size=(int(inner.sum()), 3))
+    rgba[outer, :3] = rng.choice(np.array([0, 255], np.uint8), size=(int(outer.sum()), 3))
+    rgba[inner, 3] = 2
+    rgba[outer, 3] = 1
     return rgba
 
 

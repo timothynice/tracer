@@ -147,25 +147,14 @@ def test_a_feature_that_reaches_the_core_keeps_its_edge_band_pixels():
     assert len(rescued) == 1 and (out[5:35, 12:20] == rescued[0]).all()
 
 
-def _shards(labels: np.ndarray) -> list[int]:
-    """Sizes of every four-connected piece of every label that is not that label's largest."""
-    out = []
-    for lab in np.unique(labels):
-        comp, n = ndimage.label(labels == lab)
-        sizes = sorted(np.bincount(comp.ravel())[1:].tolist(), reverse=True)
-        out.extend(sizes[1:])
-    return out
-
-
-def test_carving_a_feature_leaves_the_host_in_no_shards():
+def test_carving_a_feature_along_an_edge_leaves_the_hosts_thread_and_islands():
     """A band rescued along the host's edge with a third region starts two
     pixels in (the boundary band is never a candidate) and grows one back, so
-    a one-pixel thread of the host was left between the feature and the third
-    region: on a diagonal edge, a chain of pixels touching only at corners,
-    which the four-connected boundary build makes a sliver each. Inside the
-    band, pixels the host's fill happened to pass through stayed as islands.
-    Neither is a region: a piece of the host below `min_region` joins its
-    surroundings, along the discontinuity like the partition's own absorb."""
+    a one-pixel thread of the host is left between the feature and the third
+    region, and pixels the host's fill happened to pass through stay as
+    islands inside the band. The rescue leaves them (`engine.absorb_shards`
+    hands them over once the shadow stage has run); this pins the shape it
+    hands over."""
     h = w = 48
     ys, xs = np.mgrid[0:h, 0:w]
     s = xs + ys
@@ -179,9 +168,7 @@ def test_carving_a_feature_leaves_the_host_in_no_shards():
     out, rescued = rescue_features(labels, residual, threshold=1.0, min_region=6)
     assert len(rescued) == 1
     new = rescued[0]
-    assert out[25, 20] == new and out[32, 14] == new
-    assert _shards(out) == [], _shards(out)
-    # the thread is the feature's own anti-aliasing: it joins the feature, every pixel of it
-    assert (out[s == 55] == new).all()
-    # nothing else moved
-    assert (out[s <= 43] == labels[s <= 43]).all() and (out[s >= 56] == 2).all()
+    assert (out[(s >= 44) & (s <= 54) & ~((ys == 25) & (xs == 20)) & ~((ys == 32) & (xs == 14))] == new).all()
+    assert out[25, 20] == 1 and out[32, 14] == 1 and (out[s == 55] == 1).all()
+    comp, n = ndimage.label(out == 1)
+    assert n > 30, "the thread is a chain of one-pixel pieces touching only at corners"

@@ -5,15 +5,19 @@ use crate::core::edt::edt_sq_indices;
 use crate::core::grid::{Grid, Image};
 
 pub const ALPHA_FEATURE_SCALE: f64 = 100.0;
-/// The alpha (0..255) under which a pixel's colour is not its own: under
-/// alpha a an unpremultiplied file holds a colour quantised to steps of 255/a
-/// per channel, which over the corpus differs from the neighbours' by about
-/// 45/a ΔE, and below 8 a halo of it is all ridge and no seed
+/// The alpha (0..255) under which a pixel's colour may be unpremultiply noise:
+/// under alpha a an unpremultiplied file holds a colour quantised to steps of
+/// 255/a per channel, which over the corpus differs from the neighbours' by
+/// about 45/a ΔE, and below 8 a halo of it is all ridge and no seed
 /// (`prepare.COLOUR_ALPHA_FLOOR`).
 pub const COLOUR_ALPHA_FLOOR: u8 = 8;
+/// Such noise is known by its grid: every channel is round(k·255/a) within a
+/// level either way; a colour off the grid is a straight-alpha file's own
+/// (`prepare.GRID_TOL`).
+pub const GRID_TOL: f64 = 1.0;
 
 pub struct Prepared {
-    /// (H, W, 3) 0..255, inpainted where alpha < COLOUR_ALPHA_FLOOR
+    /// (H, W, 3) 0..255, inpainted where alpha == 0 or the colour is unpremultiply noise
     pub rgb: Image,
     /// (H, W) 0..1
     pub alpha: Grid<f64>,
@@ -21,14 +25,33 @@ pub struct Prepared {
     pub features: Image,
 }
 
-/// Replace RGB under alpha below `COLOUR_ALPHA_FLOOR` with the colour of the
-/// nearest pixel whose alpha reaches it. PNG encoders store arbitrary (often
-/// black) RGB under transparent pixels and quantisation noise under nearly
+/// A pixel under `COLOUR_ALPHA_FLOOR` alpha whose colour lies on the 255/a
+/// grid, as the Python's `unpremultiply_noise` decides it (alpha 0 is not this).
+#[inline]
+fn is_unpremultiply_noise(rgb: &[f64], a: u8) -> bool {
+    if a == 0 || a >= COLOUR_ALPHA_FLOOR {
+        return false;
+    }
+    let step = 255.0 / a as f64;
+    rgb.iter().all(|c| {
+        let k = (c / step).round();
+        (c - k * step).abs() <= GRID_TOL
+    })
+}
+
+/// Replace RGB under alpha == 0, and under alpha below `COLOUR_ALPHA_FLOOR`
+/// where the colour is unpremultiply noise, with the nearest other pixel's
+/// colour. PNG encoders store arbitrary (often black) RGB under transparent
+/// pixels and a premultiplied pipeline leaves quantisation noise under nearly
 /// transparent ones, and letting that into the gradient fits or the edge
 /// detection would be wrong. `alpha255` is the file's alpha, 0..255.
 fn inpaint_transparent(rgb: &mut Image, alpha255: &[u8], h: usize, w: usize) {
     let n = h * w;
-    let invisible = Grid { h, w, data: alpha255.iter().map(|a| *a < COLOUR_ALPHA_FLOOR).collect() };
+    let invisible = Grid {
+        h,
+        w,
+        data: (0..n).map(|i| alpha255[i] == 0 || is_unpremultiply_noise(&rgb.data[i * 3..i * 3 + 3], alpha255[i])).collect(),
+    };
     let n_inv = invisible.count();
     if n_inv == 0 || n_inv == n {
         return;

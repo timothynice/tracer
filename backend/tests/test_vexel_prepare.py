@@ -73,12 +73,17 @@ def test_colour_under_faint_alpha_is_inpainted_from_the_nearest_pixel_that_shows
     alpha is high enough for its colour to be its own."""
     img = rgba(color=(0, 0, 0, 0))
     img[8:24, 8:24] = (200, 50, 50, 255)  # red square
-    img[24:28, 8:24] = (255, 0, 255, 2)  # a faint halo below it, magenta noise
-    img[28:30, 8:24] = (128, 128, 255, 1)  # and fainter, another noise colour
+    img[24:28, 8:24] = (255, 0, 255, 2)  # a faint halo below it, magenta noise (on the 255/2 grid)
+    img[28:30, 8:24] = (255, 255, 255, 1)  # and fainter, white (the only values alpha 1 can hold)
     img[8:24, 24:26] = (255, 255, 255, 40)  # a real anti-aliased rim: its colour is its own
+    img[8:24, 4:6] = (120, 40, 200, 3)  # off the 255/3 grid: a straight-alpha file's own colour
     p = prepare(img)
     assert tuple(p.rgb[26, 16]) == (200, 50, 50)
     assert tuple(p.rgb[29, 16]) == (200, 50, 50)
     assert tuple(p.rgb[16, 24]) == (255, 255, 255)
+    assert tuple(p.rgb[16, 4]) == (120, 40, 200), "a colour no unpremultiply could have made is kept"
     assert np.isclose(p.alpha[26, 16], 2 / 255) and np.isclose(p.alpha[29, 16], 1 / 255)
     assert np.isclose(p.features[26, 16, 3], 100 * 2 / 255, atol=1e-3)
+    # the grid at alpha 3 is 0, 85, 170, 255: a level of rounding either way still counts
+    img[8:24, 4:6] = (86, 169, 0, 3)
+    assert tuple(prepare(img).rgb[16, 4]) == (200, 50, 50)
