@@ -2701,10 +2701,173 @@ pub fn build_opt(
         crate::regularity::regularize(&mut lists, params.snap_axis_deg);
     }
 
+    // A ring that is a circle or a rectangle draws as that primitive: its
+    // arcs, and the neighbours that share them, carry the primitive's outline.
+    let mut whole = Boundary { arcs, padded, edge_arc, later_is_b: Vec::new(), rank: None };
+    imprint(&mut whole, params, &rect_arcs);
+    let Boundary { mut arcs, padded, edge_arc, .. } = whole;
+    timer.lap("topology: imprint");
+
     let later_is_b = bleed_arcs(&mut arcs, params, rank, BLEED, &underlay.see_through, &underlay.painted_by);
     timer.lap("topology: bleed");
 
     Boundary { arcs, padded, edge_arc, later_is_b, rank: rank.cloned() }
+}
+
+/// The whole-shape primitive `curves::fit_shape` would read a ring as, when
+/// it is one whose outline can be written back (an ellipse is not).
+fn whole_primitive(poly: &[P], params: &CurveParams) -> Option<Shape> {
+    let corners = crate::curves::find_corners(poly, params.corner_threshold);
+    if corners.is_empty() && poly.len() >= 8 {
+        let (circle, dev) = crate::curves::fit_circle(poly);
+        if let Shape::Circle { r, .. } = circle {
+            if dev <= params.tol && r > 1.0 {
+                return Some(circle);
+            }
+        }
+    }
+    if let Some(rect) = crate::curves::try_rect(poly, &corners, params) {
+        return Some(rect);
+    }
+    if corners.is_empty() {
+        return crate::curves::try_rounded_rect(poly, params);
+    }
+    None
+}
+
+fn seg_p0(s: &Segment) -> P {
+    match s {
+        Segment::Line { p0, .. } | Segment::Cubic { p0, .. } | Segment::Arc { p0, .. } => *p0,
+    }
+}
+
+fn seg_p1(s: &Segment) -> P {
+    match s {
+        Segment::Line { p1, .. } | Segment::Cubic { p1, .. } | Segment::Arc { p1, .. } => *p1,
+    }
+}
+
+fn set_p0(s: &mut Segment, q: P) {
+    match s {
+        Segment::Line { p0, .. } | Segment::Cubic { p0, .. } | Segment::Arc { p0, .. } => *p0 = q,
+    }
+}
+
+fn set_p1(s: &mut Segment, q: P) {
+    match s {
+        Segment::Line { p1, .. } | Segment::Cubic { p1, .. } | Segment::Arc { p1, .. } => *p1 = q,
+    }
+}
+
+fn dist2p(a: P, b: P) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+/// The primitive's outline from the point nearest e0 to the point nearest e1,
+/// the way round that passes nearest `mid`; and those two points
+/// (`topology._outline_between`).
+fn outline_between(shape: &Shape, e0: P, e1: P, mid: P) -> Option<(Vec<Segment>, P, P)> {
+    match shape {
+        Shape::Circle { cx, cy, r } => {
+            let c = [*cx, *cy];
+            let onto = |e: P| -> P {
+                let d = [e[0] - c[0], e[1] - c[1]];
+                let n = d[0].hypot(d[1]);
+                if n > 1e-9 { [c[0] + d[0] * (r / n), c[1] + d[1] * (r / n)] } else { [c[0] + r, c[1]] }
+            };
+            let (q0, q1) = (onto(e0), onto(e1));
+            let ang = |q: P| (q[1] - c[1]).atan2(q[0] - c[0]);
+            let (a0, a1, am) = (ang(q0), ang(q1), ang(mid));
+            let two_pi = 2.0 * std::f64::consts::PI;
+            let span = (a1 - a0).rem_euclid(two_pi);
+            let inside = (am - a0).rem_euclid(two_pi) < span;
+            let seg = if inside {
+                Segment::Arc { p0: q0, p1: q1, r: *r, large: span > std::f64::consts::PI, sweep: true }
+            } else {
+                let span = two_pi - span;
+                Segment::Arc { p0: q0, p1: q1, r: *r, large: span > std::f64::consts::PI, sweep: false }
+            };
+            Some((vec![seg], q0, q1))
+        }
+        Shape::Rect { x, y, w, h } | Shape::RoundedRect { x, y, w, h, .. } => {
+            let rx = if let Shape::RoundedRect { rx, .. } = shape { *rx } else { 0.0 };
+            let m = crate::rects::Model { x0: *x, y0: *y, x1: x + w, y1: y + h, r: [rx; 4], votes: [0.0; 4], gaps: [Vec::new(), Vec::new(), Vec::new(), Vec::new()] };
+            let total = crate::rects::perimeter(&m);
+            let (s0, _) = crate::rects::project(&m, e0);
+            let (s1, _) = crate::rects::project(&m, e1);
+            let (q0, q1) = (crate::rects::point_at(&m, s0), crate::rects::point_at(&m, s1));
+            let fwd = (s1 - s0).rem_euclid(total);
+            let back = (s0 - s1).rem_euclid(total);
+            let m_fwd = crate::rects::point_at(&m, s0 + 0.5 * fwd);
+            let m_back = crate::rects::point_at(&m, s1 + 0.5 * back);
+            let mut segs = if dist2p(m_fwd, mid) <= dist2p(m_back, mid) {
+                crate::rects::subpath(&m, s0, s1, false)
+            } else {
+                reverse_segments(&crate::rects::subpath(&m, s1, s0, false))
+            };
+            if let Some(first) = segs.first_mut() {
+                set_p0(first, q0);
+            }
+            if let Some(last) = segs.last_mut() {
+                set_p1(last, q1);
+            }
+            Some((segs, q0, q1))
+        }
+        _ => None,
+    }
+}
+
+/// Write every whole-shape primitive back into the arcs of its ring
+/// (`topology._imprint`, which says why). Returns the rings imprinted.
+pub fn imprint(bnd: &mut Boundary, params: &CurveParams, skip: &std::collections::HashSet<usize>) -> usize {
+    let mut labels: Vec<i32> = bnd.padded.data.iter().copied().filter(|v| *v != 0).collect();
+    labels.sort_unstable();
+    labels.dedup();
+    let mut done = 0usize;
+    for lab in labels {
+        let mut one = std::collections::HashSet::new();
+        one.insert(lab);
+        let rings = bnd.rings(&one);
+        if rings.len() != 1 {
+            continue;
+        }
+        let ring = &rings[0];
+        if ring.iter().any(|(idx, _)| skip.contains(idx)) || (ring.len() == 1 && bnd.arcs[ring[0].0].closed()) {
+            continue;
+        }
+        if ring.iter().any(|(idx, _)| bnd.arcs[*idx].segments.is_empty() || bnd.arcs[*idx].closed()) {
+            continue;
+        }
+        let Some(shape) = whole_primitive(&bnd.polyline(ring), params) else { continue };
+        let mut plan: Vec<(usize, Vec<Segment>, P, P, P, P)> = Vec::new();
+        let mut ok = true;
+        for (idx, _rev) in ring {
+            let arc = &bnd.arcs[*idx];
+            let e0 = seg_p0(&arc.segments[0]);
+            let e1 = seg_p1(&arc.segments[arc.segments.len() - 1]);
+            let mid = arc.pts[arc.pts.len() / 2];
+            match outline_between(&shape, e0, e1, mid) {
+                Some((segs, q0, q1)) if !segs.is_empty() && dist2p(q0, e0).max(dist2p(q1, e1)) <= params.tol => {
+                    plan.push((*idx, segs, e0, e1, q0, q1));
+                }
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok || plan.is_empty() {
+            continue;
+        }
+        let ring_arcs: std::collections::HashSet<usize> = plan.iter().map(|p| p.0).collect();
+        for (idx, segs, e0, e1, q0, q1) in plan {
+            rectify::move_node(&mut bnd.arcs, e0, q0, &ring_arcs);
+            rectify::move_node(&mut bnd.arcs, e1, q1, &ring_arcs);
+            bnd.arcs[idx].segments = segs;
+        }
+        done += 1;
+    }
+    done
 }
 
 /// Closed rings of directed lattice edges with `inside` always on the left.
@@ -2868,6 +3031,24 @@ impl Boundary {
     /// shape runs past the node, under the later ones), and a gap between two
     /// pieces (an arc too short to carry both its nodes) is bridged with a
     /// line. See the Python `Boundary.segments`.
+    /// Does any arc of the ring reach under a neighbour painted later? Then
+    /// the shape's drawn outline (`segments`) is not its fitted one, and a
+    /// primitive drawn in its place needs that bled outline beneath it.
+    pub fn bleeds(&self, ring: &[(usize, bool)], member: Option<&std::collections::HashSet<i32>>) -> bool {
+        let rank_of = |lab: i32| -> i64 { self.rank.as_ref().and_then(|r| r.get(&lab)).map_or(-1, |v| *v as i64) };
+        let own: Option<i64> = match member {
+            Some(m) if !m.is_empty() && self.rank.is_some() => m.iter().map(|x| rank_of(*x)).min(),
+            _ => None,
+        };
+        let Some(member) = member else { return false };
+        ring.iter().any(|(idx, _)| {
+            let arc = &self.arcs[*idx];
+            !arc.under.is_empty()
+                && !arc.under_into.is_some_and(|u| member.contains(&u))
+                && own.is_none_or(|o| arc.under_into.map_or(-1, rank_of) > o)
+        })
+    }
+
     pub fn segments(&self, ring: &[(usize, bool)], member: Option<&std::collections::HashSet<i32>>) -> Vec<Segment> {
         let rank_of = |lab: i32| -> i64 { self.rank.as_ref().and_then(|r| r.get(&lab)).map_or(-1, |v| *v as i64) };
         let own: Option<i64> = match member {

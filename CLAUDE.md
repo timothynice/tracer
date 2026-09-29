@@ -84,6 +84,17 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   that carries a filter is written in full: a filter on a `<use>` applies in
   the use's own user space, which its x and y shift, so a filter region in
   the file's units moves with the copy and clips it.
+- A ring that is a circle or a rectangle draws as that primitive, and its
+  arcs carry the primitive's outline (`topology._imprint`, after the fit and
+  the regularity snap, before the bleed): the nodes move onto it and every arc
+  meeting them follows, so the neighbours draw the same curve. Left as the
+  arcs' own fits they sat a quarter pixel off a circle and a few hundredths off
+  a rect's side, and where the primitive was painted first the two
+  anti-aliased edges left a hairline (a ring of seam round a disc, a line
+  between every two tiles). A primitive painted before a neighbour keeps its
+  bled outline beneath it (`Boundary.bleeds`), as any shape reaches under a
+  later one. A node the primitive would move by more than the tolerance
+  vetoes the ring; ellipses are not written back.
 - `upsample` (default `auto`): an input of at most 192 px whose own direct
   trace has a region thinner than 2.2 px (2·area/perimeter over the label map
   handed to topology) is traced again at 2× through a Lanczos-3 upsample and

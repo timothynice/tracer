@@ -50,6 +50,7 @@ from studi0trace.engines.vexel.curves import (
     CORNER_REACH,
     MERGE_DEG,
     CircArc,
+    Circle,
     Cubic,
     CurveParams,
     Line,
@@ -58,8 +59,13 @@ from studi0trace.engines.vexel.curves import (
     Segment,
     arc_points,
     corners_from_runs,
+    find_corners,
+    fit_circle,
     fit_stretch,
     line_runs,
+    reverse_segments,
+    try_rect,
+    try_rounded_rect,
     merge_lines,
     _intersect,
     _bezier,
@@ -267,6 +273,18 @@ class Boundary:
         if len(ring) == 1:
             return self.arcs[ring[0][0]].rect
         return None
+
+    def bleeds(self, ring: list[tuple[int, bool]], member: frozenset[int] | None) -> bool:
+        """Does any arc of the ring reach under a neighbour painted later? Then
+        the shape's drawn outline (`segments`) is not its fitted one, and a
+        primitive drawn in its place needs that bled outline beneath it."""
+        own = min(self.rank.get(m, -1) for m in member) if member and self.rank is not None else None
+        for idx, _reverse in ring:
+            arc = self.arcs[idx]
+            if member is not None and arc.under and arc.under_into not in member:
+                if own is None or self.rank.get(arc.under_into, -1) > own:
+                    return True
+        return False
 
     def polyline(self, ring: list[tuple[int, bool]]) -> np.ndarray:
         """The ring's sub-pixel polyline, for whole-shape primitive fitting."""
@@ -1602,6 +1620,9 @@ def build(
     # Across the graph: lines meant to be parallel, perpendicular or on an axis
     # are made exactly so. Nodes never move, so the ring still closes.
     regularize([(arc.segments, arc.closed) for arc in arcs], params.snap_axis_deg)
+    # A ring that is a circle or a rectangle draws as that primitive: its
+    # arcs, and the neighbours that share them, carry the primitive's outline.
+    _imprint(whole, params, rect_arcs)
 
     later_is_b = _bleed_arcs(arcs, params, rank, bleed, see_through, painted_by)
     return Boundary(arcs=arcs, padded=padded, edge_arc=edge_arc, _later_is_b=later_is_b, rank=rank)
@@ -2698,6 +2719,117 @@ def _resample_corner(arc: Arc, x: np.ndarray, da: np.ndarray, db: np.ndarray, t1
 def _fillet_holds(pts: np.ndarray, x: np.ndarray, da: np.ndarray, db: np.ndarray, r: float, p95: float, worst: float) -> bool:
     d = rects.fillet_dist(pts, x, da, db, r)
     return float(np.percentile(d, 95)) <= p95 and float(d.max()) <= worst
+
+
+def _whole_primitive(poly: np.ndarray, params: CurveParams) -> Circle | Rect | RoundedRect | None:
+    """The whole-shape primitive `curves.fit_shape` would read a ring as, when
+    it is one whose outline this module can write back (an ellipse is not)."""
+    corners = find_corners(poly, params.corner_threshold)
+    if not corners and len(poly) >= 8:
+        circle, dev = fit_circle(poly)
+        if dev <= params.tol and circle.r > 1.0:
+            return circle
+    rect = try_rect(poly, corners, params)
+    if rect is not None:
+        return rect
+    if not corners:
+        return try_rounded_rect(poly, params)
+    return None
+
+
+def _rect_model(shape: Rect | RoundedRect) -> rects.Model:
+    rx = float(getattr(shape, "rx", 0.0))
+    return rects.Model(shape.x, shape.y, shape.x + shape.w, shape.y + shape.h, [rx] * 4, [0.0] * 4, [np.zeros(0, np.int64)] * 4)
+
+
+def _outline_between(shape: Circle | Rect | RoundedRect, e0: np.ndarray, e1: np.ndarray, mid: np.ndarray
+                     ) -> tuple[list[Segment], np.ndarray, np.ndarray]:
+    """The primitive's outline from the point nearest e0 to the point nearest
+    e1, the way round that passes nearest `mid`; and those two points."""
+    if isinstance(shape, Circle):
+        c = np.array([shape.cx, shape.cy])
+        def onto(e: np.ndarray) -> np.ndarray:
+            d = e - c
+            n = float(np.hypot(*d))
+            return c + d * (shape.r / n) if n > 1e-9 else c + np.array([shape.r, 0.0])
+        q0, q1 = onto(e0), onto(e1)
+        a0, a1, am = (math.atan2(float(q[1] - c[1]), float(q[0] - c[0])) for q in (q0, q1, mid))
+        span = (a1 - a0) % (2.0 * math.pi)  # the sweep in SVG's positive direction
+        inside = (am - a0) % (2.0 * math.pi) < span
+        if inside:
+            return [CircArc(q0.copy(), q1.copy(), float(shape.r), span > math.pi, True)], q0, q1
+        span = 2.0 * math.pi - span
+        return [CircArc(q0.copy(), q1.copy(), float(shape.r), span > math.pi, False)], q0, q1
+    m = _rect_model(shape)
+    total = rects.perimeter(m)
+    s0, _ = rects.project(m, e0)
+    s1, _ = rects.project(m, e1)
+    q0, q1 = rects.point_at(m, s0), rects.point_at(m, s1)
+    fwd = (s1 - s0) % total
+    back = (s0 - s1) % total
+    m_fwd = rects.point_at(m, s0 + 0.5 * fwd)
+    m_back = rects.point_at(m, s1 + 0.5 * back)
+    if float(np.linalg.norm(m_fwd - mid)) <= float(np.linalg.norm(m_back - mid)):
+        segs = rects.subpath(m, s0, s1)
+    else:
+        segs = reverse_segments(rects.subpath(m, s1, s0))
+    if segs:
+        segs[0].p0 = q0.copy()
+        segs[-1].p1 = q1.copy()
+    return segs, q0, q1
+
+
+def _imprint(bnd: Boundary, params: CurveParams, skip: set[int]) -> int:
+    """Write every whole-shape primitive back into the arcs of its ring.
+
+    A ring `curves.fit_shape` reads as a circle or a rectangle is drawn as that
+    primitive, exact numbers and all; its neighbours, sharing the ring's arcs,
+    drew the arcs' own fits, a quarter pixel off a circle and a few hundredths
+    off a rectangle's side, and where the primitive was painted first the two
+    anti-aliased edges disagreed into a hairline of backdrop (sixteen tiles and
+    a disc: a ring of seam round the disc, a line between every two tiles). So
+    the primitive's outline goes into the ring's arcs between their nodes, the
+    nodes onto it, and every arc meeting those nodes follows: one curve on both
+    sides, as with everything else in the graph. Rings `_rectify` made
+    rectangles (`skip`) carry theirs already; a ring that is one closed arc has
+    no node to disagree at and its container's bleed lies under it. A node the
+    primitive would move by more than the tolerance vetoes the ring: the
+    primitive is then a claim the placed outline does not support.
+    Returns the number of rings imprinted."""
+    labels = [int(v) for v in np.unique(bnd.padded) if v != 0]
+    done = 0
+    for lab in labels:
+        rings = bnd.rings(frozenset({lab}))
+        if len(rings) != 1:
+            continue
+        ring = rings[0]
+        if any(idx in skip for idx, _r in ring) or (len(ring) == 1 and bnd.arcs[ring[0][0]].closed):
+            continue
+        if any(not bnd.arcs[idx].segments or bnd.arcs[idx].closed for idx, _r in ring):
+            continue
+        shape = _whole_primitive(bnd.polyline(ring), params)
+        if shape is None:
+            continue
+        plan = []
+        for idx, rev in ring:
+            arc = bnd.arcs[idx]
+            e0, e1 = arc.segments[0].p0, arc.segments[-1].p1
+            mid = arc.pts[len(arc.pts) // 2]
+            segs, q0, q1 = _outline_between(shape, e0, e1, mid)
+            if not segs or max(float(np.linalg.norm(q0 - e0)), float(np.linalg.norm(q1 - e1))) > params.tol:
+                plan = []
+                break
+            plan.append((idx, segs, e0.copy(), e1.copy(), q0, q1))
+        if not plan:
+            continue
+        ring_arcs = {idx for idx, *_rest in plan}
+        for idx, segs, e0, e1, q0, q1 in plan:
+            arc = bnd.arcs[idx]
+            _move_node(bnd.arcs, e0, q0, ring_arcs)
+            _move_node(bnd.arcs, e1, q1, ring_arcs)
+            arc.segments = segs
+        done += 1
+    return done
 
 
 def _move_node(arcs: list[Arc], p: np.ndarray, q: np.ndarray, keep: set[int]) -> None:

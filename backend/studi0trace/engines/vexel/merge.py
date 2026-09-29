@@ -75,7 +75,7 @@ def ridge_pairs(labels: np.ndarray, grad: np.ndarray) -> dict[tuple[int, int], i
     from studi0trace.engines.vexel.partition import NECK_REACH, NECK_RIDGE
 
     h, w = labels.shape
-    g = grad
+    g = grad.astype(np.float64)  # the Rust reads the discontinuity in f64; a float32 product flips ties
     keys, hits = [], []
     for axis in (1, 0):
         la, lb = (labels[:, :-1], labels[:, 1:]) if axis == 1 else (labels[:-1, :], labels[1:, :])

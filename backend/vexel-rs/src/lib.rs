@@ -350,6 +350,15 @@ mod python {
         partition::initial_labels(&grad, &prep.features, min_region, 1.5, detail).data
     }
 
+    /// The partition merged, as `engine` merges it: the labels `labels_merge` dumps.
+    #[pyfunction]
+    fn _stage_merge(rgba: Vec<u8>, h: usize, w: usize, min_region: usize, detail: f64) -> Vec<i32> {
+        let prep = prepare::prepare(&rgba, h, w);
+        let grad = partition::discontinuity(&prep.features, 0.7);
+        let labels0 = partition::initial_labels(&grad, &prep.features, min_region, 1.5, detail);
+        merge::merge_regions(&labels0, &prep.features, merge::MergeParams { detail, gradients: true, edge_veto: 0.6 }, Some(&grad)).data
+    }
+
     /// The fills every stage hook needs, fitted the way `engine` fits them.
     fn _fills_for(
         prep: &prepare::Prepared,
@@ -808,6 +817,7 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_features, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_rgb, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_labels0, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_merge, m)?)?;
     m.add_function(wrap_pyfunction!(_stage_upsample, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_rects, m)?)?;

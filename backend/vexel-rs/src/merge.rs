@@ -252,6 +252,7 @@ pub fn merge_regions(labels: &Labels, features: &Image, params: MergeParams, gra
         }
         st.add_into(a, b);
         cost[a] = stats::region_cost(st.row(a), n_ch, mu, params.gradients).0;
+        floor[a] = floor[a].max(floor[b]);
         alive[b] = false;
         parent[b] = a;
         version[a] += 1;

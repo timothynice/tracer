@@ -66,6 +66,38 @@ def rgba(png: bytes) -> np.ndarray:
 A_FEW_SUBPIXELS_PPM = 200.0
 
 
+TILES = Path(__file__).resolve().parents[1] / "bench" / "corpus" / "synthetic" / "flat" / "low-contrast-512.png"
+TILES_TRUTH = TILES.with_name("low-contrast.svg")
+
+
+@pytest.mark.skipif(not TILES.exists(), reason="bench corpus not present")
+@pytest.mark.parametrize("backend", ["python", "rust"])
+def test_primitives_tile_with_their_neighbours(backend, monkeypatch):
+    """Sixteen flat tiles and a disc, every one a whole-shape primitive. The
+    rects and the circle are drawn as primitives, exact numbers and all; their
+    neighbours share the rings' arcs and drew the arcs' own fits, a quarter
+    pixel off the circle, a few hundredths off a rect's side, and where a
+    primitive was painted first the two anti-aliased edges left a hairline
+    (a ring of seam round the disc, a line between every two tiles, and the
+    truth-outline metric read every hairline as an outline 44 px from any
+    edge). `topology._imprint` writes the primitive back into its ring's arcs,
+    nodes and all, and a primitive painted before a neighbour keeps its bled
+    outline beneath it."""
+    from studi0trace.engines.vexel import engine as vexel
+    from bench.geometry import outline_error
+
+    if backend == "rust" and vexel._vexel_rs is None:
+        pytest.skip("the vexel_rs extension is not built")
+    monkeypatch.setenv("VEXEL_BACKEND", backend)
+    png = TILES.read_bytes()
+    svg = VexelEngine().trace(load_upload(png, max_bytes=1 << 30, max_pixels=1 << 30), VexelParams()).svg
+    seam = seam_index(svg, rgba(png))
+    assert seam < A_FEW_SUBPIXELS_PPM, f"{seam:.0f} ppm of the tiles is not painted"
+    out = outline_error(TILES_TRUTH.read_text(), svg, 512, 512)
+    assert out["outline_px"] < 0.05, out
+    assert svg.count("<circle") == 1, svg[:300]
+
+
 @pytest.mark.parametrize("tolerance", [0.1, 0.4, 1.0, 2.0])
 def test_shapes_tile_at_every_curve_tolerance(tolerance):
     """The defect this stage was built for, at both ends of the knob.

@@ -60,6 +60,7 @@ TOLERANCE = {
     "features": ("max", 1e-4, 0.0),
     "grad": ("max", 1e-4, 0.0),
     "labels0": ("max", 0.0, 0.002),
+    "merge": ("max", 0.0, 0.002),
     "fills": ("rms", 1.0, 0.0),
     # `rms` for the boundary graph, for the same reason as the fills: the two
     # are compared by the curve they describe, not vertex by vertex. Which arcs
@@ -236,6 +237,21 @@ def labels0(path):
     prep = prepare(a)
     py = initial_labels(discontinuity(prep.features), prep.features, min_region=6)
     rs = np.asarray(vexel_rs._stage_labels0(a.tobytes(), h, w, 6), dtype=np.int32).reshape(h, w)
+    return py.astype(np.int32), rs
+
+
+@stage
+def merge(path):
+    """The partition merged, at the default preset's detail: the crisp-edge
+    veto and the ridge share it reads are decisions taken at thresholds, and
+    the per-stage contract has to hold them alike in both engines."""
+    a = load(path)
+    h, w = a.shape[:2]
+    prep = prepare(a)
+    grad = discontinuity(prep.features)
+    labels0 = initial_labels(grad, prep.features, min_region=6, detail=6.0)
+    py = merge_regions(labels0, prep.features, MergeParams(detail=6.0, gradients=True), grad)
+    rs = np.asarray(vexel_rs._stage_merge(a.tobytes(), h, w, 6, 6.0), dtype=np.int32).reshape(h, w)
     return py.astype(np.int32), rs
 
 

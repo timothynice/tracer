@@ -748,7 +748,16 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
 
         refine_render.refine(bnd.arcs, neighbours, rgba)
 
-    pending: list[tuple[Shape, str] | str] = [rec if isinstance(rec, str) else (shape_of(rec), rec.attrs) for rec in records]
+    pending: list[tuple[Shape, str] | str] = []
+    for rec in records:
+        if isinstance(rec, str):
+            pending.append(rec)
+            continue
+        if rec.primitive is not None and bnd.bleeds(rec.rings[0], rec.member):
+            # A primitive painted before a neighbour reaches under it as any
+            # shape does: its bled outline goes beneath the exact primitive.
+            pending.append((PathShape(contours=[bnd.segments(rec.rings[0], rec.member)]), rec.attrs))
+        pending.append((shape_of(rec), rec.attrs))
     elements = _emit(pending, p.path_precision, defs)
     body = f"<defs>{''.join(defs)}</defs>" if defs else ""
     return f'<svg {SVG_NS} viewBox="0 0 {width} {height}">{body}{"".join(elements)}</svg>'

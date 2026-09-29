@@ -1073,13 +1073,21 @@ fn emit(
         let owned: Vec<crate::refine_render::Rec> = records.iter().map(|r| crate::refine_render::Rec { member: r.member.clone(), primitive: r.primitive.clone(), rings: r.rings.clone(), fill: r.fill.clone(), attrs: r.attrs.clone(), filtered: r.filtered }).collect();
         crate::refine_render::refine(&mut bnd, &owned, src, height, width, p.path_precision, 3, 0.1);
     }
-    let pending: Vec<Result<(Shape, String), String>> = items
-        .iter()
-        .map(|it| match it {
-            Err(markup) => Err(markup.clone()),
-            Ok(rec) => Ok((crate::refine_render::shape_of(&bnd, rec), rec.attrs.clone())),
-        })
-        .collect();
+    let mut pending: Vec<Result<(Shape, String), String>> = Vec::with_capacity(items.len());
+    for it in &items {
+        match it {
+            Err(markup) => pending.push(Err(markup.clone())),
+            Ok(rec) => {
+                if rec.primitive.is_some() && bnd.bleeds(&rec.rings[0], Some(&rec.member)) {
+                    // A primitive painted before a neighbour reaches under it as
+                    // any shape does: its bled outline goes beneath the exact
+                    // primitive. See the Python.
+                    pending.push(Ok((Shape::Path { contours: vec![bnd.segments(&rec.rings[0], Some(&rec.member))] }, rec.attrs.clone())));
+                }
+                pending.push(Ok((crate::refine_render::shape_of(&bnd, rec), rec.attrs.clone())));
+            }
+        }
+    }
     let shapes: Vec<(Shape, String)> = pending.iter().filter_map(|it| it.as_ref().ok().cloned()).collect();
     let mut timer = crate::timing::Timer::new();
     let (use_defs, use_elements) = crate::reuse::emit(&shapes, p.path_precision, 1);
