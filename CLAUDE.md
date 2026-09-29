@@ -146,13 +146,16 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   scored a line half a pixel off the lattice at the 0.2 gate whichever way
   the tie-break fell. `tools/diffcheck.py strokes` compares the two per thin
   group.
-- A pixel's stored colour is believed only from 8-bit alpha 32 up (straight
-  alpha quantises it to ±128/alpha levels; a resampled asset rings every edge
-  with alpha 1–15 noise): `prepare.inpaint_transparent` gives every pixel
-  below `INPAINT_ALPHA` the colour of the nearest pixel at or above it, and
-  `upsample2x` inpaints the same way before it resamples, since its channels
-  are straight and the black under transparency would otherwise be mixed into
-  every edge at 2×. Inpainted from noise, the transparent field carried seams
+- A pixel's stored colour is noise below 8-bit alpha 32 (straight alpha
+  quantises it to ±128/alpha levels; a resampled asset rings every edge with
+  alpha 1–15 noise), so the transparent field is never inpainted from it as
+  it stands: `prepare.inpaint_transparent` reads such a source through
+  `settle_rim`, the alpha-weighted mean of its 5×5 neighbourhood (the ink
+  beside an edge, a faint field's own colour in a halo), and visible pixels
+  keep the colour they have — settling them too moved a shadow's halo to its
+  caster's colour. `upsample2x` inpaints the same way before it resamples,
+  since its channels are straight and the black under transparency would be
+  mixed into every edge at 2×. Inpainted from noise, the field carried seams
   the partition read as edges: a serrated triangle, a ring in 39 fragments.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and

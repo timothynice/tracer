@@ -13,7 +13,7 @@ pub const ALPHA_FEATURE_SCALE: f64 = 100.0;
 pub const INPAINT_ALPHA: u8 = 32;
 
 pub struct Prepared {
-    /// (H, W, 3) 0..255, inpainted below INPAINT_ALPHA
+    /// (H, W, 3) 0..255, inpainted where alpha == 0
     pub rgb: Image,
     /// (H, W) 0..1
     pub alpha: Grid<f64>,
@@ -21,35 +21,77 @@ pub struct Prepared {
     pub features: Image,
 }
 
-/// Replace the RGB of every pixel below INPAINT_ALPHA with the colour of the
-/// nearest pixel at or above it. PNG encoders store arbitrary (often black)
-/// RGB under transparent pixels, and a nearly transparent pixel's colour is
-/// quantisation noise (G=255 at alpha 1 beside a green ink): inpainted from
-/// those, the transparent field carried seams the partition read as edges.
-/// An image with nothing at INPAINT_ALPHA is inpainted from whatever has
-/// alpha at all, as before.
-pub(crate) fn inpaint_transparent(rgb: &mut Image, h: usize, w: usize, alpha8: &[u8]) {
-    let n = h * w;
-    let mut sources = Grid { h, w, data: alpha8.iter().map(|a| *a >= INPAINT_ALPHA).collect() };
-    if !sources.any() {
-        sources = Grid { h, w, data: alpha8.iter().map(|a| *a > 0).collect() };
+/// px; the neighbourhood whose alpha-weighted mean colour a pixel below
+/// INPAINT_ALPHA is read as (`settle_rim`; the Python's `prepare.RIM_REACH`).
+pub const RIM_REACH: usize = 2;
+
+/// The colour of every pixel below INPAINT_ALPHA as the alpha-weighted mean of
+/// the (2·RIM_REACH+1)² neighbourhood round it — the premultiplied colour of
+/// the neighbourhood over its alpha: beside an ink it is the ink, in a faint
+/// field it is the field's own colour. Other pixels are returned as they are.
+/// The sums run one offset at a time in raster order, as the Python adds them.
+fn settle_rim(rgb: &Image, h: usize, w: usize, alpha8: &[u8]) -> Image {
+    let mut out = Image::new(h, w, 3);
+    out.data.copy_from_slice(&rgb.data);
+    let r = RIM_REACH as isize;
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            if alpha8[i] == 0 || alpha8[i] >= INPAINT_ALPHA {
+                continue;
+            }
+            let mut mass = 0.0f64;
+            let mut premul = [0.0f64; 3];
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let (yy, xx) = (y as isize + dy, x as isize + dx);
+                    if yy < 0 || xx < 0 || yy >= h as isize || xx >= w as isize {
+                        continue;
+                    }
+                    let j = yy as usize * w + xx as usize;
+                    let a = alpha8[j] as f64;
+                    mass += a;
+                    for ch in 0..3 {
+                        premul[ch] += a * rgb.data[j * 3 + ch];
+                    }
+                }
+            }
+            if mass > 0.0 {
+                for ch in 0..3 {
+                    out.data[i * 3 + ch] = premul[ch] / mass;
+                }
+            }
+        }
     }
-    let n_src = sources.count();
-    if n_src == 0 || n_src == n {
+    out
+}
+
+/// Replace RGB under alpha == 0 with the nearest visible pixel's colour — that
+/// pixel's settled colour (`settle_rim`) where its alpha is below
+/// INPAINT_ALPHA. PNG encoders store arbitrary (often black) RGB under
+/// transparent pixels, and a resampled edge's nearly transparent pixels carry
+/// quantisation noise (G=255 at alpha 1 beside a green ink): inpainted from
+/// those as they are, the transparent field carried seams the partition read
+/// as edges. Visible pixels keep the colour they have. `round_f32` rounds the
+/// inpainted colour to float32 as the Python's `prepare` keeps its rgb.
+pub(crate) fn inpaint_transparent(rgb: &mut Image, h: usize, w: usize, alpha8: &[u8], round_f32: bool) {
+    let n = h * w;
+    let invisible = Grid { h, w, data: alpha8.iter().map(|a| *a == 0).collect() };
+    let n_inv = invisible.count();
+    if n_inv == 0 || n_inv == n {
         return;
     }
-    let targets = sources.not();
-    let (_, src_r, src_c) = edt_sq_indices(&targets);
-    let src: Vec<usize> = (0..n)
-        .map(|i| src_r.data[i] as usize * w + src_c.data[i] as usize)
-        .collect();
-    let snapshot = rgb.data.clone();
+    let settled = settle_rim(rgb, h, w, alpha8);
+    let (_, src_r, src_c) = edt_sq_indices(&invisible);
     for i in 0..n {
-        if !targets.data[i] {
+        if !invisible.data[i] {
             continue;
         }
-        let s = src[i];
-        rgb.data[i * 3..i * 3 + 3].copy_from_slice(&snapshot[s * 3..s * 3 + 3]);
+        let s = src_r.data[i] as usize * w + src_c.data[i] as usize;
+        for ch in 0..3 {
+            let v = settled.data[s * 3 + ch];
+            rgb.data[i * 3 + ch] = if round_f32 { (v as f32) as f64 } else { v };
+        }
     }
 }
 
@@ -74,7 +116,7 @@ pub fn prepare(rgba: &[u8], h: usize, w: usize) -> Prepared {
         alpha8[i] = rgba[i * 4 + 3];
         alpha.data[i] = (rgba[i * 4 + 3] as f32 / 255.0) as f64;
     }
-    inpaint_transparent(&mut rgb, h, w, &alpha8);
+    inpaint_transparent(&mut rgb, h, w, &alpha8, true);
 
     let mut features = Image::new(h, w, 4);
     for i in 0..n {

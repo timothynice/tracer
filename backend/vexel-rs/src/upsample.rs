@@ -56,7 +56,7 @@ pub fn upsample2x(rgba: &[u8], h: usize, w: usize) -> Vec<u8> {
         rgb.data[i * 3..i * 3 + 3].copy_from_slice(&a[i * 4..i * 4 + 3]);
         alpha8[i] = rgba[i * 4 + 3];
     }
-    inpaint_transparent(&mut rgb, h, w, &alpha8);
+    inpaint_transparent(&mut rgb, h, w, &alpha8, false);
     for i in 0..h * w {
         a[i * 4..i * 4 + 3].copy_from_slice(&rgb.data[i * 3..i * 3 + 3]);
     }

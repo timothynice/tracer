@@ -78,9 +78,18 @@ def test_inpainting_ignores_the_colour_of_nearly_transparent_pixels():
     rim = ((xs == 7) | (xs == 24) | (ys == 7) | (ys == 24)) & (xs >= 7) & (xs <= 24) & (ys >= 7) & (ys <= 24)
     img[rim] = (255, 0, 255, 2)  # un-premultiplication garbage at alpha 2
     p = prepare(img)
-    assert tuple(p.rgb[0, 0]) == (200, 50, 50), "the transparent field is inpainted from the square, not the rim"
-    assert tuple(p.rgb[7, 12]) == (200, 50, 50), "a noise pixel's colour is replaced too"
-    assert p.alpha[7, 12] == np.float32(2 / 255), "its alpha is kept"
+    assert np.abs(p.rgb[0, 0] - (200, 50, 50)).max() < 2, "the transparent field is inpainted from the square, not the rim"
+    assert np.abs(p.rgb[7, 0] - (200, 50, 50)).max() < 2, "even where the rim is the nearest visible pixel"
+    assert tuple(p.rgb[7, 12]) == (255, 0, 255), "a visible pixel keeps the colour it has"
+    assert p.alpha[7, 12] == np.float32(2 / 255)
+    # a faint field keeps its own colour: a shadow's halo is black however
+    # near the red caster, and the transparent canvas beyond it is black too
+    halo = rgba(color=(0, 0, 0, 0))
+    halo[8:24, 8:24] = (220, 40, 40, 255)
+    halo[24:30, 8:24] = (0, 0, 0, 6)
+    q = prepare(halo)
+    assert np.abs(q.rgb[28, 16]).max() < 1, "the halo's own black stands"
+    assert np.abs(q.rgb[31, 16]).max() < 1, "and the canvas beyond it is inpainted from the halo"
     # a genuinely translucent shape keeps its own colour: nothing above it to inpaint from
     soft = rgba(color=(0, 0, 0, 0))
     soft[8:24, 8:24] = (10, 20, 30, 40)

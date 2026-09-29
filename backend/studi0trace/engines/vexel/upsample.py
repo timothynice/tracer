@@ -59,8 +59,8 @@ def upsample2x(rgba: np.ndarray) -> np.ndarray:
     pixels at 2× ran from pink to dark pink with their alpha (a colour spread
     of 29 levels among the pixels the field is then inpainted from, against
     1), and the seams of that spread cut the transparent field into 300
-    regions. The RGB below INPAINT_ALPHA is inpainted first, so ink mixes
-    with ink."""
+    regions. The field is inpainted first (`prepare.inpaint_transparent`),
+    so ink mixes with ink."""
     a = rgba.astype(np.float64)
     a[..., :3] = inpaint_transparent(a[..., :3], rgba[..., 3])
     a = _pass(a)                          # rows
