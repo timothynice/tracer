@@ -133,7 +133,7 @@ pub fn gaussian_kernel(sigma: f64) -> Vec<f64> {
 
 /// numpy's pairwise summation (`DOUBLE_pairwise_sum`, block size 128), which is
 /// what `ndarray.sum` does for a contiguous float64 array.
-fn pairwise_sum(a: &[f64]) -> f64 {
+pub(crate) fn pairwise_sum(a: &[f64]) -> f64 {
     let n = a.len();
     if n < 8 {
         let mut res = 0.0;

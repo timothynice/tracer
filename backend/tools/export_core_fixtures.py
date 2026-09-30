@@ -1052,6 +1052,231 @@ def _drawing() -> None:
     write("drawing", {"files": files, "cases": cases, "paths": paths, "prefixes": prefixes})
 
 
+@exporter("holes")
+def _holes() -> None:
+    import hashlib
+    import re
+
+    import numpy as np
+    from PIL import Image
+    from scipy import ndimage
+
+    from studi0trace.imaging import quality
+
+    # quality.holes and the opaque mask of quality.Reference. A trace of a corpus item is usually
+    # clean, and zero holes agreeing with zero holes proves nothing, so most of the cases are made:
+    # tiny sources and SVGs that leave real holes, of every kind the count tells apart, at scales
+    # 1 to 4. Only the alpha of a source is read; its colour is random so that a port reading the
+    # wrong channel fails.
+    rng = np.random.default_rng(10)
+    ns = 'xmlns="http://www.w3.org/2000/svg"'
+
+    def pack(mask: np.ndarray) -> str:
+        return "".join("1" if v else "0" for v in mask.ravel())
+
+    def opaque_of(rgba: np.ndarray) -> np.ndarray:
+        # quality.Reference.__init__'s two lines: a Reference of a source under 8 px a side cannot
+        # be built (its Canny has no room), so those take the expression itself.
+        if min(rgba.shape[:2]) >= 8:
+            return quality.Reference(rgba).opaque
+        a_src = rgba[..., 3].astype(np.float32) / 255.0
+        return ndimage.binary_erosion(a_src >= 0.99, structure=np.ones((3, 3), bool), border_value=0)
+
+    def plain(card: dict) -> dict:
+        return {"hole_subpx": int(card["hole_subpx"]), "hole_px": float(card["hole_px"]),
+                "hole_clusters": int(card["hole_clusters"]), "pinholes": int(card["pinholes"]),
+                "_clusters": [{"x": float(c["x"]), "y": float(c["y"]), "subpx": int(c["subpx"]),
+                               "min_cover": float(c["min_cover"]), "deficit_px": float(c["deficit_px"]),
+                               "pinhole": bool(c["pinhole"])} for c in card["_clusters"]]}
+
+    def svg(w: int, h: int, body: str) -> str:
+        return f'<svg {ns} viewBox="0 0 {w} {h}">{body}</svg>'
+
+    def box(x, y, w, h) -> str:
+        return f"M{x} {y}h{w}v{h}h-{w}z"
+
+    def ball(cx, cy, r) -> str:
+        return f"M{cx - r} {cy}a{r} {r} 0 1 0 {2 * r} 0a{r} {r} 0 1 0 {-2 * r} 0z"
+
+    def with_holes(w: int, h: int, holes: list[str], fill: str = "#345") -> str:
+        """A slab over the whole canvas with `holes` (subpaths) cut out of it."""
+        return f'<path fill-rule="evenodd" fill="{fill}" d="{box(0, 0, w, h)}{"".join(holes)}"/>'
+
+    def paint(shape: str, opacity: float) -> str:
+        return f'<path d="{shape}" fill="#a31" fill-opacity="{opacity}"/>'
+
+    def pitted(w: int, h: int, fill: str) -> str:
+        """The background rect of a trace, cut through in 80 places by holes of 0.3 to 6 px, some painted over at 0.3 to 0.93."""
+        holes, overlays = [], []
+        for i in range(80):
+            size = rng.uniform(0.3, 6.0, 2).round(2)
+            x, y = (rng.uniform(0, 1, 2) * (np.array([w, h]) - size)).round(2)
+            holes.append(box(x, y, size[0], size[1]) if i % 3 else ball(x + size[0] / 2, y + size[0] / 2, size[0] / 2))
+            if i % 3 == 1:
+                overlays.append(paint(holes[-1], round(float(rng.uniform(0.3, 0.93)), 2)))
+        return with_holes(w, h, holes, fill) + "".join(overlays)
+
+    # -- the corpus items, traced; and the same traces with the background left out or pitted, which opens real holes
+    traced = []
+    for rel in ("real/logo/vexel-wordmark-512.png", "synthetic/shadow/glow-128.png"):
+        stem = Path(rel).stem
+        text = (OUT / f"render_{stem}.svg").read_text(encoding="utf-8")
+        rgba = np.asarray(Image.open(ROOT / "backend/bench/corpus" / rel).convert("RGBA"))
+        opaque = opaque_of(rgba)
+        shapes = list(re.finditer(r"<(?:rect|path|circle)\b[^>]*/>", text))
+        bg = shapes[0]  # the background rect, drawn first: everything else is on top of it
+        w, h = rgba.shape[1], rgba.shape[0]
+        fill = re.search(r'fill="([^"]*)"', bg.group(0)).group(1)
+        variants = [("trace", text),
+                    ("without the background", text[:bg.start()] + text[bg.end():]),
+                    ("pitted background", text[:bg.start()] + pitted(w, h, fill) + text[bg.end():])]
+        for name, variant in variants:
+            for scale in (4, 2):
+                card = plain(quality.holes(variant, rgba, scale))
+                traced.append({"stem": stem, "source": f"bench/corpus/{rel}", "variant": name, "svg": variant,
+                               "scale": scale, "opaque_count": int(opaque.sum()),
+                               "opaque_sha256": hashlib.sha256(opaque.astype(np.uint8).tobytes()).hexdigest(),
+                               "card": card})
+
+    # -- made sources (RGBA, random colour; hex)
+    def make(alpha: np.ndarray) -> np.ndarray:
+        rgba = rng.integers(0, 256, (*alpha.shape, 4), dtype=np.uint8)
+        rgba[..., 3] = alpha
+        return rgba
+
+    yy, xx = np.mgrid[0:24, 0:32]
+    rr = np.hypot(xx + 0.5 - 16, yy + 0.5 - 12)
+    disc = np.where(rr < 10, 255, np.where(rr < 11.5, 128, 0)).astype(np.uint8)
+    slab = np.full((18, 24), 255, np.uint8)
+    slab[:, 6:8] = 252       # just under the opaque threshold, and so is what its neighbours lose to erosion
+    slab[11:13, :] = 253     # just over it
+    slab[2:4, 14:18] = 128
+    sources = {
+        "solid": make(np.full((14, 20), 255, np.uint8)),
+        "solid6": make(np.full((6, 6), 255, np.uint8)),
+        "disc": make(disc),
+        "slab": make(slab),
+        "clear": make(np.zeros((10, 16), np.uint8)),
+        "dot1": make(np.full((1, 1), 255, np.uint8)),
+        "dot2": make(np.full((2, 2), 255, np.uint8)),
+        "dot3": make(np.full((3, 3), 255, np.uint8)),
+        "no_rows": np.zeros((0, 5, 4), np.uint8),
+        "no_columns": np.zeros((4, 0, 4), np.uint8),
+    }
+    source_cards = {k: {"w": int(v.shape[1]), "h": int(v.shape[0]), "rgba": v.tobytes().hex(), "opaque": pack(opaque_of(v))}
+                    for k, v in sources.items()}
+
+    synthetic = []
+
+    def add(name: str, source: str, text: str, scales=(1, 2, 3, 4), opaque: np.ndarray | None = None):
+        rgba = sources[source]
+        for scale in scales:
+            entry = {"name": f"{name} x{scale}", "source": source, "svg": text, "scale": scale,
+                     "opaque": None if opaque is None else pack(opaque), "error": None}
+            try:
+                entry["card"] = plain(quality.holes(text, rgba, scale, opaque))
+            except Exception as e:  # what the Python refuses; the port refuses it too
+                entry["card"], entry["error"] = None, type(e).__name__
+            synthetic.append(entry)
+
+    W, H = 20, 14
+    # (a) covered exactly
+    add("solid: covered", "solid", svg(W, H, '<rect width="20" height="14" fill="#246"/>'))
+    # (b) a strip left uncovered, its edges between sub-pixels
+    add("solid: strip", "solid", svg(W, H, '<rect width="9.13" height="14" fill="#246"/><rect x="10.4" width="9.6" height="14" fill="#246"/>'))
+    # (c) holes of several sizes, empty and painted over at 0.3 to 0.96 (under 0.5 is a pinhole; over 0.95 is no hole)
+    pins = [ball(5.5, 5.5, 0.4), box(9, 3, 2, 2), box(2.3, 9.4, 1.6, 1.2), box(13, 8, 1, 1), box(3, 12, 1.5, 1.0),
+            ball(15.5, 3.5, 1.2), box(7, 10, 1, 1), box(16.25, 11.25, 0.5, 0.5)]
+    add("solid: pin-holes", "solid", svg(W, H, with_holes(W, H, pins) + paint(box(13, 8, 1, 1), 0.3) + paint(box(3, 12, 1.5, 1.0), 0.7)
+                                        + paint(ball(15.5, 3.5, 1.2), 0.9) + paint(box(7, 10, 1, 1), 0.96)))
+    # (d) holes that touch at a corner (one cluster when eight-connected), a V of three, and holes at the border
+    diag = [box(4, 4, 1, 1), box(5, 5, 1, 1), box(8, 7, 1, 1), box(9, 8, 1, 1), box(10, 7, 1, 1), box(14, 10, 1, 1),
+            box(1, 1, 2, 2), box(0, 6, 3, 3), box(17, 11, 3, 3)]
+    add("solid: corner-touching and border holes", "solid", svg(W, H, with_holes(W, H, diag)))
+    # equal holes: the clusters come back in the order they were found
+    ties = [box(3, 3, 1, 1), box(10, 3, 1, 1), box(3, 9, 1, 1), box(10, 9, 1, 1), box(16, 10, 1, 1), box(14, 6, 2, 2), box(6, 6, 0.5, 0.5)]
+    add("solid: equal holes", "solid", svg(W, H, with_holes(W, H, ties)))
+    # (f) nothing drawn: every opaque sub-pixel is a hole
+    add("solid: empty svg", "solid", f'<svg {ns} viewBox="0 0 20 14"/>')
+    add("solid: half covered", "solid", svg(W, H, '<rect x="10" width="10" height="14" fill="#246"/>'))
+    mine = np.zeros((H, W), bool)  # a mask of its own reaches the border, which the eroded one never does
+    mine[0:8, 0:4] = True
+    add("solid: a mask of your own", "solid", svg(W, H, with_holes(W, H, pins[:3] + [box(0, 0, 2, 14)])), opaque=mine)
+    add("solid: a mask that is all clear", "solid", svg(W, H, with_holes(W, H, pins)), opaque=np.zeros((H, W), bool))
+    # an SVG that does not parse and a scale of none: the Python raises, the port refuses
+    add("solid: not an svg", "solid", "<svg", scales=(2,))
+    add("solid: scale 0", "solid", svg(W, H, '<rect width="20" height="14"/>'), scales=(0,))
+
+    cx, cy = 16, 12
+    add("disc: covered", "disc", svg(32, 24, f'<circle cx="{cx}" cy="{cy}" r="12" fill="#246"/>'))
+    add("disc: a ring left", "disc", svg(32, 24, f'<circle cx="{cx}" cy="{cy}" r="8.5" fill="#246"/>'))
+    add("disc: translucent", "disc", svg(32, 24, f'<circle cx="{cx}" cy="{cy}" r="12" fill="#246" fill-opacity="0.6"/>'))
+    add("disc: a hole in the middle", "disc", svg(32, 24, f'<path fill-rule="evenodd" fill="#246" d="{ball(cx, cy, 12)}{ball(cx, cy, 3)}"/>'))
+    add("disc: half at 0.4", "disc", svg(32, 24, f'<path d="{box(0, 0, 16, 24)}" fill="#246"/>'
+                                                 f'<path d="{box(16, 0, 16, 24)}" fill="#246" fill-opacity="0.4"/>'))
+    add("disc: empty", "disc", f'<svg {ns} viewBox="0 0 32 24"/>')
+
+    add("slab: covered", "slab", svg(24, 18, '<rect width="24" height="18" fill="#246"/>'))
+    add("slab: right half", "slab", svg(24, 18, '<rect x="12" width="12" height="18" fill="#246"/>'))
+    add("slab: empty", "slab", f'<svg {ns} viewBox="0 0 24 18"/>')
+    add("clear: anything", "clear", svg(16, 10, '<rect width="8" height="10" fill="#246"/>'))
+    add("clear: scale 0", "clear", svg(16, 10, ""), scales=(0,))
+    for name in ("dot1", "dot2", "dot3"):
+        n = sources[name].shape[0]
+        add(f"{name}: empty", name, f'<svg {ns} viewBox="0 0 {n} {n}"/>', scales=(1, 3))
+    for name in ("no_rows", "no_columns"):
+        add(f"{name}: anything", name, svg(4, 4, '<rect width="4" height="4"/>'), scales=(2,))
+
+    # the thresholds: a whole source painted at one opacity. Hole: alpha < 242.25. Pinhole: cover < 0.5
+    for k in (238, 240, 241, 242, 243, 244, 246, 250, 255):
+        add(f"opacity {k}/255", "solid6", svg(6, 6, f'<rect width="6" height="6" fill="#246" fill-opacity="{k / 255}"/>'), scales=(1, 3))
+    for k in (100, 125, 126, 127, 128, 129, 131, 200):
+        add(f"opacity {k}/255", "solid6", svg(6, 6, f'<rect width="6" height="6" fill="#246" fill-opacity="{k / 255}"/>'), scales=(1, 3))
+
+    # -- the opaque mask alone: random sources over the alphas around the threshold, and the threshold itself
+    erosion = []
+    palette = np.array([0, 1, 128, 252, 253, 254, 255], np.uint8)
+    for i in range(28):
+        h, w = int(rng.integers(1, 17)), int(rng.integers(1, 21))
+        p = np.array([0.04, 0.02, 0.06, 0.08, 0.05, 0.05, 0.70])
+        rgba = make(rng.choice(palette, (h, w), p=p))
+        erosion.append({"h": h, "w": w, "rgba": rgba.tobytes().hex(), "opaque": pack(opaque_of(rgba))})
+    ramp = make(np.tile(np.arange(256, dtype=np.uint8), (5, 1)))  # one column of each alpha: 253 is the first that survives
+    erosion.append({"h": 5, "w": 256, "rgba": ramp.tobytes().hex(), "opaque": pack(opaque_of(ramp))})
+
+    # -- ndimage.label with the 3x3 structure: which label each pixel gets
+    labels = []
+    for i in range(36):
+        h, w = int(rng.integers(1, 15)), int(rng.integers(1, 19))
+        mask = rng.random((h, w)) < [0.15, 0.3, 0.45, 0.55, 0.65, 0.8][i % 6]
+        lab, n = ndimage.label(mask, structure=np.ones((3, 3), bool))
+        labels.append({"h": h, "w": w, "mask": pack(mask), "n": int(n), "labels": lab.ravel().tolist()})
+    shapes = {  # late merges, corner touches and a spiral
+        "u": ["1.1", "1.1", "111"],
+        "diagonals": ["1....", ".1...", "..1.1", "...1.", "..1.1"],
+        "spiral": ["1111111", "......1", "11111.1", "1...1.1", "1.111.1", "1.....1", "1111111"],
+        "comb": ["1.1.1.1", "1.1.1.1", "1111111", ".......", "1.1.1.1"],
+    }
+    for name, rows in shapes.items():
+        mask = np.array([[c == "1" for c in row] for row in rows])
+        lab, n = ndimage.label(mask, structure=np.ones((3, 3), bool))
+        labels.append({"name": name, "h": mask.shape[0], "w": mask.shape[1], "mask": pack(mask), "n": int(n), "labels": lab.ravel().tolist()})
+
+    # The golden must not be vacuous: real holes, pinholes, holes that are not pinholes, equal deficits.
+    cards = [c["card"] for c in synthetic if c["card"] is not None]
+    assert sum(c["hole_clusters"] for c in cards) > 100, "too few holes in the made cases"
+    assert sum(c["pinholes"] for c in cards) > 20, "too few pinholes in the made cases"
+    assert any(c["hole_clusters"] > c["pinholes"] for c in cards), "no hole that is not a pinhole"
+    assert any(c["hole_clusters"] >= 2 and c["hole_subpx"] > c["hole_clusters"] for c in cards)
+    assert any(any(a["deficit_px"] == b["deficit_px"] and (a["y"], a["x"]) != (b["y"], b["x"]) for a, b in zip(c["_clusters"], c["_clusters"][1:]))
+               for c in cards), "no equal deficits to order"
+    assert {c["scale"] for c in synthetic if c["card"] and c["card"]["hole_clusters"]} == {1, 2, 3, 4}
+    assert any(c["card"] and c["card"]["hole_clusters"] for c in traced), "no holes in any traced case"
+    assert sum(c["error"] is not None for c in synthetic) == 2
+    assert any(c["opaque"] is not None and c["card"]["hole_clusters"] for c in synthetic)
+    write("holes", {"traced": traced, "sources": source_cards, "synthetic": synthetic, "erosion": erosion, "labels": labels})
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
