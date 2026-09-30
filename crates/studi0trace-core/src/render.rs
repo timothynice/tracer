@@ -40,15 +40,28 @@
 //!   read the filesystem: usvg's default `href` resolver opens whatever path an `<image>`
 //!   names, so that resolver is replaced by one that finds nothing. (A `data:` URL of a
 //!   nested SVG is still resolved; it is bytes already in the document.)
-//! - **Size.** A render is refused above [`MAX_PIXELS`]. resvg-py tries to allocate what it
-//!   is asked for; at 100 000 x 100 000 that is a 40 GB pixmap.
-//! - **The resize.** `quality.render` forces the size it was asked for with Pillow when the
-//!   render came out another size (Lanczos, or nearest for crisp). [`render`] does not: it
-//!   returns an error that names the two sizes. The scorecard renders a candidate at a whole
-//!   multiple of the size it was normalised to (`svg::normalize_dimensions`), which fits
-//!   exactly; [`render_fit`] gives the pixels resvg made at the size it made them.
+//! - **Size.** A render is refused above [`MAX_PIXELS`], and so is a request above it, before
+//!   anything is allocated. resvg-py tries to allocate what it is asked; at 100 000 x 100 000
+//!   that is a 40 GB pixmap.
+//!
+//! # The resize
+//!
+//! `quality.render` forces the size it was asked for: if the PNG resvg-py returns is another
+//! size, Pillow resizes it to exactly `(width, height)` (`NEAREST` for crisp, `LANCZOS`
+//! otherwise) and [`render`] does the same through [`crate::resample`]. That happens in two
+//! situations. One is a box of another aspect than the SVG: Pillow stretches, it does not
+//! letterbox. The other is an ordinary one: `IntSize::scale_to` computes `ceil(f32 * f32 / f32)`
+//! (`th * W / H`), and once `th * W` passes 2^24 and is not a multiple of what an f32 holds
+//! there, the product rounds and the fit can come out a row too tall (a 6930 x 5399 viewBox
+//! drawn at 6930 x 5399 is fitted as 6930 x 5400). Measured over random sizes, the first upload
+//! that does it is 16.8 MP at 1x, 2x and 4x and 5.6 MP at 3x; among sides of 4100 to 7000 px
+//! about 4% of sizes do at 1x, and among sides of 1000 to 2900 px about 1.4% do at 3x. The
+//! intake admits 40 MP and the scorecard renders at the source size and at 2x to 4x, so it meets
+//! this on uploads the Python handles. [`render_fit`] gives the pixels resvg made at the size it
+//! made them, before any resize.
 //!
 //! Nothing here touches the filesystem or spawns a thread, and resvg pulls in no C code.
+use crate::resample;
 use resvg::{tiny_skia, usvg};
 
 /// The most pixels a render may have: 2^28, a 1 GiB RGBA buffer. The intake admits 40 MP and
@@ -63,31 +76,42 @@ pub struct Rendered {
     pub rgba: Vec<u8>,
 }
 
-/// `svg` at `width x height`, straight-alpha RGBA8, anti-aliased or (`crisp`) not: what
-/// `quality.render` returns. `Err` when the render is not exactly that size; see the module
-/// notes on why the Pillow resize is not here, and [`render_fit`] for the render itself.
+/// `svg` at exactly `width x height`, straight-alpha RGBA8, anti-aliased or (`crisp`) not:
+/// `quality.render`. The render is [`render_fit`]'s; if that is another size it is resized
+/// to this one as Pillow does (nearest for crisp, Lanczos otherwise), whatever the reason.
 pub fn render(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Vec<u8>, String> {
+    check_box(width, height)?;
+    check_pixels(width, height)?;
     let r = render_fit(svg, width, height, crisp)?;
-    if (r.width, r.height) != (width, height) {
-        return Err(format!(
-            "resvg fits this SVG inside {width}x{height} as {}x{}, and the resize to {width}x{height} that quality.render \
-             then makes with Pillow is not implemented: render at the SVG's own aspect ratio",
-            r.width, r.height
-        ));
+    if (r.width, r.height) == (width, height) {
+        return Ok(r.rgba);
     }
-    Ok(r.rgba)
+    let filter = if crisp { resample::Filter::Nearest } else { resample::Filter::Lanczos };
+    resample::resize_rgba(&r.rgba, r.width, r.height, width, height, filter)
 }
 
-/// What `resvg_py.svg_to_bytes(svg_string=svg, width=width, height=height,
-/// skip_system_fonts=True[, shape_rendering="crisp_edges"])` returns, decoded: the SVG
-/// fitted inside `width x height` (so its size may be smaller on one side), as straight alpha.
-pub fn render_fit(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Rendered, String> {
+fn check_box(width: u32, height: u32) -> Result<(), String> {
     if width == 0 {
         return Err("The value of 'width' must be a positive integer".into());
     }
     if height == 0 {
         return Err("The value of 'height' must be a positive integer".into());
     }
+    Ok(())
+}
+
+fn check_pixels(width: u32, height: u32) -> Result<(), String> {
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return Err(format!("a {width}x{height} render is more than the {MAX_PIXELS} pixels allowed"));
+    }
+    Ok(())
+}
+
+/// What `resvg_py.svg_to_bytes(svg_string=svg, width=width, height=height,
+/// skip_system_fonts=True[, shape_rendering="crisp_edges"])` returns, decoded: the SVG
+/// fitted inside `width x height` (so its size may be smaller on one side), as straight alpha.
+pub fn render_fit(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Rendered, String> {
+    check_box(width, height)?;
 
     let mut opt = usvg::Options::default();
     opt.dpi = 0.0;
@@ -104,9 +128,7 @@ pub fn render_fit(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Ren
     let natural = tree.size().to_int_size();
     let target = tiny_skia::IntSize::from_wh(width, height).ok_or("target size is zero")?;
     let fit = natural.scale_to(target);
-    if u64::from(fit.width()) * u64::from(fit.height()) > MAX_PIXELS {
-        return Err(format!("a {}x{} render is more than the {MAX_PIXELS} pixels allowed", fit.width(), fit.height()));
-    }
+    check_pixels(fit.width(), fit.height())?;
     let mut pixmap = tiny_skia::Pixmap::new(fit.width(), fit.height()).ok_or("cannot create pixmap")?;
     let (from, to) = (natural.to_size(), fit.to_size());
     let ts = tiny_skia::Transform::from_scale(to.width() / from.width(), to.height() / from.height());

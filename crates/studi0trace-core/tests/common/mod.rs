@@ -20,3 +20,9 @@ pub fn fixture_bytes(name: &str) -> Vec<u8> {
 pub fn backend(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../backend").join(rel)
 }
+
+/// Lower-case hex SHA-256, for fixtures too large to keep as bytes.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}

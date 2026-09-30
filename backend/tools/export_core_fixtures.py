@@ -647,6 +647,144 @@ def _render() -> None:
     assert any(c["aa"].get("width") != c["aa"].get("height") for c in out)
     write("render_cases", out)
 
+    # When resvg's size is not the size asked for, `quality.render` resizes with Pillow (nearest
+    # for crisp, Lanczos otherwise): a box of another aspect, and, less obviously, a box of
+    # the SVG's own aspect once `IntSize::scale_to`'s f32 arithmetic (`ceil(th * W / H)`)
+    # rounds, which needs th * W above 2**24 and is not rare at the sizes the intake admits.
+    # Small expected images travel as PNGs; the large ones as SHA-256 of the RGBA bytes.
+    import hashlib
+
+    def png_of(arr) -> str:
+        buf = io.BytesIO()
+        Image.fromarray(arr).save(buf, "PNG")
+        return buf.getvalue().hex()
+
+    def scene(w: float, h: float) -> str:
+        m = min(w, h)
+        return ('<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f40"/>'
+                '<stop offset="1" stop-color="#04f" stop-opacity="0.6"/></linearGradient></defs>'
+                f'<rect x="{w * .1:.2f}" y="{h * .1:.2f}" width="{w * .5:.2f}" height="{h * .45:.2f}" fill="url(#g)"/>'
+                f'<circle cx="{w * .62:.2f}" cy="{h * .6:.2f}" r="{m * .27:.2f}" fill="#2a2" fill-opacity="0.7"/>'
+                f'<path d="M{w * .05:.2f} {h * .95:.2f} L{w * .5:.2f} {h * .62:.2f} L{w * .95:.2f} {h * .93:.2f}" fill="none" '
+                f'stroke="#000" stroke-width="{m * .03:.2f}" stroke-linejoin="round"/>')
+
+    def fit_of(svg: str, width: int, height: int, crisp: bool) -> list:
+        kw = {"shape_rendering": "crisp_edges"} if crisp else {}
+        png = bytes(resvg_py.svg_to_bytes(svg_string=svg, width=width, height=height, skip_system_fonts=True, **kw))
+        return list(Image.open(io.BytesIO(png)).size)
+
+    small, large = [], []
+    tiny_w, tiny_h = 986975, 671143   # 25 x 17 at 1/39479: th * W = 16777575 > 2**24
+    for name, svg, width, height in (
+        ("aspect: a square stretched into a box twice as wide", f'<svg {ns} viewBox="0 0 10 10">{scene(10, 10)}</svg>', 40, 20),
+        ("aspect: a square stretched into a taller box", f'<svg {ns} viewBox="0 0 10 10">{scene(10, 10)}</svg>', 20, 40),
+        ("aspect: a wide SVG squeezed into a narrow tall box", f'<svg {ns} viewBox="0 0 20 10">{scene(20, 10)}</svg>', 7, 33),
+        ("aspect: a very wide box round a square SVG", f'<svg {ns} viewBox="0 0 10 10">{scene(10, 10)}</svg>', 100000, 1),
+        ("aspect: one pixel up to many", f'<svg {ns} viewBox="0 0 1 1"><rect width="1" height="1" fill="#36c" fill-opacity="0.5"/></svg>', 9, 5),
+        ("round: the far side rounds up", f'<svg {ns} viewBox="0 0 10 3">{scene(10, 3)}</svg>', 30, 10),
+        ("round: fractional 7.4 x 3.6", f'<svg {ns} width="7.4" height="3.6">{scene(7.4, 3.6)}</svg>', 37, 18),
+        ("round: tall and thin, taller than 100x, getting shorter (Pillow resizes the height first)",
+         f'<svg {ns} width="1.4" height="300.6">{scene(1.4, 300.6)}</svg>', 1, 300),
+        ("f32: th * W over 2**24 rounds the fit a row too tall (25 x 17)",
+         f'<svg {ns} viewBox="0 0 {tiny_w} {tiny_h}">{scene(tiny_w, tiny_h)}</svg>', 25, 17),
+        ("f32: the same for 17 x 25", f'<svg {ns} viewBox="0 0 {tiny_h} {tiny_w}">{scene(tiny_h, tiny_w)}</svg>', 17, 25),
+    ):
+        row = {"name": name, "svg": svg, "width": width, "height": height}
+        for mode, crisp in (("aa", False), ("crisp", True)):
+            fit = fit_of(svg, width, height, crisp)
+            row[mode] = {"fit": fit, "png": png_of(render(svg, width, height, crisp=crisp))}
+        small.append(row)
+    assert sum(r["aa"]["fit"] != [r["width"], r["height"]] for r in small) == len(small)
+
+    # Sizes the scorecard can ask for: a viewBox the size of an upload, drawn at its own size.
+    # th * W has to pass 2**24 and then not be representable in f32: the smallest upload that
+    # rounds wrong at 1x is 16.8 MP (these two), at 3x 5.6 MP (3 * H * W is odd often enough),
+    # and 2x and 4x, whose products are multiples of 2 and 4, are exact as long as 1x is.
+    for width, height in ((3919, 4281), (4281, 3919)):
+        svg = f'<svg {ns} viewBox="0 0 {width} {height}">{scene(width, height)}</svg>'
+        row = {"name": f"a {width}x{height} viewBox drawn at its own size", "svg": svg, "width": width, "height": height}
+        for mode, crisp in (("aa", False), ("crisp", True)):
+            out = render(svg, width, height, crisp=crisp)
+            assert out.shape == (height, width, 4)
+            row[mode] = {"fit": fit_of(svg, width, height, crisp), "sha256": hashlib.sha256(out.tobytes()).hexdigest()}
+        assert row["aa"]["fit"] != [width, height] and row["crisp"]["fit"] != [width, height]
+        large.append(row)
+    write("render_resize", {"small": small, "large": large})
+
+
+@exporter("resample")
+def _resample() -> None:
+    import hashlib
+
+    import numpy as np
+    from PIL import Image
+
+    # Pillow's Image.resize on RGBA8, which core/src/resample.rs replicates. The images are
+    # not stored: both sides make them from a seed with splitmix64 (little-endian bytes in
+    # row-major RGBA order), and only SHA-256 of Pillow's answer travels.
+    def splitmix_bytes(seed: int, n: int) -> np.ndarray:
+        count = (n + 7) // 8
+        with np.errstate(over="ignore"):
+            z = np.uint64(seed) + np.arange(1, count + 1, dtype=np.uint64) * np.uint64(0x9E3779B97F4A7C15)
+            z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+            z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+            z = z ^ (z >> np.uint64(31))
+        return z.astype("<u8").view(np.uint8)[:n]
+
+    def image(seed: int, w: int, h: int, kind: str) -> np.ndarray:
+        a = splitmix_bytes(seed, w * h * 4).reshape(h, w, 4).copy()
+        alpha = a[..., 3].copy()
+        if kind == "mixed":      # a quarter clear, a quarter opaque, the rest as drawn
+            a[..., 3] = np.where(alpha % 4 == 0, 0, np.where(alpha % 4 == 1, 255, alpha))
+        elif kind == "opaque":
+            a[..., 3] = 255
+        elif kind == "clear":    # colour with no alpha: premultiplication zeroes it, Lanczos rings
+            a[..., 3] = 0
+        else:
+            raise ValueError(kind)
+        return a
+
+    filters = {"nearest": Image.Resampling.NEAREST, "lanczos": Image.Resampling.LANCZOS}
+    rng = np.random.default_rng(5)
+    shapes = [
+        # the off-by-one a render meets, and the other way
+        (37, 23, 36, 23), (23, 37, 23, 40), (64, 64, 17, 33), (10, 10, 10, 11), (10, 10, 11, 10), (40, 30, 41, 31),
+        (40, 30, 39, 29), (97, 61, 97, 60), (61, 97, 62, 97),
+        # one axis alone, both, up and down, to and from a single row, column or pixel
+        (10, 10, 40, 10), (10, 10, 10, 40), (10, 10, 5, 10), (10, 10, 10, 5), (20, 10, 7, 33), (7, 33, 20, 10),
+        (1, 1, 5, 7), (5, 7, 1, 1), (1, 9, 1, 4), (9, 1, 4, 1), (50, 50, 1, 50), (50, 50, 50, 1), (3, 3, 300, 2),
+        # (2 -> 7) puts x on an exact integer, where the running sum of the nearest scale is below it
+        (2, 1, 7, 1), (4, 1, 6, 1), (4, 4, 14, 14), (9, 9, 6, 6), (6, 6, 9, 9),
+        # more than 100x taller than wide and getting shorter: Pillow resizes the height first
+        (3, 401, 3, 5), (2, 250, 2, 100), (1, 101, 1, 50), (3, 301, 7, 299), (3, 301, 2, 7), (2, 202, 2, 201),
+        (4, 505, 9, 300), (1, 101, 1, 101), (1, 101, 1, 202),
+    ]
+    cases = []
+    seed = 1000
+    for filt in filters:
+        for shape in shapes:
+            for kind in ("mixed", "opaque") + (("clear",) if shape[0] * shape[1] <= 400 else ()):
+                cases.append((seed, *shape, filt, kind))
+                seed += 1
+        for _ in range(80):
+            w, h, ow, oh = (int(v) for v in rng.integers(1, 70, 4))
+            cases.append((seed, w, h, ow, oh, filt, "mixed"))
+            seed += 1
+    out = []
+    for seed, w, h, ow, oh, filt, kind in cases:
+        got = np.asarray(Image.fromarray(image(seed, w, h, kind), "RGBA").resize((ow, oh), filters[filt]))
+        assert got.shape == (oh, ow, 4)
+        out.append({"case": f"{seed} {w} {h} {ow} {oh} {filt} {kind}", "sha256": hashlib.sha256(got.tobytes()).hexdigest()})
+
+    # Premultiplication and back, on every (colour, alpha) pair, colours above their alpha too
+    # (what a premultiplied Lanczos can leave behind).
+    c, a = np.meshgrid(np.arange(256), np.arange(256))
+    grid = np.stack([c, (c * 7 + 3) % 256, 255 - c, a], -1).astype(np.uint8)
+    pre = np.asarray(Image.fromarray(grid, "RGBA").convert("RGBa"))
+    back = np.asarray(Image.fromarray(grid, "RGBa").convert("RGBA"))
+    write("resample", {"cases": out, "premultiplied": hashlib.sha256(pre.tobytes()).hexdigest(),
+                       "unpremultiplied": hashlib.sha256(back.tobytes()).hexdigest()})
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()

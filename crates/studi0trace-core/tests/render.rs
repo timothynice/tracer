@@ -60,11 +60,10 @@ fn cases_match_resvg_py() {
             assert!(worst <= 1, "{what}: worst channel difference {worst}");
             (worst_all, channels, differing, renders) = (worst_all.max(worst), channels + got.rgba.len(), differing + n, renders + 1);
 
-            // `render` is that render when it is the size asked for, and says so when it is not:
-            // resvg-py's wrapper would have resized it with Pillow, and this crate does not.
+            // `render` is that render when it is the size asked for; when it is not, it is the
+            // size asked for anyway (what it holds is `render_resize.json`'s business).
             if want.get("forced").is_some() {
-                let e = render::render(svg, w, h, crisp).expect_err(&what);
-                assert!(e.contains("resize"), "{what}: {e}");
+                assert_eq!(render::render(svg, w, h, crisp).unwrap().len(), (w * h * 4) as usize, "{what}");
             } else {
                 assert!(render::render(svg, w, h, crisp).unwrap() == got.rgba, "{what}");
             }
@@ -142,30 +141,93 @@ fn an_image_path_is_not_opened() {
     assert!(render::render(&inline, 40, 20, false).unwrap() != render::render(&with(""), 40, 20, false).unwrap(), "an inline SVG image was dropped");
 }
 
+/// A size that is not the fit: `quality.render` resizes with Pillow and so does `render`.
+/// Every expected image here is Pillow's, from `render_resize.json`; `resample.rs` holds the
+/// resampler itself to Pillow over hundreds of shapes.
 #[test]
-fn a_size_that_is_not_the_svgs_aspect_is_unsupported() {
-    // `quality.render` forces the size with Pillow (Lanczos, or nearest for crisp). The scorecard
-    // always renders a candidate at a whole multiple of the size it was normalised to, so that
-    // resize never runs; it is not written here, and the mismatch is an error rather than a guess.
-    let e = render::render(SQUARE, 40, 20, false).unwrap_err();
-    assert!(e.contains("20x20") && e.contains("40x20") && e.contains("resize"), "{e}");
-    let got = render::render_fit(SQUARE, 40, 20, true).unwrap();
-    assert_eq!((got.width, got.height, got.rgba.len()), (20, 20, 20 * 20 * 4));
+fn a_render_that_misses_its_size_is_resized_as_quality_render_does() {
+    let fixture = common::fixture_json("render_resize.json");
+    let (mut worst_all, mut differing, mut n) = (0, 0, 0);
+    for case in fixture["small"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let svg = case["svg"].as_str().unwrap();
+        let (w, h) = (case["width"].as_u64().unwrap() as u32, case["height"].as_u64().unwrap() as u32);
+        for (crisp, tag) in [(false, "aa"), (true, "crisp")] {
+            let what = format!("{name} ({tag})");
+            let want = intake::load(&unhex(case[tag]["png"].as_str().unwrap()), Default::default()).unwrap();
+            assert_eq!((want.width, want.height), (w, h), "{what}: the fixture");
+
+            // The render resvg makes is another size than the box ...
+            let fit = render::render_fit(svg, w, h, crisp).unwrap();
+            let fit_size: Vec<u64> = case[tag]["fit"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+            assert_eq!([fit.width as u64, fit.height as u64], fit_size[..], "{what}: the fit");
+            assert_ne!((fit.width, fit.height), (w, h), "{what}: this case no longer needs the resize");
+
+            // ... and `render` is Pillow's resize of it.
+            let got = render::render(svg, w, h, crisp).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let (worst, differ) = diff(&got, &want.rgba);
+            assert!(worst <= 1, "{what}: worst channel difference {worst}");
+            (worst_all, differing, n) = (worst_all.max(worst), differing + differ, n + 1);
+        }
+    }
+    eprintln!("{n} resized renders: worst channel difference {worst_all}, {differing} channels differ");
+    assert_eq!(n, 20);
+}
+
+/// The sizes a scorecard run reaches: a viewBox the size of the upload, drawn at its own size,
+/// which resvg fits a row too tall (f32 rounding in `IntSize::scale_to`) and Pillow then
+/// trims. The images are 16.8 MP, so only their SHA-256 is kept.
+#[test]
+fn a_viewbox_drawn_at_its_own_size_comes_out_that_size_when_resvg_fits_it_a_row_too_tall() {
+    for case in common::fixture_json("render_resize.json")["large"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let svg = case["svg"].as_str().unwrap();
+        let (w, h) = (case["width"].as_u64().unwrap() as u32, case["height"].as_u64().unwrap() as u32);
+        for (crisp, tag) in [(false, "aa"), (true, "crisp")] {
+            let fit = render::render_fit(svg, w, h, crisp).unwrap();
+            let want: Vec<u64> = case[tag]["fit"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+            assert_eq!([fit.width as u64, fit.height as u64], want[..], "{name} ({tag}): the fit");
+            assert_ne!((fit.width, fit.height), (w, h), "{name} ({tag}): this case no longer needs the resize");
+            drop(fit);
+
+            let got = render::render(svg, w, h, crisp).unwrap_or_else(|e| panic!("{name} ({tag}): {e}"));
+            assert_eq!(got.len(), (w * h * 4) as usize);
+            assert!(common::sha256_hex(&got) == case[tag]["sha256"].as_str().unwrap(), "{name} ({tag}): not quality.render's bytes");
+        }
+    }
+}
+
+#[test]
+fn an_exact_fit_is_not_resized() {
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480"><rect width="640" height="480" fill="#c33"/></svg>"##;
+    let fit = render::render_fit(svg, 1280, 960, false).unwrap();
+    assert_eq!((fit.width, fit.height), (1280, 960));
+    assert!(render::render(svg, 1280, 960, false).unwrap() == fit.rgba);
 }
 
 #[test]
 fn a_size_that_cannot_be_allocated_is_an_error_not_an_allocation() {
-    // Each of these is a square box round a square SVG, so the fit is the box: none of them
-    // may get as far as a pixmap (resvg-py would try a 40 GB one for the second).
-    for (w, h) in [(0, 0), (0, 5), (5, 0), (100_000, 100_000), (u32::MAX, u32::MAX), (16_385, 16_385)] {
-        assert!(!render::render(SQUARE, w, h, false).unwrap_err().is_empty(), "{w}x{h}");
-        assert!(render::render_fit(SQUARE, w, h, true).is_err(), "{w}x{h}");
+    // The cap is on what is asked for as well as on what resvg draws, and it comes before
+    // anything is allocated. Each of these boxes is over it, for a square SVG whose fit is
+    // the box or far smaller than it.
+    let cap = |e: String| assert!(e.contains("pixels allowed"), "{e}");
+    for (w, h) in [(100_000, 100_000), (u32::MAX, u32::MAX), (16_385, 16_385), (1 << 28, 2), (2, 1 << 28), (u32::MAX, 3)] {
+        cap(render::render(SQUARE, w, h, false).unwrap_err());
+        cap(render::render(SQUARE, w, h, true).unwrap_err());
     }
-    assert!(render::render(SQUARE, 1 << 28, 2, false).is_err());
-    // A box this large that the SVG does not fill is a small render: it is the fit, not
-    // the box, that has to be allocated.
+    // `render_fit` has only the fit to allocate: a square SVG in a box that is over the cap
+    // on one side only is small, and one whose fit is over it is refused.
+    for (w, h) in [(16_385, 16_385), (100_000, 100_000), (u32::MAX, u32::MAX)] {
+        cap(render::render_fit(SQUARE, w, h, true).unwrap_err());
+    }
     let got = render::render_fit(SQUARE, u32::MAX, 3, false).unwrap();
     assert_eq!((got.width, got.height), (3, 3));
+    // Inside the cap, a box much wider than the fit is a resize, and it is allowed.
+    assert_eq!(render::render(SQUARE, 1 << 14, 1, false).map(|v| v.len()), Ok((1 << 14) * 4));
+    for (w, h) in [(0, 0), (0, 5), (5, 0)] {
+        assert!(render::render(SQUARE, w, h, false).unwrap_err().contains("positive integer"), "{w}x{h}");
+        assert!(render::render_fit(SQUARE, w, h, true).is_err(), "{w}x{h}");
+    }
 }
 
 #[test]
