@@ -23,8 +23,3 @@ tiny-skia = "0.11"
 [features]
 default = []
 extension-module = ["dep:pyo3", "pyo3/extension-module"]
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1

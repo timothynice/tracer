@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["backend/vexel-rs", "crates/studi0trace-core"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
