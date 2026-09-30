@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "crates" / "studi0trace-core" / "tests" / "fixtures"
-EXPORTERS: dict[str, callable] = {}
+EXPORTERS: dict[str, Callable[[], None]] = {}
 
 
 def exporter(name: str):
@@ -30,11 +32,27 @@ def write(name: str, data) -> None:
     (OUT / f"{name}.json").write_text(json.dumps(data, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
 
 
+@exporter("schema")
+def _schema() -> None:
+    from studi0trace.engines.vexel.engine import VexelParams
+
+    # `write` sorts keys, so the order the UI lays its controls out in (the order the
+    # fields are declared, which Pydantic keeps in `properties`) is carried explicitly.
+    write("schema", {
+        "schema": VexelParams.model_json_schema(),
+        "defaults": VexelParams().model_dump(),
+        "order": list(VexelParams.model_fields),
+    })
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
     args = ap.parse_args()
     only = {s for s in args.only.split(",") if s}
+    unknown = sorted(only - EXPORTERS.keys())
+    if unknown:
+        sys.exit(f"unknown exporter {', '.join(unknown)}; known: {', '.join(sorted(EXPORTERS))}")
     for name, fn in EXPORTERS.items():
         if not only or name in only:
             fn()

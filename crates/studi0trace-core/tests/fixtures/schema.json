@@ -1,0 +1,234 @@
+{
+ "defaults": {
+  "corner_threshold": 60.0,
+  "curve_tolerance": 0.4,
+  "detail": 6.0,
+  "gradients": true,
+  "layering": "stacked",
+  "max_stops": 4,
+  "min_region": 6,
+  "overlaps": true,
+  "path_precision": 2,
+  "refine": false,
+  "shadows": true,
+  "shape_fitting": true,
+  "stroke_tolerance": 0.13,
+  "strokes": true,
+  "upsample": "auto"
+ },
+ "order": [
+  "upsample",
+  "detail",
+  "min_region",
+  "gradients",
+  "max_stops",
+  "layering",
+  "corner_threshold",
+  "curve_tolerance",
+  "shape_fitting",
+  "refine",
+  "strokes",
+  "shadows",
+  "stroke_tolerance",
+  "overlaps",
+  "path_precision"
+ ],
+ "schema": {
+  "additionalProperties": false,
+  "properties": {
+   "corner_threshold": {
+    "default": 60.0,
+    "description": "Turning angle (degrees) above which an outline point is a corner",
+    "maximum": 150.0,
+    "minimum": 20.0,
+    "title": "Corner Threshold",
+    "type": "number",
+    "ui": {
+     "control": "slider",
+     "group": "Curves",
+     "step": 1,
+     "unit": "°"
+    }
+   },
+   "curve_tolerance": {
+    "default": 0.4,
+    "description": "Maximum distance (px) between the fitted curve and the traced outline",
+    "maximum": 2.0,
+    "minimum": 0.1,
+    "title": "Curve Tolerance",
+    "type": "number",
+    "ui": {
+     "control": "slider",
+     "group": "Curves",
+     "step": 0.05,
+     "unit": "px"
+    }
+   },
+   "detail": {
+    "default": 6.0,
+    "description": "Colour difference (ΔE) below which neighbouring regions merge; lower keeps more regions",
+    "maximum": 40.0,
+    "minimum": 1.0,
+    "title": "Detail",
+    "type": "number",
+    "ui": {
+     "control": "slider",
+     "group": "Regions",
+     "step": 0.5
+    }
+   },
+   "gradients": {
+    "default": true,
+    "description": "Reconstruct linear and radial gradients instead of flat bands",
+    "title": "Gradients",
+    "type": "boolean",
+    "ui": {
+     "control": "toggle",
+     "group": "Fills"
+    }
+   },
+   "layering": {
+    "default": "stacked",
+    "description": "Stacked shapes in painter's order (seamless, editable) or exact non-overlapping cut-outs",
+    "enum": [
+     "stacked",
+     "cutout"
+    ],
+    "title": "Layering",
+    "type": "string",
+    "ui": {
+     "control": "select",
+     "group": "Output"
+    }
+   },
+   "max_stops": {
+    "default": 4,
+    "description": "Maximum colour stops per gradient",
+    "maximum": 8,
+    "minimum": 2,
+    "title": "Max Stops",
+    "type": "integer",
+    "ui": {
+     "control": "slider",
+     "group": "Fills",
+     "label": "Gradient stops",
+     "step": 1
+    }
+   },
+   "min_region": {
+    "default": 6,
+    "description": "Regions smaller than this many pixels are absorbed",
+    "maximum": 200,
+    "minimum": 1,
+    "title": "Min Region",
+    "type": "integer",
+    "ui": {
+     "control": "slider",
+     "group": "Regions",
+     "label": "Speckle floor",
+     "step": 1,
+     "unit": "px"
+    }
+   },
+   "overlaps": {
+    "default": true,
+    "description": "Rebuild semi-transparent overlaps as two overlapping shapes with opacity",
+    "title": "Overlaps",
+    "type": "boolean",
+    "ui": {
+     "control": "toggle",
+     "group": "Fills",
+     "label": "Overlap decomposition"
+    }
+   },
+   "path_precision": {
+    "default": 2,
+    "description": "Decimal places in coordinates",
+    "maximum": 4,
+    "minimum": 0,
+    "title": "Path Precision",
+    "type": "integer",
+    "ui": {
+     "control": "slider",
+     "group": "Output",
+     "step": 1
+    }
+   },
+   "refine": {
+    "default": false,
+    "description": "Render each edge's two shapes and nudge the curve until the pixels match the source (slow)",
+    "title": "Refine",
+    "type": "boolean",
+    "ui": {
+     "control": "toggle",
+     "group": "Curves",
+     "label": "Render refinement"
+    }
+   },
+   "shadows": {
+    "default": true,
+    "description": "Rebuild drop shadows, glows and inner shadows as SVG filters instead of banded paths",
+    "title": "Shadows",
+    "type": "boolean",
+    "ui": {
+     "control": "toggle",
+     "group": "Effects"
+    }
+   },
+   "shape_fitting": {
+    "default": true,
+    "description": "Emit circles, ellipses and rectangles as primitives when they fit",
+    "title": "Shape Fitting",
+    "type": "boolean",
+    "ui": {
+     "control": "toggle",
+     "group": "Curves",
+     "label": "Whole-shape fitting"
+    }
+   },
+   "stroke_tolerance": {
+    "default": 0.13,
+    "description": "Largest error a centreline may leave before the thin region is drawn filled instead of stroked; lower keeps more shapes filled",
+    "maximum": 1.0,
+    "minimum": 0.05,
+    "title": "Stroke Tolerance",
+    "type": "number",
+    "ui": {
+     "control": "slider",
+     "group": "Curves",
+     "label": "Stroke tolerance",
+     "step": 0.01
+    }
+   },
+   "strokes": {
+    "default": true,
+    "description": "Recover thin lines as stroked centreline paths instead of filled slivers",
+    "title": "Strokes",
+    "type": "boolean",
+    "ui": {
+     "control": "toggle",
+     "group": "Curves",
+     "label": "Stroke recovery"
+    }
+   },
+   "upsample": {
+    "default": "auto",
+    "description": "Trace a small input (≤ 192 px) at twice its size when its own trace shows a region thinner than 2.2 px",
+    "enum": [
+     "auto",
+     "never",
+     "always"
+    ],
+    "title": "Upsample",
+    "type": "string",
+    "ui": {
+     "control": "select",
+     "group": "Regions",
+     "label": "Small-input upsampling"
+    }
+   }
+  },
+  "title": "VexelParams",
+  "type": "object"
+ }
+}
