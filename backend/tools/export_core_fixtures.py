@@ -263,6 +263,45 @@ def _intake() -> None:
     write("intake", cases)
 
 
+@exporter("svg")
+def _svg() -> None:
+    from studi0trace.imaging.svg import normalize_dimensions, svg_stats
+    from studi0trace.engines.vexel.engine import VexelEngine, VexelParams
+    from studi0trace.imaging.intake import load_upload
+
+    cases = []
+    big = 1 << 30
+
+    samples = [
+        '<svg width="10pt" height="5pt" viewBox="0 0 1 1"><path d="M0 0L1 1"/></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    ]
+
+    # Add traced SVGs from corpus
+    for rel in ("real/logo/vexel-wordmark-512.png", "real/logo/studi0mail-icon-512.png", "synthetic/shadow/glow-128.png"):
+        png = (ROOT / "backend/bench/corpus" / rel).read_bytes()
+        svg = VexelEngine().trace(load_upload(png, max_bytes=big, max_pixels=big), VexelParams()).svg
+        samples.append(svg)
+
+    # Add edge cases for regex pinning
+    samples.extend([
+        '<SVG WIDTH="5" HEIGHT="5" VIEWBOX="0 0 1 1"><path d="M0 0"/></SVG>',
+        "<svg width='5' height='5' viewbox='0 0 1 1'><path d='M0 0'/></svg>",
+        '<svg width="1" height="1" />',
+        '<svg fill="#ABC" fill="none" style="fill:#ABC;stroke:none"><path d="M0 0"/></svg>',
+        '<?xml version="1.0"?>\n<svg width="1" height="1"><path d="M0 0"/></svg>',
+    ])
+
+    for s in samples:
+        cases.append({
+            "svg": s,
+            "normalized": normalize_dimensions(s, 64, 32),
+            "stats": svg_stats(s).as_dict()
+        })
+
+    write("svg", cases)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
