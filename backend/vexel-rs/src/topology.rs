@@ -2796,7 +2796,7 @@ fn onto_rect(m: &crate::rects::Model, e: P, tol: f64) -> f64 {
     let (s, _) = crate::rects::project(m, e);
     let corners = [[m.x0, m.y0], [m.x1, m.y0], [m.x1, m.y1], [m.x0, m.y1]];
     for (k, c) in corners.iter().enumerate() {
-        if m.r[k] <= 1e-9 && dist2p(e, *c).sqrt() <= tol {
+        if m.r[k] <= 1e-9 && dist2p(e, *c) <= tol {
             return crate::rects::project(m, *c).0;
         }
     }
