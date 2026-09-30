@@ -380,6 +380,136 @@ def _color() -> None:
     })
 
 
+@exporter("edges")
+def _edges() -> None:
+    import struct
+
+    import numpy as np
+    import scipy.ndimage as ndi
+    from PIL import Image
+    from scipy.ndimage._filters import _gaussian_kernel1d
+    from skimage.feature import canny
+    from skimage.feature._canny import _preprocess
+    from skimage.feature._canny_cy import _nonmaximum_suppression_bilinear
+    from skimage.morphology import dilation, disk
+
+    from studi0trace.imaging.quality import _edge_f1, _edges, edge_f1, luminance, to_rgb_on_white
+
+    def on(mask):
+        return np.flatnonzero(mask).tolist()
+
+    # Values the Rust must reproduce to the bit travel as their IEEE 754 bits: serde_json
+    # without `float_roundtrip` can parse a decimal to the neighbouring double.
+    def bits(x: float) -> str:
+        return struct.pack(">d", x).hex()
+
+    # The brief's three items (logomark-128 is a pale mark on white: no edge reaches the
+    # high threshold, so it pins the empty result) and five more with thousands of edges,
+    # weak ones (low-contrast) and alpha. f1 at a 3 px shift is below 1, unlike at 1 px.
+    corpus = []
+    for rel in ("real/logo/vexel-wordmark-512.png", "synthetic/logo/venn-128.png", "real/logo/logomark-128.png",
+                "real/logo/studi0trace-mark-128.png", "synthetic/flat/low-contrast-512.png",
+                "synthetic/logo/thin-mark-512.png", "synthetic/gradient/alpha-fade-128.png",
+                "synthetic/logo/wedge-fan-512.png"):
+        rgba = np.asarray(Image.open(ROOT / "backend/bench/corpus" / rel).convert("RGBA"))
+        rgb = to_rgb_on_white(rgba)
+        e = _edges(rgb)
+        shifted3 = np.roll(rgb, 3, axis=1)
+        corpus.append({"item": rel, "edges": on(e), "h": rgb.shape[0], "w": rgb.shape[1],
+                       "f1_shifted": bits(edge_f1(rgb, np.roll(rgb, 1, axis=1))),
+                       "f1_shifted3": bits(edge_f1(rgb, shifted3)),
+                       "f1_shifted3_wide": bits(_edge_f1(e, _edges(shifted3), dilation(e, disk(2)), 2))})
+
+    # canny itself on float32 images the corpus does not reach: noise on a step (weak edges
+    # linked by hysteresis, near-equal magnitudes in the suppression), at three sigmas (kernel
+    # radii 2, 4 and 8), and the smallest shapes (a side under 3 px has no interior at all).
+    rng = np.random.default_rng(11)
+    step = np.zeros((48, 64), np.float32)
+    step[:, 30:] = 0.5
+    step[20:, 10:40] += 0.25
+    noisy = (step + rng.normal(0, 0.08, step.shape)).astype(np.float32)
+    quantised = (rng.integers(0, 4, (40, 40)) / 3.0).astype(np.float32)   # exact ties everywhere
+    images = {"noisy": noisy.tobytes().hex(), "quantised": quantised.tobytes().hex()}   # each sent once
+    grey = []
+    for name, img, sigma in (("noisy", noisy, 1.0), ("noisy", noisy, 0.5), ("noisy", noisy, 2.0),
+                             ("quantised", quantised, 1.0), ("quantised", quantised, 0.7)):
+        grey.append({"name": name, "h": img.shape[0], "w": img.shape[1], "sigma": bits(sigma),
+                     "edges": on(canny(img, sigma=sigma))})
+    for h, w in ((1, 1), (1, 7), (7, 1), (2, 2), (2, 9), (3, 3), (3, 5), (5, 4)):
+        img = rng.integers(0, 2, (h, w)).astype(np.float32)
+        grey.append({"name": f"tiny-{h}x{w}", "h": h, "w": w, "sigma": bits(1.0),
+                     "gray": img.tobytes().hex(), "edges": on(canny(img, sigma=1.0))})
+    assert any(g["edges"] for g in grey if g["name"].startswith("tiny")), "no tiny shape has an edge"
+
+    # scipy's Gaussian taps, reversed as gaussian_filter1d hands them to correlate1d.
+    kernels = [{"sigma": bits(s), "taps": [bits(t) for t in _gaussian_kernel1d(s, 0, int(4.0 * s + 0.5))[::-1].tolist()]}
+               for s in (0.5, 0.7, 1.0, 2.0, 3.3)]
+
+    # canny's float32 intermediates, which the edge maps alone do not pin: a last-bit change in
+    # the smoothing's summation order or the Sobel's rarely flips an edge on these images, so
+    # each stage is compared to the bit. Two 24 x 32 crops: the noisy step, and the window of
+    # venn-128's luma (at sigma 0.7) with the most edges.
+    venn_rgb = to_rgb_on_white(np.asarray(Image.open(ROOT / "backend/bench/corpus/synthetic/logo/venn-128.png").convert("RGBA")))
+    venn, venn_edges = luminance(venn_rgb) / 255.0, _edges(venn_rgb)
+    r0, c0 = max(((r, c) for r in range(0, 105, 8) for c in range(0, 97, 8)),
+                 key=lambda rc: int(venn_edges[rc[0]:rc[0] + 24, rc[1]:rc[1] + 32].sum()))
+    stages = []
+    for name, img, sigma in (("noisy", noisy[8:32, 16:48], 1.0), ("venn", venn[r0:r0 + 24, c0:c0 + 32], 0.7)):
+        img = np.ascontiguousarray(img)
+        assert img.dtype == np.float32
+        smoothed, eroded = _preprocess(img, None, sigma, "constant", 0.0)
+        jsobel, isobel = ndi.sobel(smoothed, axis=1), ndi.sobel(smoothed, axis=0)
+        magnitude = isobel * isobel
+        magnitude += jsobel * jsobel
+        np.sqrt(magnitude, out=magnitude)
+        suppressed = _nonmaximum_suppression_bilinear(isobel, jsobel, magnitude, eroded, 0.1)
+        assert all(a.dtype == np.float32 for a in (smoothed, isobel, jsobel, magnitude, suppressed))
+        stages.append({"name": name, "h": img.shape[0], "w": img.shape[1], "sigma": bits(sigma),
+                       "gray": img.tobytes().hex(), "smoothed": smoothed.tobytes().hex(),
+                       "isobel": isobel.tobytes().hex(), "jsobel": jsobel.tobytes().hex(),
+                       "magnitude": magnitude.tobytes().hex(), "suppressed": suppressed.tobytes().hex(),
+                       "edges": on(canny(img, sigma=sigma))})
+
+    # The suppression alone, on gradients of small integers and magnitudes drawn from five
+    # values: interpolations that equal the centre in exact arithmetic are everywhere, so the
+    # precision of each step decides (the product neigh_2 * w in float32, the rest in double).
+    # Doing it all in float32, or all in double, misses 15 and 14 of these pixels.
+    sup_rng = np.random.default_rng(14)
+    palette = np.array([0.3, 0.7, 1.0, 1.1, 3.0], np.float32)
+    si, sj = (sup_rng.integers(-5, 6, (32, 32)).astype(np.float32) for _ in range(2))
+    pick = sup_rng.integers(0, 5, (32, 32))
+    frame = np.zeros((32, 32), np.uint8)
+    frame[1:-1, 1:-1] = 1
+    kept = _nonmaximum_suppression_bilinear(si, sj, palette[pick], frame, 0.1)
+    suppress = {"h": 32, "w": 32, "isobel": " ".join(str(int(v)) for v in si.ravel()),
+                "jsobel": " ".join(str(int(v)) for v in sj.ravel()), "palette": [bits(float(v)) for v in palette],
+                "magnitude": "".join(str(int(v)) for v in pick.ravel()), "kept": on(kept > 0)}
+
+    # skimage's dilation with a disk: sparse random masks, pixels on the frame included.
+    dilate = []
+    for h, w, density in ((20, 30, 0.02), (17, 11, 0.05), (9, 40, 0.01)):
+        mask = rng.random((h, w)) < density
+        mask[0, 0] = mask[h - 1, w // 2] = mask[h // 2, w - 1] = True
+        for r in (0, 1, 2, 3):
+            dilate.append({"h": h, "w": w, "r": r, "mask": on(mask), "out": on(dilation(mask, disk(r)))})
+
+    # _edge_f1's early returns and one ordinary value, from the Python function itself.
+    def box(cells, h=12, w=12):
+        m = np.zeros((h, w), bool)
+        for r, c in cells:
+            m[r, c] = True
+        return m
+
+    empty, a, near, far = box([]), box([(2, 2), (2, 3), (2, 4)]), box([(3, 3), (4, 4), (2, 9)]), box([(10, 10)])
+    f1 = [{"name": n, "h": 12, "w": 12, "tol": t, "a": on(x), "b": on(y), "f1": bits(_edge_f1(x, y, None, t))}
+          for n, x, y, t in (("both-empty", empty, empty, 2), ("a-empty", empty, a, 2), ("b-empty", a, empty, 2),
+                             ("disjoint", a, far, 2), ("partial", a, near, 1), ("partial-r2", a, near, 2))]
+    assert [c["f1"] for c in f1[:4]] == [bits(1.0), bits(0.0), bits(0.0), bits(0.0)]
+    assert 0 < _edge_f1(a, near, None, 1) < _edge_f1(a, near, None, 2) < 1
+
+    write("edges", {"corpus": corpus, "images": images, "grey": grey, "kernels": kernels, "stages": stages, "suppress": suppress, "dilate": dilate, "f1": f1})
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
