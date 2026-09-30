@@ -27,6 +27,7 @@ use crate::curves::{
     CurveParams,
     Shape,
     MERGE_DEG,
+    SNAP_END_MOVE,
     P,
     Segment,
     corners_from_runs,
@@ -2550,6 +2551,11 @@ fn snap_axis(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment> {
         } else {
             (p0[axis] + p1[axis]) / 2.0
         };
+        // a line that would have to move an end further than the placement
+        // knows the edge is not on the axis (`curves::SNAP_END_MOVE`)
+        if (p0[axis] - value).abs().max((p1[axis] - value).abs()) > SNAP_END_MOVE {
+            continue;
+        }
         let (mut a, mut b) = (p0, p1);
         if !head {
             a[axis] = value;

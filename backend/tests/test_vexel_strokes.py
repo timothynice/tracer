@@ -195,3 +195,69 @@ def test_medial_axis_is_deterministic_and_the_rust_port_finds_the_same_one():
     h, w = mask.shape
     rust = np.asarray(vexel_rs._medial_axis(mask.astype(np.uint8).ravel().tolist(), h, w), bool).reshape(h, w)
     assert np.array_equal(first, rust)
+
+
+def _subpixel_ring(size: int = 96, cx: float = 48.25, cy: float = 48.5, r: float = 30.0, width: float = 2.0) -> np.ndarray:
+    src = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">'
+           f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="#123456" stroke-width="{width}"/></svg>')
+    return render(src, size, size)[..., 3].astype(np.float64) / 255.0
+
+
+@pytest.mark.parametrize("width", [1.0, 2.0])
+def test_a_ring_off_the_pixel_lattice_is_a_faithful_stroke(width):
+    """A drawn line is a constant-width centreline, so its fidelity is near
+    zero — unless the centreline is read to whole pixels and the prediction
+    rasterised to whole pixels, when a 2 px ring whose centre sits half a
+    pixel off the lattice scores 0.19–0.25 against a gate of 0.2, and which
+    side of the gate it lands on is decided by the skeleton's tie-break.
+    The centreline is refined to the coverage's centroid across the stroke,
+    and the prediction is the exact coverage of a band at that centreline."""
+    from studi0trace.engines.vexel.strokes import stroke_fidelity
+
+    cx, cy, r = 48.25, 48.5, 30.0
+    alpha = _subpixel_ring(cx=cx, cy=cy, r=r, width=width)
+    mask = alpha > 0.05
+    s = stroke_geometry(mask, alpha)
+    assert s is not None and any(s.closed)
+    # the width the ink says: resvg draws a 1 px hairline at 0.85 coverage
+    assert abs(s.width - alpha.sum() / (2 * math.pi * r)) < 0.1, s.width
+    fid = stroke_fidelity(s, alpha)
+    assert fid < 0.1, f"fidelity {fid:.3f}"
+    ring = s.polylines[s.closed.index(True)]
+    radii = np.hypot(ring[:, 0] - cx, ring[:, 1] - cy)
+    assert np.sqrt(np.mean((radii - r) ** 2)) < 0.1, f"centreline wobbles {np.sqrt(np.mean((radii - r) ** 2)):.3f} px RMS"
+    assert np.abs(radii - r).max() < 0.25, f"centreline wobbles {np.abs(radii - r).max():.3f} px"
+
+
+def test_the_rust_stroke_stage_agrees_on_the_refined_centreline():
+    from studi0trace.engines.vexel.strokes import stroke_fidelity
+
+    vexel_rs = pytest.importorskip("vexel_rs")
+    alpha = _subpixel_ring()
+    mask = alpha > 0.05
+    h, w = mask.shape
+    py = stroke_geometry(mask, alpha)
+    rs = vexel_rs._stroke_geometry(mask.astype(np.uint8).ravel().tolist(), alpha.ravel().tolist(), h, w)
+    assert py is not None and rs is not None
+    polys, closed, caps, width = rs
+    assert list(closed) == py.closed and abs(width - py.width) < 1e-9
+    for a, b in zip(py.polylines, polys):
+        assert np.abs(a - np.asarray(b).reshape(-1, 2)).max() < 1e-9
+    rs_fid = vexel_rs._stroke_fidelity(polys, list(closed), float(width), alpha.ravel().tolist(), h, w)
+    assert abs(rs_fid - stroke_fidelity(py, alpha)) < 1e-9
+
+
+def test_a_wide_ring_stroke_hugs_its_circle():
+    """The emitted centreline, not just the polyline: cubics fitted through
+    thin-mark's 150 px ring at the full curve tolerance sagged 0.14 px inside
+    it, and a stroke's centreline error shows on both of its edges (16651 ppm
+    of seam). The stroke is fitted at half the tolerance."""
+    from tests.test_vexel_topology import sample_d
+
+    size, cx, cy, r = 400, 200.25, 200.5, 150.0
+    alpha = _subpixel_ring(size=size, cx=cx, cy=cy, r=r, width=2.0)
+    s = stroke_geometry(alpha > 0.05, alpha)
+    assert s is not None
+    svg = stroke_svg(s, "#000", 1.0, CurveParams(tol=0.4), 2)
+    radial = np.concatenate([np.hypot(*(sample_d(d, 60) - (cx, cy)).T) - r for d in re.findall(r'\bd="([^"]*)"', svg)])
+    assert abs(radial.mean()) < 0.1 and np.sqrt(np.mean(radial ** 2)) < 0.13, (radial.mean(), np.sqrt(np.mean(radial ** 2)))

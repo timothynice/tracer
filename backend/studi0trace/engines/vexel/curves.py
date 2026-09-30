@@ -1604,21 +1604,33 @@ def fit_closed_smooth(poly: np.ndarray, tol: float) -> list[Segment]:
 # --- regularity ------------------------------------------------------------------------
 
 
+# px. An axis snap may move a line's end this far and no further: the placement
+# knows an edge to a tenth of a pixel, so a line that would have to move more
+# than that to lie on the axis is not on the axis — it is drawn a degree off,
+# like the sides of a glyph's bar — and stays where its pixels are. The snap
+# angle alone let a 330 px side 1.3° off vertical turn 3.6 px at each end.
+# `regularity.END_MOVE_MAX` is the same bound for the cross-graph snaps.
+SNAP_END_MOVE = 0.15
+
+
 def snap_axis_lines(segments: list[Segment], snap_deg: float) -> list[Segment]:
-    """Make nearly horizontal/vertical lines exactly so, moving shared endpoints with them."""
+    """Make nearly horizontal/vertical lines exactly so, moving shared endpoints
+    with them — where that moves an end no further than SNAP_END_MOVE."""
     n = len(segments)
     for i, seg in enumerate(segments):
         if not isinstance(seg, Line):
             continue
         ang = _angle_deg(seg.p0, seg.p1) % 180.0
         if min(ang, 180.0 - ang) <= snap_deg:  # horizontal
-            y = (seg.p0[1] + seg.p1[1]) / 2
-            seg.p0[1] = seg.p1[1] = y
+            axis = 1
         elif abs(ang - 90.0) <= snap_deg:  # vertical
-            x = (seg.p0[0] + seg.p1[0]) / 2
-            seg.p0[0] = seg.p1[0] = x
+            axis = 0
         else:
             continue
+        value = (seg.p0[axis] + seg.p1[axis]) / 2
+        if abs(seg.p0[axis] - value) > SNAP_END_MOVE:
+            continue
+        seg.p0[axis] = seg.p1[axis] = value
         segments[(i - 1) % n].p1 = seg.p0.copy()
         segments[(i + 1) % n].p0 = seg.p1.copy()
     return segments

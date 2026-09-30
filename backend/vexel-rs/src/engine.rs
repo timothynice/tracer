@@ -63,7 +63,7 @@ impl Default for VexelParams {
             upsample: "auto".to_string(),
             strokes: true,
             shadows: true,
-            stroke_tolerance: 0.2,
+            stroke_tolerance: 0.13,
             overlaps: true,
             path_precision: 2,
         }

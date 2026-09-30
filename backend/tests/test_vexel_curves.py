@@ -87,11 +87,21 @@ def test_straight_polyline_is_a_line_and_near_axis_lines_snap():
     (seg,) = fit_open(pts, tol=0.4)
     assert isinstance(seg, Line)
 
-    slightly_off = dense_polygon([(10, 10.0), (40, 10.4), (40, 30), (10, 30.3)])
+    # sides a tenth of a pixel off level over 30 px: the placement's noise, snapped
+    slightly_off = dense_polygon([(10, 10.0), (40, 10.2), (40, 30), (10, 30.15)])
     shape = fit_shape([slightly_off], CurveParams(shape_fitting=False))
     lines = [s for s in shape.contours[0] if isinstance(s, Line)]
     horizontals = [s for s in lines if abs(s.p0[1] - s.p1[1]) < 1e-9]
     assert len(horizontals) >= 2, "near-horizontal sides should be snapped exactly horizontal"
+    # a side that rises 0.6 px over 30 px is within the snap angle too, but the
+    # snap would move its ends 0.3 px, more than the placement can be wrong by
+    # (SNAP_END_MOVE): it is drawn a degree off, and stays so
+    from studi0trace.engines.vexel.curves import SNAP_END_MOVE
+
+    leaning = dense_polygon([(10, 10.0), (40, 10.0 + 4 * SNAP_END_MOVE), (40, 30), (10, 30.0)])
+    shape = fit_shape([leaning], CurveParams(shape_fitting=False))
+    tops = [s for s in shape.contours[0] if isinstance(s, Line) and max(s.p0[1], s.p1[1]) < 12.0]
+    assert tops and all(abs(s.p0[1] - s.p1[1]) > 0.5 for s in tops), "a leaning side was snapped level"
 
 
 def test_rounded_shape_with_corners_mixes_lines_and_cubics():

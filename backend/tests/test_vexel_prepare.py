@@ -65,6 +65,38 @@ def test_flat_image_is_one_region_and_gradient_does_not_split_on_edges():
     assert labels[20, 20] not in np.unique(labels[:8, :])  # the square is not the ramp region
 
 
+def test_inpainting_ignores_the_colour_of_nearly_transparent_pixels():
+    """An 8-bit straight-alpha pixel's colour is stored to ±128/alpha levels: at
+    alpha 2 it is noise. A downsampled asset rings every edge with such pixels,
+    and inpainting the transparent field from them laid seams of that noise
+    across it that the partition read as edges (thin-mark-512-ds's triangle
+    came out serrated). The field, and the noise pixels themselves, take the
+    colour of the nearest pixel whose alpha makes its colour trustworthy."""
+    img = rgba(color=(0, 0, 0, 0))
+    img[8:24, 8:24] = (200, 50, 50, 255)
+    ys, xs = np.mgrid[0:32, 0:32]
+    rim = ((xs == 7) | (xs == 24) | (ys == 7) | (ys == 24)) & (xs >= 7) & (xs <= 24) & (ys >= 7) & (ys <= 24)
+    img[rim] = (255, 0, 255, 2)  # un-premultiplication garbage at alpha 2
+    p = prepare(img)
+    assert np.abs(p.rgb[0, 0] - (200, 50, 50)).max() < 2, "the transparent field is inpainted from the square, not the rim"
+    assert np.abs(p.rgb[7, 0] - (200, 50, 50)).max() < 2, "even where the rim is the nearest visible pixel"
+    assert tuple(p.rgb[7, 12]) == (255, 0, 255), "a visible pixel keeps the colour it has"
+    assert p.alpha[7, 12] == np.float32(2 / 255)
+    # a faint field keeps its own colour: a shadow's halo is black however
+    # near the red caster, and the transparent canvas beyond it is black too
+    halo = rgba(color=(0, 0, 0, 0))
+    halo[8:24, 8:24] = (220, 40, 40, 255)
+    halo[24:30, 8:24] = (0, 0, 0, 6)
+    q = prepare(halo)
+    assert np.abs(q.rgb[28, 16]).max() < 1, "the halo's own black stands"
+    assert np.abs(q.rgb[31, 16]).max() < 1, "and the canvas beyond it is inpainted from the halo"
+    # a genuinely translucent shape keeps its own colour: nothing above it to inpaint from
+    soft = rgba(color=(0, 0, 0, 0))
+    soft[8:24, 8:24] = (10, 20, 30, 40)
+    assert tuple(prepare(soft).rgb[12, 12]) == (10, 20, 30)
+    assert tuple(prepare(soft).rgb[0, 0]) == (10, 20, 30)
+
+
 def test_colour_under_faint_alpha_noise_is_its_neighbourhoods_mean_and_never_a_shapes():
     """A rasteriser that works premultiplied and unpremultiplies for the file
     leaves, under a pixel of alpha a, a colour quantised to steps of 255/a: at
@@ -95,7 +127,9 @@ def test_colour_under_faint_alpha_noise_is_its_neighbourhoods_mean_and_never_a_s
     assert tuple(p.rgb[16, 4]) == (120, 40, 200), "a colour no unpremultiply could have made is kept"
     assert np.isclose(p.alpha[30, 16], 2 / 255)
     assert np.isclose(p.features[30, 16, 3], 100 * 2 / 255, atol=1e-3)
-    assert np.abs(p.rgb[46, 16] - p.rgb[39, 16]).max() < 1e-3, "alpha 0 takes the nearest pixel that shows"
+    # alpha 0 takes the nearest pixel that shows, as its settled colour (the
+    # alpha-weighted mean of the smoothed field round it: within a level of its own)
+    assert np.abs(p.rgb[46, 16] - p.rgb[39, 16]).max() < 2.0, "alpha 0 takes the nearest pixel that shows"
     # the grid at alpha 3 is 0, 85, 170, 255: a level of rounding either way still counts as noise
     img[8:24, 4:6] = (86, 169, 0, 3)
     assert unpremultiply_noise(img[..., :3].astype(np.float32), img[..., 3])[16, 4]

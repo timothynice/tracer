@@ -20,6 +20,13 @@ pub const GRID_TOL: f64 = 1.0;
 /// shape's colour (`prepare.NOISE_RADIUS`).
 pub const NOISE_RADIUS: usize = 3;
 
+/// 8-bit alpha below which a pixel's stored colour is not believed: straight
+/// alpha quantises the colour to ±128/alpha levels, ±4 here (the Python's
+/// `prepare.INPAINT_ALPHA`, chosen from a survey over the corpus and the
+/// held-out set: the median colour error against the nearest solid pixel is
+/// 68/44/30/11/4/3 levels for alpha 1–3/4–7/8–15/16–31/32–63/64–127).
+pub const INPAINT_ALPHA: u8 = 32;
+
 pub struct Prepared {
     /// (H, W, 3) 0..255, smoothed under unpremultiply noise, inpainted where alpha == 0
     pub rgb: Image,
@@ -80,6 +87,51 @@ fn box_sum(a: &[f64], h: usize, w: usize, ch: usize, radius: usize) -> Vec<f64> 
     out
 }
 
+/// px; the neighbourhood whose alpha-weighted mean colour a pixel below
+/// INPAINT_ALPHA is read as (`settle_rim`; the Python's `prepare.RIM_REACH`).
+pub const RIM_REACH: usize = 2;
+
+/// The colour of every pixel below INPAINT_ALPHA as the alpha-weighted mean of
+/// the (2·RIM_REACH+1)² neighbourhood round it — the premultiplied colour of
+/// the neighbourhood over its alpha: beside an ink it is the ink, in a faint
+/// field it is the field's own colour. Other pixels are returned as they are.
+/// The sums run one offset at a time in raster order, as the Python adds them.
+fn settle_rim(rgb: &Image, h: usize, w: usize, alpha8: &[u8]) -> Image {
+    let mut out = Image::new(h, w, 3);
+    out.data.copy_from_slice(&rgb.data);
+    let r = RIM_REACH as isize;
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            if alpha8[i] == 0 || alpha8[i] >= INPAINT_ALPHA {
+                continue;
+            }
+            let mut mass = 0.0f64;
+            let mut premul = [0.0f64; 3];
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let (yy, xx) = (y as isize + dy, x as isize + dx);
+                    if yy < 0 || xx < 0 || yy >= h as isize || xx >= w as isize {
+                        continue;
+                    }
+                    let j = yy as usize * w + xx as usize;
+                    let a = alpha8[j] as f64;
+                    mass += a;
+                    for ch in 0..3 {
+                        premul[ch] += a * rgb.data[j * 3 + ch];
+                    }
+                }
+            }
+            if mass > 0.0 {
+                for ch in 0..3 {
+                    out.data[i * 3 + ch] = premul[ch] / mass;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Replace the colour under unpremultiply noise with the alpha-weighted mean
 /// colour of the noise pixels within `NOISE_RADIUS` (`prepare.smooth_faint_noise`).
 fn smooth_faint_noise(rgb: &mut Image, alpha255: &[u8], h: usize, w: usize) {
@@ -102,28 +154,32 @@ fn smooth_faint_noise(rgb: &mut Image, alpha255: &[u8], h: usize, w: usize) {
     }
 }
 
-/// Replace RGB under alpha == 0 with the nearest visible pixel's colour. PNG
-/// encoders store arbitrary (often black) RGB there, and letting that into the
-/// gradient fits or the edge detection would be wrong. `alpha255` is the
-/// file's alpha, 0..255.
-fn inpaint_transparent(rgb: &mut Image, alpha255: &[u8], h: usize, w: usize) {
+/// Replace RGB under alpha == 0 with the nearest visible pixel's colour — that
+/// pixel's settled colour (`settle_rim`) where its alpha is below
+/// INPAINT_ALPHA. PNG encoders store arbitrary (often black) RGB under
+/// transparent pixels, and a resampled edge's nearly transparent pixels carry
+/// quantisation noise (G=255 at alpha 1 beside a green ink): inpainted from
+/// those as they are, the transparent field carried seams the partition read
+/// as edges. Visible pixels keep the colour they have. `round_f32` rounds the
+/// inpainted colour to float32 as the Python's `prepare` keeps its rgb.
+pub(crate) fn inpaint_transparent(rgb: &mut Image, h: usize, w: usize, alpha8: &[u8], round_f32: bool) {
     let n = h * w;
-    let invisible = Grid { h, w, data: alpha255.iter().map(|a| *a == 0).collect() };
+    let invisible = Grid { h, w, data: alpha8.iter().map(|a| *a == 0).collect() };
     let n_inv = invisible.count();
     if n_inv == 0 || n_inv == n {
         return;
     }
+    let settled = settle_rim(rgb, h, w, alpha8);
     let (_, src_r, src_c) = edt_sq_indices(&invisible);
-    let src: Vec<usize> = (0..n)
-        .map(|i| src_r.data[i] as usize * w + src_c.data[i] as usize)
-        .collect();
-    let snapshot = rgb.data.clone();
     for i in 0..n {
         if !invisible.data[i] {
             continue;
         }
-        let s = src[i];
-        rgb.data[i * 3..i * 3 + 3].copy_from_slice(&snapshot[s * 3..s * 3 + 3]);
+        let s = src_r.data[i] as usize * w + src_c.data[i] as usize;
+        for ch in 0..3 {
+            let v = settled.data[s * 3 + ch];
+            rgb.data[i * 3 + ch] = if round_f32 { (v as f32) as f64 } else { v };
+        }
     }
 }
 
@@ -140,16 +196,16 @@ pub fn prepare(rgba: &[u8], h: usize, w: usize) -> Prepared {
     let n = h * w;
     let mut rgb = Image::new(h, w, 3);
     let mut alpha = Grid::<f64>::new(h, w);
-    let mut alpha255 = vec![0u8; n];
+    let mut alpha8 = vec![0u8; n];
     for i in 0..n {
         rgb.data[i * 3] = rgba[i * 4] as f64;
         rgb.data[i * 3 + 1] = rgba[i * 4 + 1] as f64;
         rgb.data[i * 3 + 2] = rgba[i * 4 + 2] as f64;
-        alpha255[i] = rgba[i * 4 + 3];
+        alpha8[i] = rgba[i * 4 + 3];
         alpha.data[i] = (rgba[i * 4 + 3] as f32 / 255.0) as f64;
     }
-    smooth_faint_noise(&mut rgb, &alpha255, h, w);
-    inpaint_transparent(&mut rgb, &alpha255, h, w);
+    smooth_faint_noise(&mut rgb, &alpha8, h, w);
+    inpaint_transparent(&mut rgb, h, w, &alpha8, true);
 
     let mut features = Image::new(h, w, 4);
     for i in 0..n {

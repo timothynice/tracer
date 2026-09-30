@@ -34,6 +34,76 @@ fn sample(field: &Grid<f64>, x: f64, y: f64) -> f64 {
     field.data[r as usize * field.w + c as usize]
 }
 
+/// Bilinear coverage sample in SVG space (pixel centres at +0.5, zero beyond
+/// the last centres); the Python's `strokes._sample_bilinear`.
+fn sample_bilinear(field: &Grid<f64>, x: f64, y: f64) -> f64 {
+    let (fx, fy) = (x - 0.5, y - 0.5);
+    let (x0, y0) = (fx.floor(), fy.floor());
+    let (tx, ty) = (fx - x0, fy - y0);
+    let at = |r: f64, c: f64| -> f64 {
+        if r < 0.0 || c < 0.0 || r >= field.h as f64 || c >= field.w as f64 {
+            0.0
+        } else {
+            field.data[r as usize * field.w + c as usize]
+        }
+    };
+    let top = at(y0, x0) * (1.0 - tx) + at(y0, x0 + 1.0) * tx;
+    let bottom = at(y0 + 1.0, x0) * (1.0 - tx) + at(y0 + 1.0, x0 + 1.0) * tx;
+    top * (1.0 - ty) + bottom * ty
+}
+
+/// The centreline is refined to the coverage's centroid across the stroke,
+/// sampled bilinearly every REFINE_STEP px out to REFINE_REACH px past the
+/// half width, REFINE_ITER times (`strokes.py` has the measurements).
+const REFINE_STEP: f64 = 0.25;
+const REFINE_REACH: f64 = 1.0;
+const REFINE_ITER: usize = 2;
+
+/// Move every vertex along its normal to the centroid of the coverage across
+/// the stroke there: the medial axis is a pixel path, half a pixel off the
+/// middle of a two-pixel line on whichever side the thinning order chose, and
+/// the coverage says where the middle is to a fraction of a pixel.
+fn refine_centreline(xy: &[P], closed: bool, coverage: &Grid<f64>, width: f64) -> Vec<P> {
+    let n = xy.len();
+    if n < 2 {
+        return xy.to_vec();
+    }
+    let mut out = xy.to_vec();
+    // truncated, as the Python's `int()`: at the 0.25 px width floor the
+    // count is 4.5, which round() would take to 5 and Python's round to 4
+    let steps = ((width / 2.0 + REFINE_REACH) / REFINE_STEP) as i64;
+    let offsets: Vec<f64> = (-steps..=steps).map(|k| k as f64 * REFINE_STEP).collect();
+    for _ in 0..REFINE_ITER {
+        let cur = out.clone();
+        for i in 0..n {
+            let (prev, nxt) = if closed {
+                (cur[(i + n - 1) % n], cur[(i + 1) % n])
+            } else {
+                (cur[i.saturating_sub(1)], cur[(i + 1).min(n - 1)])
+            };
+            let (tx, ty) = (nxt[0] - prev[0], nxt[1] - prev[1]);
+            let length = tx.hypot(ty);
+            if length < 1e-9 {
+                continue;
+            }
+            let (nx, ny) = (-ty / length, tx / length);
+            let mut total = 0.0;
+            let mut moment = 0.0;
+            for s in &offsets {
+                let c = sample_bilinear(coverage, cur[i][0] + s * nx, cur[i][1] + s * ny);
+                total += c;
+                moment += s * c;
+            }
+            if total <= 1e-9 {
+                continue;
+            }
+            let shift = moment / total;
+            out[i] = [cur[i][0] + shift * nx, cur[i][1] + shift * ny];
+        }
+    }
+    out
+}
+
 /// Extend the medial axis to the stroke's real end and pick the cap style.
 ///
 /// The medial axis stops about w/2 short of a line's end. A butt-ended line has
@@ -298,6 +368,18 @@ pub fn stroke_geometry(mask: &Mask, coverage: &Grid<f64>) -> Option<Stroke> {
         return None;
     }
     let mut width = (ink_area / total_len).max(0.25);
+    // the skeleton's pixel path is put on the coverage's middle; the length,
+    // and so the width, are then those of the line actually drawn
+    let polylines: Vec<Vec<P>> = polylines
+        .iter()
+        .zip(closed.iter())
+        .map(|(xy, c)| refine_centreline(xy, *c, coverage, width))
+        .collect();
+    let total_len: f64 = polylines.iter().zip(closed.iter()).map(|(xy, c)| polyline_length(xy, *c)).sum();
+    if total_len < MIN_LENGTH {
+        return None;
+    }
+    width = (ink_area / total_len).max(0.25);
     // Stroke only when a filled region would serve badly: sub-pixel / one-pixel
     // lines, or genuinely line-like features. Short thick pieces such as letter
     // stems stay filled shapes.
@@ -338,16 +420,22 @@ pub fn stroke_geometry(mask: &Mask, coverage: &Grid<f64>) -> Option<Stroke> {
     Some(Stroke { polylines: finished, closed: kept_closed, caps, width })
 }
 
+/// The centreline is fitted at this share of the curve tolerance: an error on
+/// a stroke's centreline shows on both of its edges (`strokes.py` has the
+/// measurements).
+pub const STROKE_FIT_SHARE: f64 = 0.5;
+
 /// One `<path>` per cap style (closed loops join the round group).
 pub fn stroke_svg(stroke: &Stroke, colour: &str, opacity: f64, params: &CurveParams, precision: usize) -> String {
     let mut round: Vec<String> = Vec::new();
     let mut butt: Vec<String> = Vec::new();
+    let tol = params.tol * STROKE_FIT_SHARE;
     for (i, xy) in stroke.polylines.iter().enumerate() {
         let cap = stroke.caps.get(i).copied().unwrap_or("round");
         if stroke.closed[i] && xy.len() >= 4 {
-            round.push(path_d(&[fit_closed_smooth(xy, params.tol)], precision));
+            round.push(path_d(&[fit_closed_smooth(xy, tol)], precision));
         } else if xy.len() >= 2 {
-            let d = path_d(&[fit_open(xy, params.tol, None, None)], precision);
+            let d = path_d(&[fit_open(xy, tol, None, None)], precision);
             let d = d.strip_suffix('Z').map(|s| s.to_string()).unwrap_or(d);
             if cap == "butt" {
                 butt.push(d);
@@ -385,64 +473,22 @@ pub fn stroke_svg(stroke: &Stroke, colour: &str, opacity: f64, params: &CurvePar
 /// letterform is made of strokes too — geometrically it passes every test for
 /// thinness, elongation and width consistency — but its terminals and joins are
 /// not what a single centreline paints, and that shows up here.
+///
+/// The prediction is exact to the sub-pixel: each pixel centre's distance to
+/// the centreline itself, and the coverage of a band of the stroke's width
+/// across a unit pixel at that distance (the Python's `stroke_fidelity`).
 pub fn stroke_fidelity(stroke: &Stroke, coverage: &Grid<f64>) -> f64 {
-    // The distance transform below is the cost, so it runs on the stroke's own
-    // neighbourhood: anything further than half a width plus two pixels from the
-    // centreline is outside `near` and never read.
-    let margin = (stroke.width / 2.0 + 3.0).ceil() as usize;
-    let (mut r0, mut r1, mut c0, mut c1) = (usize::MAX, 0usize, usize::MAX, 0usize);
-    for xy in &stroke.polylines {
-        for p in xy {
-            if p[0] < 0.0 || p[1] < 0.0 {
-                continue;
-            }
-            let (r, c) = (p[1] as usize, p[0] as usize);
-            r0 = r0.min(r.saturating_sub(margin));
-            r1 = r1.max((r + margin + 1).min(coverage.h));
-            c0 = c0.min(c.saturating_sub(margin));
-            c1 = c1.max((c + margin + 1).min(coverage.w));
-        }
-    }
-    if r0 == usize::MAX || r1 <= r0 || c1 <= c0 {
-        return f64::INFINITY;
-    }
-    let (h, w) = (r1 - r0, c1 - c0);
-    let mut on = Grid::filled(h, w, false);
-    for (xy, is_closed) in stroke.polylines.iter().zip(stroke.closed.iter()) {
-        let mut pts = xy.clone();
-        if *is_closed {
-            pts.push(xy[0]);
-        }
-        for pair in pts.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            let steps = (((b[0] - a[0]).hypot(b[1] - a[1]) * 2.0) as i64).max(1);
-            for s in 0..=steps {
-                let t = s as f64 / steps as f64;
-                let y = a[1] + t * (b[1] - a[1]);
-                let x = a[0] + t * (b[0] - a[0]);
-                if y < 0.0 || x < 0.0 {
-                    continue;
-                }
-                let (r, c) = (y as usize, x as usize);
-                if r >= r0 && c >= c0 && r < r1 && c < c1 {
-                    on.data[(r - r0) * w + (c - c0)] = true;
-                }
-            }
-        }
-    }
-    if !on.any() {
-        return f64::INFINITY;
-    }
-    let dist = edt(&on.not());
     let half = stroke.width / 2.0;
+    let reach = half + 2.0;
+    let dist = polyline_distance(&stroke.polylines, &stroke.closed, coverage.h, coverage.w, reach);
     let mut num = 0.0;
     let mut n = 0usize;
-    for i in 0..h * w {
-        if dist.data[i] <= half + 2.0 {
-            let predicted = (half + 0.5 - dist.data[i]).clamp(0.0, 1.0);
-            let g = (i / w + r0) * coverage.w + (i % w + c0);
-            let d = predicted - coverage.data[g];
-            num += d * d;
+    for i in 0..coverage.len() {
+        let d = dist.data[i];
+        if d <= reach {
+            let predicted = ((d + 0.5).min(half) - (d - 0.5).max(-half)).clamp(0.0, 1.0);
+            let e = predicted - coverage.data[i];
+            num += e * e;
             n += 1;
         }
     }
@@ -450,4 +496,52 @@ pub fn stroke_fidelity(stroke: &Stroke, coverage: &Grid<f64>) -> f64 {
         return f64::INFINITY;
     }
     (num / n as f64).sqrt()
+}
+
+/// Distance from every pixel centre within `reach` of the polylines to the
+/// nearest point on them; infinity elsewhere. An open polyline's band ends
+/// where it ends: a pixel whose centre projects past an end takes no distance
+/// from the end segment (the Python's `_polyline_distance`).
+fn polyline_distance(polylines: &[Vec<P>], closed: &[bool], h: usize, w: usize, reach: f64) -> Grid<f64> {
+    let mut dist = Grid::filled(h, w, f64::INFINITY);
+    for (xy, is_closed) in polylines.iter().zip(closed.iter()) {
+        let mut pts = xy.clone();
+        if *is_closed && !xy.is_empty() {
+            pts.push(xy[0]);
+        }
+        let butt = !*is_closed;
+        let last = pts.len().saturating_sub(2);
+        for (k, pair) in pts.windows(2).enumerate() {
+            let ([ax, ay], [bx, by]) = (pair[0], pair[1]);
+            let c0 = ((ax.min(bx) - reach).floor().max(0.0)) as usize;
+            let c1 = (((ax.max(bx) + reach).ceil() as i64 + 1).max(0) as usize).min(w);
+            let r0 = ((ay.min(by) - reach).floor().max(0.0)) as usize;
+            let r1 = (((ay.max(by) + reach).ceil() as i64 + 1).max(0) as usize).min(h);
+            if c1 <= c0 || r1 <= r0 {
+                continue;
+            }
+            let (dx, dy) = (bx - ax, by - ay);
+            let l2 = dx * dx + dy * dy;
+            for r in r0..r1 {
+                let cy = r as f64 + 0.5;
+                for c in c0..c1 {
+                    let cx = c as f64 + 0.5;
+                    let raw = if l2 < 1e-18 { 0.0 } else { ((cx - ax) * dx + (cy - ay) * dy) / l2 };
+                    let t = raw.clamp(0.0, 1.0);
+                    let mut dd = (cx - (ax + t * dx)).hypot(cy - (ay + t * dy));
+                    if butt && k == 0 && raw < 0.0 {
+                        dd = f64::INFINITY;
+                    }
+                    if butt && k == last && raw > 1.0 {
+                        dd = f64::INFINITY;
+                    }
+                    let kk = r * w + c;
+                    if dd < dist.data[kk] {
+                        dist.data[kk] = dd;
+                    }
+                }
+            }
+        }
+    }
+    dist
 }

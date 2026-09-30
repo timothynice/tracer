@@ -1,7 +1,9 @@
 //! Stage 0b: trace a small input at twice its size when it has thin features.
 //! Mirrors `upsample.py`, literal for literal, so the two upsamples agree to the byte.
 
+use crate::core::grid::Image;
 use crate::core::labels::Labels;
+use crate::prepare::inpaint_transparent;
 
 pub const UPSAMPLE_MAX_SIDE: usize = 192;
 pub const THIN_WIDTH: f64 = 2.2;
@@ -43,9 +45,21 @@ fn transpose(a: &[f64], n: usize, m: usize, c: usize) -> Vec<f64> {
     out
 }
 
-/// (H, W, 4) u8 → (2H, 2W, 4) u8, Lanczos-3, channels straight. See the Python `upsample2x`.
+/// (H, W, 4) u8 → (2H, 2W, 4) u8, Lanczos-3, channels straight — with the RGB
+/// below INPAINT_ALPHA inpainted first, so ink mixes with ink and not with the
+/// black a PNG stores under transparency. See the Python `upsample2x`.
 pub fn upsample2x(rgba: &[u8], h: usize, w: usize) -> Vec<u8> {
-    let a: Vec<f64> = rgba.iter().map(|v| *v as f64).collect();
+    let mut a: Vec<f64> = rgba.iter().map(|v| *v as f64).collect();
+    let mut rgb = Image::new(h, w, 3);
+    let mut alpha8 = vec![0u8; h * w];
+    for i in 0..h * w {
+        rgb.data[i * 3..i * 3 + 3].copy_from_slice(&a[i * 4..i * 4 + 3]);
+        alpha8[i] = rgba[i * 4 + 3];
+    }
+    inpaint_transparent(&mut rgb, h, w, &alpha8, false);
+    for i in 0..h * w {
+        a[i * 4..i * 4 + 3].copy_from_slice(&rgb.data[i * 3..i * 3 + 3]);
+    }
     let rows = pass_rows(&a, h, w, 4); // (2h, w)
     let t = transpose(&rows, 2 * h, w, 4); // (w, 2h)
     let cols = pass_rows(&t, w, 2 * h, 4); // (2w, 2h)
