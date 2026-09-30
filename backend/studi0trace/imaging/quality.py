@@ -54,16 +54,9 @@ earlier of two neighbours a little under the later one (the bleed), and that
 copy of the edge, with the jog it makes near a junction, is part of the
 earlier shape's path but is never on screen. So the drawing is rendered once
 more, without anti-aliasing and with every opaque element in a colour of its
-own (`id_map`), and a sample of an outline counts only where neither side
-of it (`VIS_OFFSET` px out) is painted over by a later element: an outline
-is on screen where its own colour shows on one side and something else on
-the other. Painted over on the inside, the element's colour is not what
-shows there; painted over on the outside by a later neighbour, the edge on
-screen is that neighbour's, and it is counted once, as the neighbour's (a
-tiling engine's shared edge is one edge, not two; the jog a bled copy makes
-at a junction, along the wall of a third shape painted earlier, is never on
-screen: its own side is under the later shape). Wobble, inflections, rect
-measures, slivers and thin strokes are
+own (`id_map`), and a sample of an outline counts only where it is not
+painted over from both sides by later elements (`VIS_OFFSET` px either side
+of it). Wobble, inflections, rect measures, slivers and thin strokes are
 taken over the visible samples only; `degenerate` is not, because a subpath
 with no area is junk in the file wherever it lies.
 
@@ -112,7 +105,7 @@ RECT_SKEW = 1.0        # degrees its sides may be off parallel / perpendicular
 RECT_SIDE_DEG = 30.0   # a side turning more than this is not a side
 RECT_GRID = 6.0        # sides further than this off a right-angle grid make a trapezoid, not a rect
 ID_SCALE = 2           # render scale of the element-id map (4x reads the same to ~1% at 3x the cost)
-VIS_OFFSET = 0.35      # px either side of an outline sample; painted over on either side, it is not on screen
+VIS_OFFSET = 0.35      # px either side of an outline sample that must both be painted over to hide it
 COVER_ALPHA = 0.5      # an element this opaque (opacity × fill-opacity) hides what it is painted over
 
 _SVG = "{http://www.w3.org/2000/svg}"
@@ -642,11 +635,8 @@ def _lookup(ids: np.ndarray, pts: np.ndarray, scale: int) -> np.ndarray:
 
 def visible_samples(q: np.ndarray, closed: bool, element: int, stroke: float | None,
                     ids: np.ndarray | None, scale: int) -> np.ndarray:
-    """Which samples of an outline are on screen: not painted over by a later
-    element on either side, VIS_OFFSET px out (or on a stroke's centreline).
-    See the module docstring: an outline shows where its element's colour is
-    on one side and something else on the other, so paint over either side
-    hides it, and a shared edge counts once, as the later element's."""
+    """Which samples of an outline are on screen: not painted over, VIS_OFFSET
+    px to either side of it (or on a stroke's centreline), by later elements."""
     if ids is None or len(q) == 0:
         return np.ones(len(q), bool)
     if stroke is not None:
@@ -660,7 +650,7 @@ def visible_samples(q: np.ndarray, closed: bool, element: int, stroke: float | N
     normal = np.column_stack([-tan[:, 1], tan[:, 0]]) * VIS_OFFSET
     a = _lookup(ids, q + normal, scale) > element
     b = _lookup(ids, q - normal, scale) > element
-    return ~(a | b)
+    return ~(a & b)
 
 
 # ---------------------------------------------------------------- per-contour measures
@@ -697,28 +687,6 @@ def _turns(q: np.ndarray, closed: bool, k: int) -> np.ndarray:
     fwd = q[k:] - q[:-k]
     ang = np.arctan2(fwd[:, 1], fwd[:, 0])
     return _wrap(np.diff(ang))
-
-
-def _visible_runs(q: np.ndarray, vis: np.ndarray, closed: bool) -> list[tuple[np.ndarray, bool]]:
-    """The maximal stretches of `q` that are on screen, each flagged whole when
-    it is the outline entire (closed as it is, when nothing is hidden); else
-    open runs, a closed outline's wrapped so that a run through sample 0 is one."""
-    if vis.all():
-        return [(q, True)]
-    if not vis.any():
-        return []
-    n = len(q)
-    start = 0
-    if closed and vis[0] and vis[-1]:
-        start = int(np.nonzero(~vis)[0][-1]) + 1  # begin just after the last hidden sample
-    idx = (np.arange(n) + start) % n
-    v = vis[idx]
-    out = []
-    edges = np.nonzero(np.diff(np.concatenate([[False], v, [False]]).astype(np.int8)))[0]
-    for a, b in zip(edges[::2], edges[1::2]):
-        if b - a >= 3:
-            out.append((q[idx[a:b]], False))
-    return out
 
 
 def _cancelled(q: np.ndarray, closed: bool, k: int) -> np.ndarray:
@@ -1057,20 +1025,22 @@ def geometry_card(svg: str, size: tuple[int, int] | None = None, visibility: boo
         if shown <= 0.0:
             continue
         length += shown
-        # Each stretch on screen is scored on its own, as an open outline: the
-        # turning a hidden stretch does beside it (the jog a bled copy makes at
-        # a junction, two right angles a pixel apart) is not spread into it.
-        excess = 0.0
-        for run, whole in _visible_runs(q, vis, c.closed):
-            excess_at = _cancelled(run, whole and c.closed, kw)
-            excess += max(0.0, float(excess_at.sum()))
-            # where: cancelled turning summed over a 2L window
-            if excess_at.sum() > math.radians(5):
-                local = np.convolve(excess_at, np.ones(2 * kw), "same")
-                for j in np.nonzero(local > math.radians(20))[0][:: kw]:
-                    p = run[min(max(j - kw // 2, 0), len(run) - 1)]
-                    loc_wobble.append((float(p[0]), float(p[1]), math.degrees(float(local[j]))))
+        excess_at = _cancelled(q, c.closed, kw)
+        if c.closed:
+            vis_at = vis
+        else:
+            h = kw // 2
+            vis_at = np.concatenate([np.full(h, vis[0]), vis, np.full(h, vis[-1])])
+        excess = max(0.0, float(excess_at[vis_at].sum()))
         wobble += math.degrees(excess)
+        # where: cancelled turning summed over a 2L window, reported on screen only
+        if excess > math.radians(5):
+            box = np.ones(2 * kw)
+            local = np.convolve(excess_at, box, "same")
+            off = 0 if c.closed else kw // 2
+            for j in np.nonzero((local > math.radians(20)) & vis_at)[0][:: kw]:
+                p = q[min(max(j - off, 0), len(q) - 1)]
+                loc_wobble.append((float(p[0]), float(p[1]), math.degrees(float(local[j]))))
         for j in _inflections(q, c.closed, ki):
             if vis[j % len(q)]:
                 inflections += 1
