@@ -117,8 +117,12 @@ class VexelParams(BaseModel):
         True, description="Rebuild drop shadows, glows and inner shadows as SVG filters instead of banded paths",
         json_schema_extra={"ui": {"control": "toggle", "group": "Effects"}},
     )
+    # 0.13: over corpus + held-out every thin group that is a drawn line scores
+    # at most 0.118 against its own coverage (hairlines under a pixel the
+    # highest), and the letter stems and blobs a stroke would mangle 0.141 up;
+    # the old rasterised measure ran 1.5× higher and gated at 0.2.
     stroke_tolerance: float = Field(
-        0.2, ge=0.05, le=1.0,
+        0.13, ge=0.05, le=1.0,
         description="Largest error a centreline may leave before the thin region is drawn filled instead of stroked; lower keeps more shapes filled",
         json_schema_extra={"ui": {"control": "slider", "step": 0.01, "group": "Curves", "label": "Stroke tolerance"}},
     )

@@ -420,16 +420,22 @@ pub fn stroke_geometry(mask: &Mask, coverage: &Grid<f64>) -> Option<Stroke> {
     Some(Stroke { polylines: finished, closed: kept_closed, caps, width })
 }
 
+/// The centreline is fitted at this share of the curve tolerance: an error on
+/// a stroke's centreline shows on both of its edges (`strokes.py` has the
+/// measurements).
+pub const STROKE_FIT_SHARE: f64 = 0.5;
+
 /// One `<path>` per cap style (closed loops join the round group).
 pub fn stroke_svg(stroke: &Stroke, colour: &str, opacity: f64, params: &CurveParams, precision: usize) -> String {
     let mut round: Vec<String> = Vec::new();
     let mut butt: Vec<String> = Vec::new();
+    let tol = params.tol * STROKE_FIT_SHARE;
     for (i, xy) in stroke.polylines.iter().enumerate() {
         let cap = stroke.caps.get(i).copied().unwrap_or("round");
         if stroke.closed[i] && xy.len() >= 4 {
-            round.push(path_d(&[fit_closed_smooth(xy, params.tol)], precision));
+            round.push(path_d(&[fit_closed_smooth(xy, tol)], precision));
         } else if xy.len() >= 2 {
-            let d = path_d(&[fit_open(xy, params.tol, None, None)], precision);
+            let d = path_d(&[fit_open(xy, tol, None, None)], precision);
             let d = d.strip_suffix('Z').map(|s| s.to_string()).unwrap_or(d);
             if cap == "butt" {
                 butt.push(d);
@@ -493,7 +499,9 @@ pub fn stroke_fidelity(stroke: &Stroke, coverage: &Grid<f64>) -> f64 {
 }
 
 /// Distance from every pixel centre within `reach` of the polylines to the
-/// nearest point on them; infinity elsewhere.
+/// nearest point on them; infinity elsewhere. An open polyline's band ends
+/// where it ends: a pixel whose centre projects past an end takes no distance
+/// from the end segment (the Python's `_polyline_distance`).
 fn polyline_distance(polylines: &[Vec<P>], closed: &[bool], h: usize, w: usize, reach: f64) -> Grid<f64> {
     let mut dist = Grid::filled(h, w, f64::INFINITY);
     for (xy, is_closed) in polylines.iter().zip(closed.iter()) {
@@ -501,7 +509,9 @@ fn polyline_distance(polylines: &[Vec<P>], closed: &[bool], h: usize, w: usize, 
         if *is_closed && !xy.is_empty() {
             pts.push(xy[0]);
         }
-        for pair in pts.windows(2) {
+        let butt = !*is_closed;
+        let last = pts.len().saturating_sub(2);
+        for (k, pair) in pts.windows(2).enumerate() {
             let ([ax, ay], [bx, by]) = (pair[0], pair[1]);
             let c0 = ((ax.min(bx) - reach).floor().max(0.0)) as usize;
             let c1 = (((ax.max(bx) + reach).ceil() as i64 + 1).max(0) as usize).min(w);
@@ -516,11 +526,18 @@ fn polyline_distance(polylines: &[Vec<P>], closed: &[bool], h: usize, w: usize, 
                 let cy = r as f64 + 0.5;
                 for c in c0..c1 {
                     let cx = c as f64 + 0.5;
-                    let t = if l2 < 1e-18 { 0.0 } else { (((cx - ax) * dx + (cy - ay) * dy) / l2).clamp(0.0, 1.0) };
-                    let dd = (cx - (ax + t * dx)).hypot(cy - (ay + t * dy));
-                    let k = r * w + c;
-                    if dd < dist.data[k] {
-                        dist.data[k] = dd;
+                    let raw = if l2 < 1e-18 { 0.0 } else { ((cx - ax) * dx + (cy - ay) * dy) / l2 };
+                    let t = raw.clamp(0.0, 1.0);
+                    let mut dd = (cx - (ax + t * dx)).hypot(cy - (ay + t * dy));
+                    if butt && k == 0 && raw < 0.0 {
+                        dd = f64::INFINITY;
+                    }
+                    if butt && k == last && raw > 1.0 {
+                        dd = f64::INFINITY;
+                    }
+                    let kk = r * w + c;
+                    if dd < dist.data[kk] {
+                        dist.data[kk] = dd;
                     }
                 }
             }

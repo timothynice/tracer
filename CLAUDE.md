@@ -143,9 +143,14 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   the bilinear coverage centroid across the stroke (±(w/2+1) px at 0.25 px,
   two passes), and `stroke_fidelity` predicts each pixel's coverage from its
   exact distance to that polyline — never from a rasterised centreline, which
-  scored a line half a pixel off the lattice at the 0.2 gate whichever way
-  the tie-break fell. `tools/diffcheck.py strokes` compares the two per thin
-  group.
+  scored a line half a pixel off the lattice at the gate whichever way the
+  tie-break fell. The exact measure runs at two thirds of the old one, and
+  the gate (`stroke_tolerance`) is 0.13: over corpus and held-out every drawn
+  line scores at most 0.118, the stems and blobs a stroke would mangle 0.141
+  up. The centreline is then fitted at `STROKE_FIT_SHARE` (half) of the curve
+  tolerance, since its error shows on both edges of the stroke; at the full
+  tolerance the cubics through a 150 px ring sagged 0.14 px inside it.
+  `tools/diffcheck.py strokes` compares the two per thin group.
 - A pixel's stored colour is noise below 8-bit alpha 32 (straight alpha
   quantises it to ±128/alpha levels; a resampled asset rings every edge with
   alpha 1–15 noise), so the transparent field is never inpainted from it as

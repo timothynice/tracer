@@ -363,15 +363,25 @@ def stroke_geometry(mask: np.ndarray, coverage: np.ndarray, min_length: float = 
     return Stroke(polylines=finished, closed=[closed[i] for i in keep], caps=caps, width=width)
 
 
+# The centreline is fitted at this share of the curve tolerance: an error on a
+# stroke's centreline shows on both of its edges, and the centreline is known
+# to 0.08 px. At the full tolerance the cubics through thin-mark's 150 px ring
+# sagged 0.14 px inside it (seam 16651 ppm); at half, 0.11 px and 11399 with
+# 24 segments for 16; at a quarter the fit chases the centreline's noise (209
+# segments, artifact index 0.4 → 6.7).
+STROKE_FIT_SHARE = 0.5
+
+
 def stroke_svg(stroke: Stroke, colour: str, opacity: float, params: CurveParams, precision: int) -> str:
     """One <path> per cap style (closed loops join the round group)."""
     groups: dict[str, list[str]] = {"round": [], "butt": []}
     caps = stroke.caps or ["round"] * len(stroke.polylines)
+    tol = params.tol * STROKE_FIT_SHARE
     for xy, is_closed, cap in zip(stroke.polylines, stroke.closed, caps):
         if is_closed and len(xy) >= 4:
-            groups["round"].append(path_d([fit_closed_smooth(xy, params.tol)], precision))
+            groups["round"].append(path_d([fit_closed_smooth(xy, tol)], precision))
         elif len(xy) >= 2:
-            d = path_d([fit_open(xy, params.tol)], precision)
+            d = path_d([fit_open(xy, tol)], precision)
             groups[cap].append(d[:-1] if d.endswith("Z") else d)  # open strokes: no Z
     op = "" if opacity >= 0.995 else f' stroke-opacity="{opacity:.3f}"'
     w = f"{stroke.width:.{max(precision, 2)}f}".rstrip("0").rstrip(".")
@@ -411,12 +421,20 @@ def stroke_fidelity(stroke: Stroke, coverage: np.ndarray) -> float:
 
 def _polyline_distance(polylines: list[np.ndarray], closed: list[bool], shape: tuple[int, int], reach: float) -> np.ndarray:
     """Distance from every pixel centre within `reach` of the polylines to the
-    nearest point on them; infinity elsewhere."""
+    nearest point on them; infinity elsewhere. An open polyline's band ends
+    where it ends: a pixel whose centre projects past an end takes no distance
+    from the end segment. The cap there is `_finish_ends`'s guess, and the
+    measure is of the line, not the guess — a square-ended 3 px bar drawn
+    exactly on its axis scored 0.12 for the round cap's ink it does not have,
+    and 0.14 in the engine, where the partition had cut its corners and the
+    guess was round."""
     h, w = shape
     dist = np.full((h, w), np.inf)
     for xy, is_closed in zip(polylines, closed):
         pts = np.vstack([xy, xy[:1]]) if is_closed else xy
-        for (ax, ay), (bx, by) in zip(pts[:-1], pts[1:]):
+        butt = not is_closed
+        last = len(pts) - 2
+        for k, ((ax, ay), (bx, by)) in enumerate(zip(pts[:-1], pts[1:])):
             c0 = max(int(np.floor(min(ax, bx) - reach)), 0)
             c1 = min(int(np.ceil(max(ax, bx) + reach)) + 1, w)
             r0 = max(int(np.floor(min(ay, by) - reach)), 0)
@@ -429,10 +447,15 @@ def _polyline_distance(polylines: list[np.ndarray], closed: list[bool], shape: t
             dx, dy = bx - ax, by - ay
             l2 = dx * dx + dy * dy
             if l2 < 1e-18:
-                t = np.zeros(cx.shape)
+                raw = np.zeros(cx.shape)
             else:
-                t = np.clip(((cx - ax) * dx + (cy - ay) * dy) / l2, 0.0, 1.0)
+                raw = ((cx - ax) * dx + (cy - ay) * dy) / l2
+            t = np.clip(raw, 0.0, 1.0)
             dd = np.hypot(cx - (ax + t * dx), cy - (ay + t * dy))
+            if butt and k == 0:
+                dd = np.where(raw < 0.0, np.inf, dd)
+            if butt and k == last:
+                dd = np.where(raw > 1.0, np.inf, dd)
             dist[r0:r1, c0:c1] = np.minimum(dist[r0:r1, c0:c1], dd)
     return dist
 

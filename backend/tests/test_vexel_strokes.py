@@ -245,3 +245,19 @@ def test_the_rust_stroke_stage_agrees_on_the_refined_centreline():
         assert np.abs(a - np.asarray(b).reshape(-1, 2)).max() < 1e-9
     rs_fid = vexel_rs._stroke_fidelity(polys, list(closed), float(width), alpha.ravel().tolist(), h, w)
     assert abs(rs_fid - stroke_fidelity(py, alpha)) < 1e-9
+
+
+def test_a_wide_ring_stroke_hugs_its_circle():
+    """The emitted centreline, not just the polyline: cubics fitted through
+    thin-mark's 150 px ring at the full curve tolerance sagged 0.14 px inside
+    it, and a stroke's centreline error shows on both of its edges (16651 ppm
+    of seam). The stroke is fitted at half the tolerance."""
+    from tests.test_vexel_topology import sample_d
+
+    size, cx, cy, r = 400, 200.25, 200.5, 150.0
+    alpha = _subpixel_ring(size=size, cx=cx, cy=cy, r=r, width=2.0)
+    s = stroke_geometry(alpha > 0.05, alpha)
+    assert s is not None
+    svg = stroke_svg(s, "#000", 1.0, CurveParams(tol=0.4), 2)
+    radial = np.concatenate([np.hypot(*(sample_d(d, 60) - (cx, cy)).T) - r for d in re.findall(r'\bd="([^"]*)"', svg)])
+    assert abs(radial.mean()) < 0.1 and np.sqrt(np.mean(radial ** 2)) < 0.13, (radial.mean(), np.sqrt(np.mean(radial ** 2)))
