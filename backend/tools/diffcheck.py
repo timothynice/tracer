@@ -409,7 +409,8 @@ def _fill_args(fills: dict) -> tuple[list[int], list[str], list[list[float]]]:
         if isinstance(f, Solid):
             v = [float(x) for x in f.rgba]
         else:
-            head = [f.x1, f.y1, f.x2, f.y2] if isinstance(f, Linear) else [f.cx, f.cy, f.r]
+            head = ([f.x1, f.y1, f.x2, f.y2] if isinstance(f, Linear)
+                    else [f.cx, f.cy, f.r, f.cx if f.fx is None else f.fx, f.cy if f.fy is None else f.fy])
             v = [float(x) for x in head] + [float(x) for s in f.stops for x in (s.offset, *s.rgba)]
         labs.append(int(lab))
         kinds.append(f.kind)
