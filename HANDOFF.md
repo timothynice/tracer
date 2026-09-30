@@ -177,3 +177,17 @@ art 4.86. Also: heart-eyes-q75 / u1f307-q75 dE rises on held-out are Auto pickin
 cleanest at the same fidelity" within its slack (balanced 1.955/art 17 vs dense 2.359/2.3): policy.
 Next: rebuild (build4 running), then run-verify.sh (no rebuild): diffcheck, stages, bench, compare,
 held-out, corpus-auto; both suites; cargo test; report.
+
+## What remains (held-out wobble vs VTracer, pre-round-3 records: 57 wins / 63 losses of 120)
+The soft-edge causes are fixed; the losses left are hard-edge geometry, a different root cause:
+- 40 of the 63 losses have Vexel at 20+ deg/100 px against VTracer's 5-25; the largest are the
+  wheelchair (339 vs 35), speech-balloon (278 vs 71), man-feeding-baby (221 vs 15), u1f4a0-512-ds
+  (127 vs 4.6), spiral-notepad (106 vs 9). Only 8 losses are within 5 deg/100 px.
+- u1f4a0-512-ds (Auto: detailed): the wobble sites cluster at the diamond's corners; at 4x the
+  outline carries a small spur where a node sits off the smooth edge (a wedge-tip / junction
+  artefact on a hard edge), $SCRATCH/q3s/u1f4a0-probe/detailed-zoom.png.
+- the wheelchair: wobble spread over a dozen 32-px cells of a figure with many small regions, plus
+  3 pinholes and 3 slivers — junction geometry between many small hard-edged parts.
+- Competitor records to use for the survey (durable): .../vectorizer-quality-pass-29e3d1/backend/
+  bench/reports/keep-2026-09-29/competitors/{heldout,heldout-it,corpus}/records.jsonl;
+  `$SCRATCH/q3s/survey3.py VEXEL.jsonl BASE.jsonl...` prints W/T/L with wobble.
