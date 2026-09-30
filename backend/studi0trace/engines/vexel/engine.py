@@ -230,6 +230,7 @@ class _Record:
     primitive: Shape | None
     rings: list
     attrs: str
+    opaque: bool = True  # paint no pixel shows through: a bled copy beneath it is invisible
 
 
 def _shape_from_rings(bnd, rings, member, params: CurveParams):
@@ -726,7 +727,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         d, attrs = fill.svg(f"g{i + 1}", p.path_precision)
         if d:
             defs.append(d)
-        records.append(_Record(frozenset(member), primitive, rings, attrs + extra))
+        records.append(_Record(frozenset(member), primitive, rings, attrs + extra, _is_opaque(fill)))
 
     def shape_of(rec: _Record) -> Shape:
         if rec.primitive is not None:
@@ -753,9 +754,11 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         if isinstance(rec, str):
             pending.append(rec)
             continue
-        if rec.primitive is not None and bnd.bleeds(rec.rings[0], rec.member):
+        if rec.primitive is not None and rec.opaque and bnd.bleeds(rec.rings[0], rec.member):
             # A primitive painted before a neighbour reaches under it as any
             # shape does: its bled outline goes beneath the exact primitive.
+            # Only under opaque paint: beneath a translucent disc the copy
+            # showed through and painted it twice.
             pending.append((PathShape(contours=[bnd.segments(rec.rings[0], rec.member)]), rec.attrs))
         pending.append((shape_of(rec), rec.attrs))
     elements = _emit(pending, p.path_precision, defs)

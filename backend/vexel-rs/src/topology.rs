@@ -2714,6 +2714,30 @@ pub fn build_opt(
     Boundary { arcs, padded, edge_arc, later_is_b, rank: rank.cloned() }
 }
 
+/// px; an axis-aligned line this close to a pixel boundary sits on it.
+const GRID_TOL: f64 = 0.02;
+
+/// Is every segment an axis-aligned line lying on a pixel boundary? Such an
+/// edge anti-aliases to nothing and needs no bleed (`topology._on_grid`).
+fn on_grid(segments: &[Segment]) -> bool {
+    if segments.is_empty() {
+        return false;
+    }
+    segments.iter().all(|seg| match seg {
+        Segment::Line { p0, p1 } => {
+            let (dx, dy) = ((p1[0] - p0[0]).abs(), (p1[1] - p0[1]).abs());
+            if dx <= GRID_TOL && dy > GRID_TOL {
+                (p0[0] - p0[0].round()).abs() <= GRID_TOL
+            } else if dy <= GRID_TOL && dx > GRID_TOL {
+                (p0[1] - p0[1].round()).abs() <= GRID_TOL
+            } else {
+                false
+            }
+        }
+        _ => false,
+    })
+}
+
 /// The whole-shape primitive `curves::fit_shape` would read a ring as, when
 /// it is one whose outline can be written back (an ellipse is not).
 fn whole_primitive(poly: &[P], params: &CurveParams) -> Option<Shape> {
@@ -3046,6 +3070,7 @@ impl Boundary {
             !arc.under.is_empty()
                 && !arc.under_into.is_some_and(|u| member.contains(&u))
                 && own.is_none_or(|o| arc.under_into.map_or(-1, rank_of) > o)
+                && !on_grid(&arc.segments)
         })
     }
 

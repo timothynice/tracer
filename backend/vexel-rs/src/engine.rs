@@ -1078,7 +1078,7 @@ fn emit(
         match it {
             Err(markup) => pending.push(Err(markup.clone())),
             Ok(rec) => {
-                if rec.primitive.is_some() && bnd.bleeds(&rec.rings[0], Some(&rec.member)) {
+                if rec.primitive.is_some() && is_opaque(&rec.fill) && bnd.bleeds(&rec.rings[0], Some(&rec.member)) {
                     // A primitive painted before a neighbour reaches under it as
                     // any shape does: its bled outline goes beneath the exact
                     // primitive. See the Python.

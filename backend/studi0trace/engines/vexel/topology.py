@@ -275,14 +275,18 @@ class Boundary:
         return None
 
     def bleeds(self, ring: list[tuple[int, bool]], member: frozenset[int] | None) -> bool:
-        """Does any arc of the ring reach under a neighbour painted later? Then
-        the shape's drawn outline (`segments`) is not its fitted one, and a
-        primitive drawn in its place needs that bled outline beneath it."""
+        """Does any arc of the ring reach under a neighbour painted later, along
+        an edge that is not on the pixel grid? Then the shape's drawn outline
+        (`segments`) is not its fitted one, and a primitive drawn in its place
+        needs that bled outline beneath it. An axis-aligned edge on a pixel
+        boundary anti-aliases to nothing on either side (a mosaic of tiles on
+        the grid had no seam and needs no copy); an edge through pixels leaves
+        the quarter-coverage hairline the bleed exists for."""
         own = min(self.rank.get(m, -1) for m in member) if member and self.rank is not None else None
         for idx, _reverse in ring:
             arc = self.arcs[idx]
             if member is not None and arc.under and arc.under_into not in member:
-                if own is None or self.rank.get(arc.under_into, -1) > own:
+                if (own is None or self.rank.get(arc.under_into, -1) > own) and not _on_grid(arc.segments):
                     return True
         return False
 
@@ -2719,6 +2723,30 @@ def _resample_corner(arc: Arc, x: np.ndarray, da: np.ndarray, db: np.ndarray, t1
 def _fillet_holds(pts: np.ndarray, x: np.ndarray, da: np.ndarray, db: np.ndarray, r: float, p95: float, worst: float) -> bool:
     d = rects.fillet_dist(pts, x, da, db, r)
     return float(np.percentile(d, 95)) <= p95 and float(d.max()) <= worst
+
+
+GRID_TOL = 0.02  # px; an axis-aligned line this close to a pixel boundary sits on it
+
+
+def _on_grid(segments: list[Segment]) -> bool:
+    """Is every segment an axis-aligned line lying on a pixel boundary?"""
+    if not segments:
+        return False
+    for seg in segments:
+        if not isinstance(seg, Line):
+            return False
+        dx, dy = abs(float(seg.p1[0] - seg.p0[0])), abs(float(seg.p1[1] - seg.p0[1]))
+        if dx <= GRID_TOL and dy > GRID_TOL:
+            x = float(seg.p0[0])
+            if abs(x - round(x)) > GRID_TOL:
+                return False
+        elif dy <= GRID_TOL and dx > GRID_TOL:
+            y = float(seg.p0[1])
+            if abs(y - round(y)) > GRID_TOL:
+                return False
+        else:
+            return False
+    return True
 
 
 def _whole_primitive(poly: np.ndarray, params: CurveParams) -> Circle | Rect | RoundedRect | None:

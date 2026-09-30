@@ -252,7 +252,19 @@ def merge(path):
     labels0 = initial_labels(grad, prep.features, min_region=6, detail=6.0)
     py = merge_regions(labels0, prep.features, MergeParams(detail=6.0, gradients=True), grad)
     rs = np.asarray(vexel_rs._stage_merge(a.tobytes(), h, w, 6, 6.0), dtype=np.int32).reshape(h, w)
-    return py.astype(np.int32), rs
+    # the two number a merged region after whichever of its pieces became the
+    # root, which is not a decision either side promises; the partition is
+    return _canonical(py), _canonical(rs)
+
+
+def _canonical(labels: np.ndarray) -> np.ndarray:
+    """Labels renumbered in order of first appearance in raster order."""
+    flat = labels.ravel()
+    _ids, first, inverse = np.unique(flat, return_index=True, return_inverse=True)
+    order = np.argsort(first, kind="stable")
+    rank = np.empty_like(order)
+    rank[order] = np.arange(order.size)
+    return (rank[inverse] + 1).astype(np.int32).reshape(labels.shape)
 
 
 def _rust_fill(kind: str, vals: list[float]):
