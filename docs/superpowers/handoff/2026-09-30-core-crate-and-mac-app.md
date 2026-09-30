@@ -30,7 +30,7 @@ wins. It still loses on seams (944 vs 96 ppm on held-out, a one-sided coverage m
 The design is `docs/superpowers/specs/2026-09-24-studi0trace-local-app-design.md`. In short:
 Studi0Trace becomes a free MIT Mac app (Tauri 2) whose engine is the Rust core, with the web
 version kept as the same core compiled to WebAssembly. Nothing Python ships; Python stays as
-developer tooling (reference engine, bench, diffcheck). Four plans:
+developer tooling (reference engine, bench, diffcheck). Four plans (distribution is unsigned, via GitHub Releases):
 
 1. **Core crate** — `docs/superpowers/plans/2026-09-24-studi0trace-core-crate.md` (15 tasks,
    written, **not started**: there is no `crates/` directory yet). A Cargo workspace with
@@ -39,7 +39,7 @@ developer tooling (reference engine, bench, diffcheck). Four plans:
    behind one `Core` facade, held to the Python by golden fixtures.
 2. **Desktop app** — Tauri 2 in `apps/desktop`; not yet written as a plan.
 3. **Web on WebAssembly** — `crates/studi0trace-wasm`; not yet written as a plan.
-4. **Release and retirement** — signing, notarization, GitHub Releases, removal of the FastAPI
+4. **Release and retirement** — GitHub Releases (unsigned, no notarization), removal of the FastAPI
    deploy; not yet written as a plan.
 
 **Start with plan 1.** It was written before the quality pass, so check it against the current
@@ -64,9 +64,10 @@ studi0trace-core` green and a commit.
   `x86_64-apple-darwin`.
 - `cargo tauri` is **not installed** (`cargo install tauri-cli --locked` for plan 2).
 - Node 26.10.0, full Xcode at `/Applications/Xcode.app`.
-- Code signing: `security find-identity` shows two identities, both iPhone Distribution. There is
-  **no Developer ID Application certificate**, which plan 4's signing and notarization need. That
-  is the owner's to obtain.
+- Code signing: none needed. Decided 2026-09-30: the app is open source, distributed through GitHub
+  Releases (not the App Store) and is not signed or notarized, so the missing Developer ID
+  Application certificate is not a blocker. Plan 4 drops signing, notarization and stapling and
+  documents how to open an unsigned app instead.
 - Open questions from the design, still open: app name and bundle identifier, minimum macOS
   version, Intel or universal, and where the static web version is hosted.
 
