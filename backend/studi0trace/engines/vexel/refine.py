@@ -21,6 +21,16 @@ from studi0trace.engines.vexel.weights import interior
 
 FitFn = Callable[[np.ndarray], tuple[Fill, float]]
 
+# Fewest pixel pairs a boundary steeper than the edge limit needs before its
+# ridge share can lift the veto: "a ridge at more than half its pairs" is a
+# statistic, and over fewer than two dozen pairs it is decided by two or three
+# pixels, both sides being other shards within reach. A ramp the partition cut
+# through one smooth field is a long cut (a glow's core against its halo: 640
+# pairs); the shards of an upsampled ring meet along four to nine, read as
+# ramps at every second one, and thin-mark-128 came out as 38 shapes with no
+# stroke instead of 19 with one.
+RAMP_MIN_PAIRS = 24
+
 
 def fill_rms(fill: Fill, xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, w: np.ndarray) -> float:
     pred = fill.evaluate(xs, ys)
@@ -38,10 +48,24 @@ def refine_merge(
     params: FitParams,
     edge_limit: float,
     max_attempts: int = 60,
+    rescued: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[int, Fill], bool]:
-    """Returns (labels, fills, changed). Fills of merged regions are refitted."""
+    """Returns (labels, fills, changed). Fills of merged regions are refitted.
+
+    `rescued` marks the pixels the rescue promoted: a region most of whose
+    pixels are among them is a rescued band, and a steep ramp between it and
+    its ground is never joined here, whatever the union fit says — it is the
+    shadow stage's to explain first (the bands of a drop shadow beside a flat
+    backdrop joined it as radials and no filter was left to find; radii-512
+    lost all four of its shadows). A ramp the partition cut through one
+    smooth field, a glow's core against its halo, is joined as before."""
     if not params.gradients:
         return labels, fills, False
+    band_labels: set[int] = set()
+    if rescued is not None:
+        counts = np.bincount(labels.ravel())
+        inside = np.bincount(labels.ravel(), weights=rescued.ravel().astype(np.float64), minlength=counts.size)
+        band_labels = {int(k) for k in range(1, counts.size) if counts[k] and 2.0 * inside[k] > counts[k]}
 
     # A fill is fitted to its region's core (`weights.fill_core`), so it is
     # judged there too. Scored over every pixel, a small part's own rim — which
@@ -84,7 +108,9 @@ def refine_merge(
     ridges = boundary_ridges(labels, grad)
     pairs = [
         (cnt, a, b, gsum / cnt > edge_limit) for (a, b), (cnt, gsum) in edges.items()
-        if (a in smooth or b in smooth) and cnt > 0 and (gsum / cnt <= edge_limit or ridges[(a, b)] <= 0.5)
+        if (a in smooth or b in smooth) and cnt > 0
+        and (gsum / cnt <= edge_limit
+             or (cnt >= RAMP_MIN_PAIRS and ridges[(a, b)] <= 0.5 and a not in band_labels and b not in band_labels))
     ]
     pairs.sort(key=lambda t: -t[0])  # longest shared boundary first
 

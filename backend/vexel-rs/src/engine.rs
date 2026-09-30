@@ -197,6 +197,7 @@ fn reach_the_edge(
     ys: &Grid<f64>,
     rgba255: &[[f64; 4]],
     fill_at: &dyn Fn(i32, &[f64], &[f64]) -> Vec<[f64; 4]>,
+    skip: &HashSet<i32>,
 ) -> bool {
     let (h, w) = (l.h, l.w);
     let mut counts: HashMap<i32, (usize, usize)> = HashMap::new(); // label -> (pixels, rescued pixels)
@@ -207,7 +208,12 @@ fn reach_the_edge(
             e.1 += 1;
         }
     }
-    let mut targets: Vec<i32> = counts.iter().filter(|(k, (n, r))| **k > 0 && 2 * r > *n).map(|(k, _)| *k).collect();
+    // `skip`: the bands a shadow filter explains that stay in the map unpainted
+    let mut targets: Vec<i32> = counts
+        .iter()
+        .filter(|(k, (n, r))| **k > 0 && 2 * r > *n && !skip.contains(k))
+        .map(|(k, _)| *k)
+        .collect();
     targets.sort_unstable();
     let mut moved = false;
     for r in targets {
@@ -548,7 +554,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     t.lap("rescue + refit");
     // Join gradient fragments (glows, off-centre radials) that one real fill explains.
     let (refined, refit_fills, changed) = refine_merge(
-        &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60,
+        &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60, rescued_pixels.as_ref(),
     );
     l = refined;
     fills = refit_fills;
@@ -561,7 +567,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                 break;
             }
             let (refined, refit_fills, more) = refine_merge(
-                &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60,
+                &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60, rescued_pixels.as_ref(),
             );
             l = refined;
             fills = refit_fills;
@@ -684,7 +690,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                     None => vec![[0.0; 4]; qx.len()],
                 }
             };
-            let moved = reach_the_edge(&mut l, rp, &xs, &ys, &rgba255, &fill_now);
+            let moved = reach_the_edge(&mut l, rp, &xs, &ys, &rgba255, &fill_now, &shadow_plan.absorbed);
             if moved {
                 index = LabelIndex::build(&l);
                 enc = enclosure(&l);

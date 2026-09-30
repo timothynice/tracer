@@ -226,7 +226,7 @@ def _contacts(labels: np.ndarray, m: np.ndarray) -> np.ndarray:
 
 
 def reach_the_edge(labels: np.ndarray, rescued: np.ndarray, xs: np.ndarray, ys: np.ndarray,
-                   rgba255: np.ndarray, fill_at) -> np.ndarray:
+                   rgba255: np.ndarray, fill_at, skip: set[int] | None = None) -> np.ndarray:
     """A rescued region reaches the outline of the region it was carved from.
 
     The rescue leaves its parent's edge band alone (`rescue.boundary_band`:
@@ -258,16 +258,19 @@ def reach_the_edge(labels: np.ndarray, rescued: np.ndarray, xs: np.ndarray, ys: 
     pixels are among them is a rescued region, whatever it has been renumbered
     to since. This runs once the shadow stage has claimed its bands: a drop
     shadow's band beside its caster is the caster's to explain as a filter,
-    and given the backdrop's rim along the caster it no longer was. Its parent
-    is the label it touches most (the lower on a tie). Regions are visited in
-    order of their label.
+    and given the backdrop's rim along the caster it no longer was. `skip`
+    names the bands a shadow filter explains that stay in the map, unpainted
+    (an inner shadow's, which have no ground to join): given the caster's rim,
+    they took its outline with them and nothing painted it (inset-card-512).
+    Its parent is the label it touches most (the lower on a tie). Regions are
+    visited in order of their label.
     """
     counts = np.bincount(labels.ravel())
     inside = np.bincount(labels.ravel(), weights=rescued.ravel().astype(np.float64), minlength=counts.size)
     dy, dx = np.mgrid[-2:3, -2:3]
     diamond = np.abs(dy) + np.abs(dx) <= 2  # the pixels within two steps, as the cross dilation reaches
     for r in range(1, counts.size):
-        if counts[r] == 0 or 2.0 * inside[r] <= counts[r]:
+        if counts[r] == 0 or 2.0 * inside[r] <= counts[r] or (skip and r in skip):
             continue
         m = labels == r
         if is_thin(m):
@@ -498,7 +501,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         fit_regions(ids)
 
     # Join gradient fragments (glows, off-centre radials) that one real fill explains.
-    labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
+    labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail, rescued=rescued_pixels)
     if not p.gradients:
         # Posterised, a region boundary through one smooth field is a visible
         # colour step along whatever line the partition drew, so the ramps are
@@ -508,7 +511,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         for _ in range(POSTERIZE_JOIN_ROUNDS):
             if not again:
                 break
-            labels, fills, again = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
+            labels, fills, again = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail, rescued=rescued_pixels)
     dump.labels("labels_refine", labels)
     if changed:
         ids = [int(i) for i in np.unique(labels) if i != 0]
@@ -585,7 +588,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # which the band is not part of, so they stand). After the shadow stage:
     # a band a filter explains has joined its ground.
     if p.gradients and rescued_pixels is not None:
-        reached = reach_the_edge(labels, rescued_pixels, xs, ys, rgba255, fill_at)
+        reached = reach_the_edge(labels, rescued_pixels, xs, ys, rgba255, fill_at, skip=shadow_plan.absorbed)
         if reached is not labels and bool((reached != labels).any()):
             labels = reached
             enc = enclosure(labels)

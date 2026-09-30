@@ -61,6 +61,11 @@ fn gather(mask: &Mask, xs: &Grid<f64>, ys: &Grid<f64>, rgba: &[[f64; 4]]) -> (Ve
     (x, y, c)
 }
 
+/// Fewest pixel pairs a steep boundary needs before its ridge share can lift
+/// the veto: over fewer, the share is decided by two or three pixels (the
+/// shards of an upsampled ring). See the Python.
+pub const RAMP_MIN_PAIRS: f64 = 24.0;
+
 /// Returns (labels, fills, changed). Fills of merged regions are refitted.
 // The arguments are the pipeline's state at this point; bundling them into a
 // struct just to move the list somewhere else would not make the seam clearer.
@@ -75,9 +80,25 @@ pub fn refine_merge(
     params: &FitParams,
     edge_limit: f64,
     max_attempts: usize,
+    rescued: Option<&Mask>,
 ) -> (Labels, HashMap<i32, Fill>, bool) {
     if !params.gradients {
         return (l.clone(), fills, false);
+    }
+    // A rescued band (a region most of whose pixels the rescue promoted) is
+    // the shadow stage's to explain first: a steep ramp between it and its
+    // ground is never joined here. See the Python.
+    let mut band_labels: HashSet<i32> = HashSet::new();
+    if let Some(rp) = rescued {
+        let mut counts: HashMap<i32, (usize, usize)> = HashMap::new();
+        for i in 0..l.len() {
+            let e = counts.entry(l.data[i]).or_insert((0, 0));
+            e.0 += 1;
+            if rp.data[i] {
+                e.1 += 1;
+            }
+        }
+        band_labels = counts.iter().filter(|(k, (n, r))| **k > 0 && 2 * r > *n).map(|(k, _)| *k).collect();
     }
     let mut labels_out = l.clone();
     let mut fills = fills;
@@ -120,7 +141,11 @@ pub fn refine_merge(
         .filter(|((a, b), (cnt, gsum))| {
             (smooth.contains(a) || smooth.contains(b))
                 && *cnt > 0.0
-                && (gsum / cnt <= edge_limit || ridges.get(&(*a, *b)).copied().unwrap_or(1.0) <= 0.5)
+                && (gsum / cnt <= edge_limit
+                    || (*cnt >= RAMP_MIN_PAIRS
+                        && ridges.get(&(*a, *b)).copied().unwrap_or(1.0) <= 0.5
+                        && !band_labels.contains(a)
+                        && !band_labels.contains(b)))
         })
         .map(|((a, b), (cnt, gsum))| (*cnt, *a, *b, gsum / cnt > edge_limit))
         .collect();
