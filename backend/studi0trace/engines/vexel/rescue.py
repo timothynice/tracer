@@ -145,6 +145,10 @@ def rescue_features(
     per image, nearly all of it on glows and shadows (logomark-128 +252,
     inset-well-128 +80, radii-128 +59), whose bands `edge_mix` does not read
     as a mix of the two fills beside them.
+    Carving a feature out leaves pieces of the host below `min_region` —
+    islands inside the feature, the one-pixel thread of the host's own edge
+    between the feature and a third region; `engine.absorb_shards` hands them
+    to their surroundings once the shadow stage has had its say.
     Returns (new labels, ids of the rescued regions).
     """
     candidates = (residual > threshold) & ~boundary_band(labels)

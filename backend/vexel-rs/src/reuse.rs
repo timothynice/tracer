@@ -144,9 +144,10 @@ pub fn emit(pending: &[(Shape, String)], precision: usize, first_id: usize) -> (
     let mut group_of: Vec<Option<usize>> = vec![None; n];
     let mut shifts: Vec<Option<P>> = vec![None; n];
     let mut groups: Vec<Vec<usize>> = Vec::new();
-    // A shape that carries a filter is written in full, never defined or used
-    // (see the Python: a filter on a `<use>` is shifted with the copy).
-    let own: Vec<bool> = pending.iter().map(|(_, attrs)| attrs.contains("filter=")).collect();
+    // A shape that carries a filter or a gradient is written in full, never
+    // defined or used (see the Python: a filter region or a userSpaceOnUse
+    // gradient on a `<use>` is shifted with the copy).
+    let own: Vec<bool> = pending.iter().map(|(_, attrs)| attrs.contains("filter=") || attrs.contains("url(#")).collect();
     for i in 0..n {
         if group_of[i].is_some() || own[i] {
             continue;

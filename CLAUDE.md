@@ -81,9 +81,11 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   outlines agree to 0.1 px after translation) are written once into `<defs>`
   and painted as `<use href x y fill>` (`vexel/reuse.py`); anything that
   reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`. A shape
-  that carries a filter is written in full: a filter on a `<use>` applies in
-  the use's own user space, which its x and y shift, so a filter region in
-  the file's units moves with the copy and clips it.
+  that carries a filter or a gradient is written in full: a filter or a
+  `userSpaceOnUse` gradient on a `<use>` applies in the use's own user space,
+  which its x and y shift, so a filter region in the file's units moves with
+  the copy and clips it, and a gradient solved in the file's units paints the
+  copy with the wrong stretch of itself (a cherry 240 px right of its twin).
 - A ring that is a circle or a rectangle draws as that primitive, and its
   arcs carry the primitive's outline (`topology._imprint`, after the fit and
   the regularity snap, before the bleed): the nodes move onto it and every arc
@@ -208,6 +210,35 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   map and skipped at paint time, the rescued band stopped a pixel short of the
   caster and the thread of backdrop between them cut the caster's outline into
   two-point arcs, a node at every step of a rounded corner.
+- The colour under a pixel of alpha below `prepare.COLOUR_ALPHA_FLOOR` (8/255)
+  may be unpremultiply noise: a premultiplied pipeline leaves it quantised to
+  steps of 255/a per channel (at alpha 1 or 2 only 0, 128 and 255), about 45/a
+  ΔE of noise against the neighbours over the corpus, and below 8 a halo of it
+  is all ridge and no seed (`seed_mask`'s 8 ΔE/px), so the watershed flooded a
+  speech balloon out to the far end of its shadow's alpha-2 halo and the
+  rescue carved the halo back out as an "invisible" region that took the rim
+  with it. A colour on that grid (`unpremultiply_noise`, a level of rounding
+  either way) becomes the alpha-weighted mean of the noise pixels within
+  `NOISE_RADIUS` (`smooth_faint_noise`, 7×7: alpha-2 noise from ±64 to ±9
+  levels), its own neighbourhood's samples and never a shape's — inpainted
+  from the nearest pixel that shows, a ramp's tail beside a disc took the
+  disc's colour (the corpus is rendered premultiplied: its tails are on the
+  grid too). A colour off the grid is a straight-alpha file's own and stays.
+  The 2× upsample resamples the prepared colour, not the file's: what a file
+  stores under alpha 0 was mixed into the ringing beside every thin line. And
+  a four-connected piece of a region below `min_region` is not a region: the
+  shards carving a feature leaves of its host — the islands the host's fill
+  passes through, the one-pixel thread of the host's own edge between the
+  feature and a third region, a sliver each in `_directed_rings` — join the
+  nearest neighbouring region as `split_rim` hands a rim over
+  (`engine.absorb_shards`: distance, own colour, lower label; never an
+  invisible one while a visible one is as near; a label whose every piece is
+  small is a dotted line, not shards), after the shadow stage and without
+  reading the enclosure again: the shards are the host's edge, and an inset
+  shadow's band is enclosed by its card through the card's corner bits — with
+  those bits in the band and the enclosure read again, the card was painted
+  without its band ring; absorbed before the shadow stage, the band touched
+  the backdrop and the shadow model no longer fitted.
 - Rounded rectangles are read under blur (`vexel/rects.py`: the blur is taken
   out of each radius, r² ≈ r_read² − (1.86σ)² − 0.58), given one radius per
   shape and across shapes, one size and shared edge levels, and a corner that
