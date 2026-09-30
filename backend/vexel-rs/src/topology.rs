@@ -578,7 +578,7 @@ fn crossing(
     b: i32,
     fill_at: FillAt,
     local: Option<&LocalFills>,
-) -> (Vec<f64>, Vec<i8>) {
+) -> (Vec<f64>, Vec<i8>, Vec<f64>) {
     let n = p_in.len();
     let here_raw = coverage(rgb, alpha, p_in, a, b, fill_at, local);
     let there_raw = coverage(rgb, alpha, p_out, a, b, fill_at, local);
@@ -586,8 +586,9 @@ fn crossing(
     let there: Vec<f64> = there_raw.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
 
     // One step further out on each side, when that pixel still belongs to the
-    // same region; otherwise fall back to the near sample.
-    let outward = |from: &[Pixel], towards: &[Pixel], want: i32, near: &[f64]| -> Vec<f64> {
+    // same region: the sample read there, and whether it was usable (the
+    // caller falls back to the near sample where it was not).
+    let outward = |from: &[Pixel], towards: &[Pixel], want: i32| -> (Vec<f64>, Vec<bool>) {
         let mut pix = Vec::with_capacity(n);
         let mut valid = Vec::with_capacity(n);
         for k in 0..n {
@@ -600,13 +601,22 @@ fn crossing(
             pix.push(if ok { (r as usize, c as usize) } else { from[k] });
         }
         let cov = coverage(rgb, alpha, &pix, a, b, fill_at, local);
-        (0..n).map(|k| if valid[k] && cov[k].is_finite() { cov[k] } else { near[k] }).collect()
+        let ok: Vec<bool> = (0..n).map(|k| valid[k] && cov[k].is_finite()).collect();
+        (cov, ok)
     };
-    let before = outward(p_in, p_out, a, &here);
-    let after = outward(p_out, p_in, b, &there);
+    let (outer_in, ok_in) = outward(p_in, p_out, a);
+    let (outer_out, ok_out) = outward(p_out, p_in, b);
+    let before: Vec<f64> = (0..n).map(|k| if ok_in[k] { outer_in[k] } else { here[k] }).collect();
+    let after: Vec<f64> = (0..n).map(|k| if ok_out[k] { outer_out[k] } else { there[k] }).collect();
+    // How much coverage drops from the pixel before the label edge to the pixel
+    // after it, three pixels apart: the edge's softness (`soften`). A sample
+    // that fell back to its neighbour says nothing about that.
+    let drop: Vec<f64> = (0..n)
+        .map(|k| if ok_in[k] && ok_out[k] { outer_in[k] - outer_out[k] } else { f64::NAN })
+        .collect();
 
     let at = [-1.0, 0.0, 1.0, 2.0];
-    (0..n)
+    let (placed, side): (Vec<f64>, Vec<i8>) = (0..n)
         .map(|k| {
             let level = [before[k], here[k], there[k], after[k]];
             // Of the crossings on offer, the one nearest the label edge wins.
@@ -644,7 +654,90 @@ fn crossing(
             };
             (placed, side)
         })
-        .unzip()
+        .unzip();
+    (placed, side, drop)
+}
+
+// --- soft edges ----------------------------------------------------------------
+//
+// An edge's blur width is read from how far coverage drops across the three
+// pixels the placement samples: a crisp anti-aliased edge drops the whole way,
+// a Gaussian ramp of σ px drops erf(1.5 / (σ√2)), which SOFT_WIDTH / drop −
+// SOFT_BIAS inverts within 8 % for σ between 1 and 8 px. Across a soft edge the
+// samples seldom cross a half, every vertex falls to the lattice edge and the
+// arc is the label staircase; the edge has no position finer than its blur, so
+// the vertices are smoothed along the arc by a Gaussian of that width, from
+// SOFT_SIGMA up and capped at SOFT_SIGMA_MAX. See the Python for the survey.
+pub const SOFT_WIDTH: f64 = 1.2;
+pub const SOFT_BIAS: f64 = 0.35;
+pub const SOFT_SIGMA: f64 = 1.0;
+pub const SOFT_SIGMA_MAX: f64 = 4.0;
+pub const SOFT_REACH: f64 = 3.0;
+
+/// The smoothing sigma an arc's coverage drops ask for, 0 for a crisp edge:
+/// the median drop over the vertices whose two outer samples were both read
+/// (an even count averages the two middle values, as numpy does).
+fn softness(drop: &[f64]) -> f64 {
+    let mut drops: Vec<f64> = drop.iter().copied().filter(|v| v.is_finite()).collect();
+    if drops.is_empty() {
+        return 0.0;
+    }
+    drops.sort_by(|p, q| p.total_cmp(q));
+    let n = drops.len();
+    let d = if n % 2 == 1 { drops[n / 2] } else { (drops[n / 2 - 1] + drops[n / 2]) / 2.0 };
+    if d <= 0.0 {
+        return SOFT_SIGMA_MAX;
+    }
+    let sigma = SOFT_WIDTH / d - SOFT_BIAS;
+    if sigma < SOFT_SIGMA {
+        return 0.0;
+    }
+    sigma.min(SOFT_SIGMA_MAX)
+}
+
+/// Gaussian smoothing of the vertices along the arc, by index. An open arc
+/// keeps its two ends; where the kernel runs off an end it is renormalised
+/// over what is there. `topology._soften` in the Python.
+fn soften(pts: &[P], sigma: f64, closed: bool) -> Vec<P> {
+    let n = pts.len();
+    if sigma <= 0.0 || n < 3 {
+        return pts.to_vec();
+    }
+    let r = (SOFT_REACH * sigma).ceil() as i64;
+    if (n as i64) < 2 * r + 1 {
+        // A chain shorter than the kernel is a feature the size of the blur,
+        // not an edge with a position along it: see the Python.
+        return pts.to_vec();
+    }
+    let w: Vec<f64> = (-r..=r).map(|k| (-0.5 * (k as f64 / sigma).powi(2)).exp()).collect();
+    let mut out = pts.to_vec();
+    if closed {
+        let wsum: f64 = w.iter().sum();
+        for i in 0..n {
+            let mut acc = [0.0, 0.0];
+            for (j, k) in (-r..=r).enumerate() {
+                let p = pts[((i as i64 + k).rem_euclid(n as i64)) as usize];
+                acc[0] += p[0] * w[j];
+                acc[1] += p[1] * w[j];
+            }
+            out[i] = [acc[0] / wsum, acc[1] / wsum];
+        }
+        return out;
+    }
+    for i in 1..n - 1 {
+        let lo = (i as i64 - r).max(0);
+        let hi = (i as i64 + r).min(n as i64 - 1);
+        let mut acc = [0.0, 0.0];
+        let mut wsum = 0.0;
+        for j in lo..=hi {
+            let wk = w[(j - i as i64 + r) as usize];
+            acc[0] += pts[j as usize][0] * wk;
+            acc[1] += pts[j as usize][1] * wk;
+            wsum += wk;
+        }
+        out[i] = [acc[0] / wsum, acc[1] / wsum];
+    }
+    out
 }
 
 /// A vertex whose four samples all sit on one side of a half has no crossing
@@ -705,10 +798,12 @@ fn place(
                     p_out.push(pa);
                 }
             }
-            let (mut t, mut side) = if a != 0 && b != 0 {
-                crossing(padded, rgb, alpha, &p_in, &p_out, a, b, fill_at, local)
+            let (mut t, mut side, mut sigma) = if a != 0 && b != 0 {
+                let (t, side, drop) = crossing(padded, rgb, alpha, &p_in, &p_out, a, b, fill_at, local);
+                let sigma = softness(&drop);
+                (t, side, sigma)
             } else {
-                (vec![0.5; ch.edges.len()], vec![0i8; ch.edges.len()])
+                (vec![0.5; ch.edges.len()], vec![0i8; ch.edges.len()], 0.0)
             };
             // Between two bands of one posterised ramp the edge is where the
             // ramp crosses their level, not where colour says: see the Python.
@@ -719,6 +814,7 @@ fn place(
                     if let Some(s) = lv.crossing(a, b, c_in, c_out).filter(|s| s.is_finite()) {
                         t[k] = s;
                         side[k] = 0;
+                        sigma = 0.0; // placed on the ramp's level line exactly
                     }
                 }
             }
@@ -748,6 +844,7 @@ fn place(
             if !handed_back.is_empty() {
                 pts = settle(&pts, &crowded);
             }
+            pts = soften(&pts, sigma, ch.n0.is_none());
             (pts, normal, crowded)
         })
         .collect()
