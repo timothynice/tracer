@@ -1,0 +1,188 @@
+{
+ "alpha_gif": {
+  "file": "intake_alpha.gif",
+  "format": "GIF",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 8677161,
+  "rgba_weighted": 1091947514,
+  "sha256": "81c66a2d91dad787c4adb1a39903b95bdfa80265a7aa5fe9e494fd5772a1ccf6",
+  "width": 96
+ },
+ "alpha_png": {
+  "file": "intake_alpha.png",
+  "format": "PNG",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 7524713,
+  "rgba_weighted": 947099928,
+  "sha256": "e60af3b50b09150e55815f1f6f653b224748e48e79226b5ae1a23a7ca60f012f",
+  "width": 96
+ },
+ "alpha_webp": {
+  "file": "intake_alpha.webp",
+  "format": "WEBP",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 7030960,
+  "rgba_weighted": 885389888,
+  "sha256": "6c6ba148c7d5cb88d74dd35a966e8c6a63521b58bfe3c27aecb4c73c6f23941f",
+  "width": 96
+ },
+ "anim_gif": {
+  "file": "intake_anim.gif",
+  "format": "GIF",
+  "height": 32,
+  "lossless": true,
+  "rgba_sum": 559680,
+  "rgba_weighted": 68827400,
+  "sha256": "716d04efba19f4a38397ee077d398c352223fbfa77ef92ac7890aa4bd9600dfc",
+  "width": 32
+ },
+ "anim_webp": {
+  "file": "intake_anim.webp",
+  "format": "WEBP",
+  "height": 32,
+  "lossless": true,
+  "rgba_sum": 559680,
+  "rgba_weighted": 68827400,
+  "sha256": "716d04efba19f4a38397ee077d398c352223fbfa77ef92ac7890aa4bd9600dfc",
+  "width": 32
+ },
+ "bmp": {
+  "file": "intake_bmp.bmp",
+  "format": "BMP",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 8721593,
+  "rgba_weighted": 1097990196,
+  "sha256": "8fb0886f6d0bfb28209fd5dc5ed036dc97dca630742df74d238b253884bad5f9",
+  "width": 96
+ },
+ "errors": {
+  "garbage": {
+   "code": "unsupported_format",
+   "file": null,
+   "max_bytes": 20971520,
+   "max_pixels": 40000000,
+   "message": "File is not a recognised image"
+  },
+  "header_bomb": {
+   "code": "too_many_pixels",
+   "file": "intake_bomb.png",
+   "max_bytes": 20971520,
+   "max_pixels": 40000000,
+   "message": "Image exceeds the 40 megapixel limit"
+  },
+  "too_large": {
+   "code": "too_large",
+   "file": "intake_png.png",
+   "max_bytes": 10,
+   "max_pixels": 1073741824,
+   "message": "File exceeds the 0 MB limit"
+  },
+  "too_large_mb": {
+   "code": "too_large",
+   "file": null,
+   "max_bytes": 3145728,
+   "max_pixels": 1073741824,
+   "message": "File exceeds the 3 MB limit"
+  },
+  "too_many_pixels": {
+   "code": "too_many_pixels",
+   "file": "intake_png.png",
+   "max_bytes": 1073741824,
+   "max_pixels": 100,
+   "message": "Image exceeds the 0 megapixel limit"
+  },
+  "truncated_png": {
+   "code": "corrupt_image",
+   "file": null,
+   "max_bytes": 20971520,
+   "max_pixels": 40000000,
+   "message": "Image data is corrupt or truncated"
+  },
+  "unsupported_tiff": {
+   "code": "unsupported_format",
+   "file": "intake_tiff.tif",
+   "max_bytes": 20971520,
+   "max_pixels": 40000000,
+   "message": "Unsupported image format: TIFF"
+  }
+ },
+ "exif6": {
+  "file": "intake_exif6.jpg",
+  "height": 40,
+  "width": 20
+ },
+ "gif": {
+  "file": "intake_gif.gif",
+  "format": "GIF",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 8697634,
+  "rgba_weighted": 1094898541,
+  "sha256": "d5e34b09655504ab9797c339d722b4f1ec7e0a7c45d88db2e987c257d8e9242c",
+  "width": 96
+ },
+ "jpg": {
+  "file": "intake_jpg.jpg",
+  "format": "JPEG",
+  "height": 96,
+  "lossless": false,
+  "rgba_sum": 8707147,
+  "rgba_weighted": 1096127971,
+  "sha256": "5f55b7ec8c66b81df6b35eb450adb9f2ab53348946b610f8da927546a7a2c671",
+  "width": 96
+ },
+ "png": {
+  "file": "intake_png.png",
+  "format": "PNG",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 8721593,
+  "rgba_weighted": 1097990196,
+  "sha256": "8fb0886f6d0bfb28209fd5dc5ed036dc97dca630742df74d238b253884bad5f9",
+  "width": 96
+ },
+ "png_l": {
+  "file": "intake_png_l.png",
+  "format": "PNG",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 8669118,
+  "rgba_weighted": 1091229242,
+  "sha256": "fd7240d849f33e0f0982ce6461a51ca467b32121e3535e497436aeabb9d69023",
+  "width": 96
+ },
+ "png_la": {
+  "file": "intake_png_la.png",
+  "format": "PNG",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 7472238,
+  "rgba_weighted": 940338974,
+  "sha256": "838ae1d498b01b1c9a642c174ea91fcc0f72deb89dfe3dcb5b53636f184b30fe",
+  "width": 96
+ },
+ "png_pal": {
+  "file": "intake_png_pal.png",
+  "format": "PNG",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 7499961,
+  "rgba_weighted": 943714306,
+  "sha256": "7d3ca247fe04a5733d5e61e11c11e81d3242b148b081ca174b2d7a994d3b8425",
+  "width": 96
+ },
+ "webp": {
+  "file": "intake_webp.webp",
+  "format": "WEBP",
+  "height": 96,
+  "lossless": true,
+  "rgba_sum": 8709450,
+  "rgba_weighted": 1096399521,
+  "sha256": "b4d9e481b159b4d63cfd285194a1eb2df4696c546c24efe053f6b769a6cd5fc6",
+  "width": 96
+ }
+}

@@ -3,5 +3,6 @@
 //! is the reference each module was ported from.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod intake;
 pub mod params;
 pub mod presets;
