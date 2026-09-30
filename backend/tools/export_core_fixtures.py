@@ -302,6 +302,84 @@ def _svg() -> None:
     write("svg", cases)
 
 
+@exporter("color")
+def _color() -> None:
+    import numpy as np
+    from skimage.color import rgb2lab
+    from skimage.color.colorconv import _cart2polar_2pi
+
+    from studi0trace.imaging.quality import delta_e, delta_e_map, to_rgb_on_white
+
+    def lab_of(rgb):
+        return rgb2lab(rgb.astype(np.float64) / 255.0)
+
+    rng = np.random.default_rng(7)
+    # 64 random pixels, then the same nudged by up to 40 levels per channel: Lab values and
+    # the CIEDE2000 of each pair, at the scale the brief's 1e-9 is about.
+    rgb = rng.integers(0, 256, (64, 3), dtype=np.uint8)
+    rgb2 = np.clip(rgb.astype(int) + rng.integers(-40, 41, (64, 3)), 0, 255).astype(np.uint8)
+    rgba = np.concatenate([rgb, rng.integers(0, 256, (64, 1), dtype=np.uint8)], axis=1)
+    mean, p95 = delta_e(rgb[None], rgb2[None])
+
+    # Every branch of CIEDE2000 that a palette can reach: black (chroma exactly 0), near-greys
+    # (chroma in the noise), identical pairs, and hues on both sides of the 0 / 2*pi wrap
+    # (the `h_diff > pi` and `h_diff < -pi` corrections, each with `h_sum` above and below 2*pi).
+    palette = np.array([
+        (0, 0, 0), (255, 255, 255), (1, 1, 1), (64, 64, 64), (128, 128, 128), (200, 200, 200), (254, 254, 254),
+        (255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 255, 255), (255, 0, 255), (255, 255, 0), (255, 128, 0),
+        (255, 120, 150), (255, 100, 140), (250, 80, 110), (255, 0, 128), (200, 60, 120),
+        (0, 200, 200), (40, 160, 190), (90, 190, 160), (60, 30, 120), (10, 10, 30), (250, 245, 240),
+        (12, 12, 13), (240, 240, 255),
+    ], dtype=np.uint8)
+    n = len(palette)
+    pal_lab = lab_of(palette[None])[0]
+    left = np.repeat(pal_lab[:, None, :], n, axis=1)
+    right = np.repeat(pal_lab[None, :, :], n, axis=0)
+    cbar = 0.5 * (np.hypot(left[..., 1], left[..., 2]) + np.hypot(right[..., 1], right[..., 2]))
+    scale = 1 + 0.5 * (1 - np.sqrt(cbar**7 / (cbar**7 + 25**7)))
+    c1, h1 = _cart2polar_2pi(left[..., 1] * scale, left[..., 2])
+    c2, h2 = _cart2polar_2pi(right[..., 1] * scale, right[..., 2])
+    h_diff, h_sum, flipped = h2 - h1, h1 + h2, (c1 * c2 != 0) & (np.abs(h2 - h1) > np.pi)
+    assert (c1 * c2 == 0).any() and ((h_diff > np.pi) & flipped).any() and ((h_diff < -np.pi) & flipped).any()
+    assert (flipped & (h_sum < 2 * np.pi)).any() and (flipped & (h_sum >= 2 * np.pi)).any()
+    pairs_a = np.repeat(palette[:, None, :], n, axis=1)   # [i, j] = palette[i] against palette[j]
+    pairs_b = np.repeat(palette[None, :, :], n, axis=0)
+
+    # to_rgb_on_white is float32 arithmetic with a +0.5 and a truncating cast: every triple of
+    # channels drawn from the extremes and the values either side of the midpoint, at six
+    # alphas chosen the same way, so each channel meets each (alpha, value) pair of the six.
+    edge = np.array([0, 1, 127, 128, 254, 255], dtype=np.uint8)
+    grid = np.array([(r, g, b, a) for a in edge for r in edge for g in edge for b in edge], dtype=np.uint8)
+    # And over all 256 x 256 (alpha, value) pairs the float32 result is the exact rounding of
+    # (v*a + 255*(255 - a)) / 255 (no pair is a tie), which the Rust test checks without a fixture.
+    v, a = np.meshgrid(np.arange(256), np.arange(256))
+    every = to_rgb_on_white(np.stack([v, v, v, a], axis=-1).astype(np.uint8))[..., 0]
+    assert (every == (2 * (v * a + 255 * (255 - a)) + 255) // 510).all()
+
+    # 64 x 64 random pairs: the mean and the 95th percentile over more than a handful of values.
+    big_a = rng.integers(0, 256, (64, 64, 3), dtype=np.uint8)
+    big_b = np.clip(big_a.astype(int) + rng.integers(-60, 61, (64, 64, 3)), 0, 255).astype(np.uint8)
+    big_mean, big_p95 = delta_e(big_a, big_b)
+
+    # np.percentile's linear method (its lerp takes the other end of the interval once the weight
+    # reaches a half), on lengths that put the weight on both sides of that, with ties.
+    pct = []
+    for count in (1, 2, 3, 7, 20, 21, 30, 50, 100):
+        values = rng.random(count) * 50 if count != 30 else rng.integers(0, 5, count) / 2.0
+        pct.append({"values": values.tolist(),
+                    "expect": [[q, float(np.percentile(values, q))] for q in (0, 5, 25, 50, 95, 99.9, 100)]})
+
+    write("color", {
+        "rgb": rgb.tolist(), "rgb2": rgb2.tolist(), "lab": lab_of(rgb).tolist(), "lab2": lab_of(rgb2).tolist(),
+        "de": delta_e_map(rgb[None], rgb2[None])[0].tolist(), "rgba": rgba.tolist(),
+        "on_white": to_rgb_on_white(rgba[None])[0].tolist(), "mean": mean, "p95": p95,
+        "palette": palette.tolist(), "palette_lab": pal_lab.tolist(), "palette_de": delta_e_map(pairs_a, pairs_b).tolist(),
+        "grid_rgba": grid.tobytes().hex(), "grid_on_white": to_rgb_on_white(grid[None])[0].tobytes().hex(),
+        "big_a": big_a.tobytes().hex(), "big_b": big_b.tobytes().hex(), "big_mean": big_mean, "big_p95": big_p95,
+        "percentiles": pct,
+    })
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
