@@ -5,10 +5,12 @@ Env built (`backend/.venv`, Rust extension installed; rebuild with
 `.venv/bin/maturin develop --release -m vexel-rs/Cargo.toml` after any Rust change). Scratch:
 `$SCRATCH/wp1/` (probe dumps; helper scripts `uncovered.py`, `stages.py`, `fitprobe.py`,
 `alphasurvey.py`, `snapsurvey.py` (→ `snaps.jsonl`), `upsurvey.py`, `refine_exp.py`, `toggle.py`
-(bench metrics per item with each change switched back), `inpdiff.py`, `settlediff.py`, `cmpbench.py`
-(per-item results.json compare), `cmprec.py` (records.jsonl compare), `subset.py`, `heldout-sub/`).
+(bench metrics per item with each change switched back), `strokeab.py` (old vs new stroke stage per
+item, `strokes_old.py` = 8f09955's module), `gatesurvey.py` (→ `gates.jsonl`) + `gateanalysis.py`,
+`inpdiff.py`, `settlediff.py`, `cmpbench.py` (per-item results.json compare), `cmprec.py`
+(records.jsonl compare), `subset.py`, `heldout-sub/`).
 
-## Root causes, all fixed in both engines
+## Root causes, all fixed in both engines (commits 050a901 … 2d7fd5b)
 
 A. **u2049 strips (464 px uncovered)** — `topology._snap_axis` / `curves.snap_axis_lines` snapped any
    line within `snap_axis_deg` (1.5°) to the axis with no bound on how far its ends move; the "!" bar's
@@ -30,57 +32,55 @@ B. **thin-mark-512-ds serrated triangle, ring in 39 fragments** — `prepare.inp
    colour they have. A hard alpha floor (sources ≥ 32 only) fixed thin-mark but moved two shadows'
    faint halos to the caster's colour (transparent-bg-128/512 −0.012/−0.007 score) and split
    alpha-fade-512; settling the visible low-alpha pixels themselves did the same to the halo.
-   `toggle.py` on the seven items involved: field-only settling restores transparent-bg exactly and
-   improves alpha-fade-512 (0.956 → 0.964), alpha-fade-128 (0.830 → 0.946), thin-mark-128
-   (0.939 → 0.966), cutout-512-ds (0.952 → 0.998), thin-mark-512-ds (0.774 → 0.979).
-   Rust `prepare::settle_rim`, `inpaint_transparent(rgb, h, w, alpha8, round_f32)` (float32 rounding
-   of the inpainted colour in `prepare`, as the Python keeps rgb in float32; none in the upsample).
+   `toggle.py`: field-only settling restores transparent-bg exactly and improves alpha-fade-512
+   (0.956 → 0.964), alpha-fade-128 (0.830 → 0.946), thin-mark-128, cutout-512-ds (0.952 → 0.998),
+   thin-mark-512-ds (0.774 → 0.979). Rust `prepare::settle_rim`, `inpaint_transparent(rgb, h, w,
+   alpha8, round_f32)` (float32 rounding in `prepare`, none in the upsample); rgb stage bit-exact.
 
 B2. **thin-mark-128 fragmented at 2×** — `upsample2x` resamples channels straight, so the black under
    transparency was mixed into every edge at 2× (source-pixel colour spread 29 levels vs 1). Fix: the
    field is inpainted (same function) before the resample, both engines. The upsample rule still
-   holds (`upsurvey.py`: on all 4 corpus items it fires on, the 2× outline is better, 0.103 vs
-   0.494 px); only the 2 px thin-bars fixture is now better direct, because strokes are sub-pixel
-   (its test now asserts both < 0.25 px and 2× < 0.5× direct on thin-mark-128).
+   holds (`upsurvey.py`: on all 4 corpus items it fires on the 2× outline is better, 0.103 vs 0.494 px).
 
 C. **stroke fidelity knife-edge / wobble** — `stroke_fidelity` rasterised the centreline to pixels and
    the centreline was the raw medial axis (half a pixel off on a 2 px line by the tie-break). Fix:
    `_refine_centreline` (bilinear coverage centroid across the stroke, ±(w/2+1) px at 0.25 px, 2
    passes; `refine_exp.py`: rings 1–3 px at 4 sub-pixel offsets → centreline 0.06–0.08 px RMS, fidelity
-   0.02–0.05; nearest-pixel samples 0.11 / 0.03–0.09; more passes or reach change nothing) and an
-   exact point-to-polyline distance with box coverage in `stroke_fidelity` (`_polyline_distance`).
-   Rust `strokes::refine_centreline`, `sample_bilinear`, `polyline_distance`; parity 1e-9 on the ring.
+   0.02–0.05; nearest-pixel samples 0.11 / 0.03–0.09) and an exact point-to-polyline distance with
+   box coverage in `stroke_fidelity` (`_polyline_distance`). Rust `strokes::refine_centreline`,
+   `sample_bilinear`, `polyline_distance`. Parity bug found by diffcheck and fixed (2d7fd5b): the
+   step count at the 0.25 px width floor is 4.5, Python's round gives 4 and Rust's 5 → truncated.
+
+   **Open: the gate.** The exact measure runs at ~0.67× the old one (`gates.jsonl`, 102 groups):
+   groups the old 0.2 gate stroked now score p50 0.082 / p90 0.145 / max 0.185; groups it kept filled
+   p10 0.123 / p50 0.179 / min 0.063. At 0.2 two pieces studi0mail-logo-dark kept filled (a 4.2 px
+   wide piece 0.236 → 0.175, a 5-vertex hairline 0.334 → 0.147) are now stroked: score 0.946 → 0.934,
+   the only item down more than 0.003. Benches with the gate at 0.13 and 0.15
+   (`bench-g13`, `bench-g15`, `--params '{"vexel": {"stroke_tolerance": X}}'`) were in flight to
+   decide whether the Params default (`engine.py` `stroke_tolerance`, `engine.rs` Default 0.2) moves.
 
 D. **wheelchair pinholes (3)**: not strokes — region 36 (an 8 px neck under region 30) has both its
-   junction nodes placed at the same point in the middle of its top edge (121.16, 427.4) and
-   (121.17, 427.5): the canvas–30 arcs end as wedge tips (`tip1=1`, sliver 16 px) because region 30's
-   bottom edge (with 36) is collinear with its canvas edge, so `_extend_wedges`/`_junctions` read a
-   flat-bottomed region as a wedge and pushed both tips to the centre; the neck's outline is then a
-   figure-8. A junction/wedge fix (a wedge needs an angle between its two edges), not done here.
-   spiral-notepad's 6 pinholes went to 0 with B.
+   junction nodes placed at the same point in the middle of its top edge; the canvas–30 arcs end as
+   wedge tips because region 30's bottom edge (with 36) is collinear with its canvas edge, so
+   `_extend_wedges`/`_junctions` read a flat-bottomed region as a wedge and pushed both tips to the
+   centre; the neck's outline is then a figure-8. A junction/wedge fix, not done here.
+   spiral-notepad: Auto's pick went from balanced (6 pinholes) to detailed (1).
 
-## Tests added / changed
-- tests/test_vexel_prepare.py::test_inpainting_ignores_the_colour_of_nearly_transparent_pixels
-- tests/test_vexel_strokes.py::test_a_ring_off_the_pixel_lattice_is_a_faithful_stroke[1.0|2.0],
-  ::test_the_rust_stroke_stage_agrees_on_the_refined_centreline
-- tests/test_vexel_topology.py::test_an_axis_snap_never_moves_a_line_end_further_than_the_placement_knows,
-  ::test_a_slightly_slanted_bar_keeps_its_sides_where_its_pixels_are[python|rust] (skewed rounded bar
-  with a bevel strip: 223 px uncovered before, 1 after)
-- tests/test_vexel_upsample.py::test_the_upsample_mixes_ink_with_ink_not_with_the_colour_under_transparency;
-  thin-bars test rewritten (see B2)
-- tests/test_vexel_curves.py snap test: 0.2/0.15 px rises snap, a 0.6 px rise stays
+## Verification (final build 2d7fd5b, gate 0.2)
+- diffcheck: `rgb features grad upsample labels0` 0 failing / 96 (rgb bit-exact); `strokes skeleton`
+  0 failing; `segments arcs` 0 failing. Full pytest green; cargo test green.
+- Bench `bench3` vs baseline: logo +0.0076, gradient +0.0062, flat −0.0003, shadow +0.0000.
+  thin-mark-512-ds 0.774 → 0.979 (art 58.7 → 0.41, outline 1.23 → 0.036, f1 0.855 → 1.0, banding
+  4.06 → 0, seam 79743 → 11190), thin-mark-512 0.962 → 0.970 (art 12.6 → 0.37), thin-mark-128
+  0.937 → 0.943 (art 134 → 41, seam 73418 → 29114), logomark-128 0.951 → 0.984, cutout-512-ds
+  0.952 → 0.998, alpha-fade-128 0.830 → 0.946, alpha-fade-512 0.956 → 0.964.
+  Down: studi0mail-logo-dark 0.946 → 0.934 (gate, above), blobs-128 −0.003, sticker-512-ds −0.002
+  (art 5.1 → 9.2), alpha-fade-512-ds −0.002 (outline 6.3 → 2.3 but seam 0 → 599), sticker-128 −0.001.
+- Held-out subset (`h2h-sub3`, Auto): u2049-512 dE 0.350 → 0.124, f1 0.955 → 0.994, outline
+  0.442 → 0.184, art 26.4 → 24.0, pinholes 2 → 0, seam 12935 → 4109; u2049-512-ds dE 0.358 → 0.155,
+  outline 0.422 → 0.173, pinholes 2 → 0, seam 11127 → 1769; spiral-notepad-512 pinholes 6 → 1,
+  art 47.4 → 40.2; wheelchair-512 pinholes 3 → 3, slivers 3 → 0, art 105 → 95.7.
 
-## Verification so far
-- diffcheck `strokes skeleton segments arcs`: 0 failing pairs over 96 items (before the final B).
-- Full pytest green; cargo test green (before the final B). Targeted tests green after it.
-- Bench (hard-floor version, `bench1`): logo +0.0078, gradient +0.0037, flat −0.0001, shadow −0.0009;
-  per item thin-mark-512-ds 0.774 → 0.979 (art 58.7 → 0.42, outline 1.23 → 0.023, f1 1.0, banding 0).
-- Held-out subset (`h2h-sub`, hard-floor version): u2049-512 pinholes 2 → 0, outline 0.44 → 0.18,
-  dE 0.35 → 0.12, seam 12935 → 4109; -ds alike; spiral-notepad pinholes 6 → 0; wheelchair 3 → 3.
-
-## In flight (restart if killed)
-- bench `wp1/bench2` (final code), h2h subset `wp1/h2h-sub2`, diffcheck `rgb features grad upsample
-  labels0` → `wp1/diffcheck-prep.log`. Then: `bench compare` + `cmpbench.py` per item; re-run
-  diffcheck `strokes skeleton segments arcs` and the rest (`fills edge_mix wedges local_fills`,
-  `placed nodes posterize rects under`) in background chunks (whole-run background jobs got killed
-  at ~25 min); full pytest + cargo test; commit; final report.
+## Next
+- read `bench-g13`/`bench-g15` (`bench compare`, `cmpbench.py`), pick the gate, change both defaults
+  (+ the Params description), re-run bench + h2h subset + pytest + diffcheck strokes, commit, report.
