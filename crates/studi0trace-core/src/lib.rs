@@ -8,4 +8,5 @@ pub mod edges;
 pub mod intake;
 pub mod params;
 pub mod presets;
+pub mod render;
 pub mod svg;

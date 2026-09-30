@@ -510,6 +510,144 @@ def _edges() -> None:
     write("edges", {"corpus": corpus, "images": images, "grey": grey, "kernels": kernels, "stages": stages, "suppress": suppress, "dilate": dilate, "f1": f1})
 
 
+@exporter("render")
+def _render() -> None:
+    import io
+
+    import numpy as np
+    import resvg_py
+    from PIL import Image
+
+    from studi0trace.engines.vexel.engine import VexelEngine, VexelParams
+    from studi0trace.imaging.intake import load_upload
+    from studi0trace.imaging.quality import render
+
+    # Two traced corpus items at 2x, anti-aliased and crisp: what the scorecard renders.
+    names = []
+    for rel in ("real/logo/vexel-wordmark-512.png", "synthetic/shadow/glow-128.png"):
+        png = (ROOT / "backend/bench/corpus" / rel).read_bytes()
+        img = load_upload(png, max_bytes=1 << 30, max_pixels=1 << 30)
+        svg = VexelEngine().trace(img, VexelParams()).svg
+        stem = Path(rel).stem
+        (OUT / f"render_{stem}.svg").write_text(svg, encoding="utf-8")
+        for crisp in (False, True):
+            out = render(svg, img.width * 2, img.height * 2, crisp=crisp)
+            Image.fromarray(out).save(OUT / f"render_{stem}_{'crisp' if crisp else 'aa'}.png")
+        names.append({"stem": stem, "width": img.width * 2, "height": img.height * 2})
+    write("render", names)
+
+    # What resvg-py does with the size it is asked for, the units, shape-rendering and what it
+    # refuses, on SVGs small enough to keep in a JSON file. Each case carries resvg-py's own
+    # PNG (`svg_to_bytes`, before `quality.render` forces the size with Pillow) or its error.
+    ns = 'xmlns="http://www.w3.org/2000/svg"'
+    scene = ('<rect width="20" height="10" fill="#fafaf0"/><circle cx="5.3" cy="5.2" r="3.7" fill="#d33"/>'
+             '<path d="M11 1.5 L18.2 2.3 A4 4 0 0 1 14.6 8.8 L11.4 7.6 Z" fill="#26c" fill-opacity="0.8"/>'
+             '<rect x="1.25" y="0.75" width="3" height="2" rx="0.6" fill="none" stroke="#000" stroke-width="0.4"/>')
+    square = '<rect width="10" height="10" fill="#c33"/><circle cx="4.6" cy="5.3" r="3.1" fill="#36c"/>'
+    dot = '<rect width="5" height="5" fill="#c33"/>'
+    shapes = "".join(f'<circle cx="{5.3 + 10 * i}" cy="5.3" r="4.1" fill="#d22" {a}/>' for i, a in enumerate(
+        ["", 'shape-rendering="geometricPrecision"', 'shape-rendering="optimizeSpeed"', 'shape-rendering="crispEdges"']))
+    cases = [
+        # size: the SVG's size, rounded to whole pixels, is scaled to fit inside width x height
+        ("size: 2x", f'<svg {ns} viewBox="0 0 20 10">{scene}</svg>', 40, 20),
+        ("size: 2.5x", f'<svg {ns} viewBox="0 0 20 10">{scene}</svg>', 50, 25),
+        ("size: 0.5x", f'<svg {ns} viewBox="0 0 20 10">{scene}</svg>', 10, 5),
+        ("size: down to one pixel", f'<svg {ns} viewBox="0 0 20 10">{scene}</svg>', 1, 1),
+        ("size: width and height attributes", f'<svg {ns} width="20" height="10">{scene}</svg>', 40, 20),
+        ("size: attributes over a viewBox", f'<svg {ns} width="20" height="10" viewBox="0 0 10 5">{scene}</svg>', 40, 20),
+        ("size: viewBox of another aspect than width x height", f'<svg {ns} width="10" height="10" viewBox="0 0 4 2">{scene}</svg>', 20, 20),
+        ("size: no size at all is 100 x 100", f'<svg {ns}>{dot}</svg>', 10, 10),
+        ("size: fractional 7.5 x 3.5 is 8 x 4", f'<svg {ns} width="7.5" height="3.5"><rect width="7.5" height="3.5" fill="#c33"/></svg>', 16, 8),
+        ("size: fractional 7.4 x 3.6 is 7 x 4, fits 32 x 18", f'<svg {ns} width="7.4" height="3.6"><rect width="7.4" height="3.6" fill="#c33"/></svg>', 37, 18),
+        ("fit: target wider than the SVG", f'<svg {ns} viewBox="0 0 10 10">{square}</svg>', 40, 20),
+        ("fit: target taller than the SVG", f'<svg {ns} viewBox="0 0 10 10">{square}</svg>', 20, 40),
+        ("fit: the far side rounds up", f'<svg {ns} viewBox="0 0 10 3"><rect width="10" height="3" fill="#c33"/></svg>', 30, 10),
+        ("fit: a very wide target leaves one pixel", f'<svg {ns} viewBox="0 0 10 10">{square}</svg>', 100000, 1),
+        # units: resvg-py leaves usvg's dpi at 0, so every absolute unit is a zero length
+        ("units: px", f'<svg {ns} width="20px" height="10px">{scene}</svg>', 40, 20),
+        ("units: em is 16 px", f'<svg {ns} width="1.25em" height="0.625em">{scene}</svg>', 40, 20),
+        ("units: ex is half an em", f'<svg {ns} width="2.5ex" height="1.25ex">{scene}</svg>', 40, 20),
+        ("units: pt is an invalid size", f'<svg {ns} width="10pt" height="5pt">{scene}</svg>', 40, 20),
+        ("units: in is an invalid size", f'<svg {ns} width="1in" height="1in">{scene}</svg>', 40, 20),
+        ("units: mm is an invalid size", f'<svg {ns} width="10mm" height="10mm">{scene}</svg>', 40, 20),
+        # paint: everything a traced SVG uses, which has to come out of the same renderer
+        ("paint: shapes, arcs and strokes", f'<svg {ns} viewBox="0 0 20 10">{scene}'
+         '<path d="M2 8 A4 4 0 1 1 9 3" fill="none" stroke="#333" stroke-width="1.1" stroke-linecap="round" stroke-dasharray="1.2 0.8"/>'
+         '<path d="M11 5 h6 v4 h-6 z M12.5 6 h3 v2 h-3 z" fill="#a4a" fill-rule="evenodd" stroke="#000" stroke-width="0.3" stroke-linejoin="round"/>'
+         '<ellipse cx="5" cy="5" rx="2" ry="1.2" fill="#fff" transform="rotate(20 5 5)"/></svg>', 40, 20),
+        ("paint: gradients", f'<svg {ns} viewBox="0 0 20 10"><defs>'
+         '<linearGradient id="l" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f40"/>'
+         '<stop offset="0.6" stop-color="#fc0" stop-opacity="0.7"/><stop offset="1" stop-color="#04f"/></linearGradient>'
+         '<radialGradient id="r" cx="15" cy="5" r="4.3" fx="14" fy="4" gradientUnits="userSpaceOnUse" spreadMethod="reflect">'
+         '<stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#306" stop-opacity="0.5"/></radialGradient></defs>'
+         '<rect width="10" height="10" fill="url(#l)"/><circle cx="15" cy="5" r="4.6" fill="url(#r)"/></svg>', 40, 20),
+        ("paint: opacity", f'<svg {ns} viewBox="0 0 20 10"><g opacity="0.6"><circle cx="6" cy="5" r="4" fill="#e22"/>'
+         '<circle cx="9" cy="5" r="4" fill="#22e" fill-opacity="0.5"/></g>'
+         '<rect x="12" y="1" width="6" height="8" fill="#0a0" opacity="0.35" stroke="#000" stroke-opacity="0.5" stroke-width="1"/></svg>', 40, 20),
+        ("paint: clip and mask", f'<svg {ns} viewBox="0 0 20 10"><defs><clipPath id="c"><circle cx="5" cy="5" r="3.6"/></clipPath>'
+         '<mask id="m"><rect width="20" height="10" fill="#fff"/><circle cx="15" cy="5" r="3" fill="#000"/></mask></defs>'
+         '<rect width="10" height="10" fill="#c60" clip-path="url(#c)"/><rect x="10" width="10" height="10" fill="#06c" mask="url(#m)"/></svg>', 40, 20),
+        ("paint: filters", f'<svg {ns} viewBox="0 0 20 10"><defs><filter id="f" x="-50%" y="-50%" width="200%" height="200%">'
+         '<feGaussianBlur in="SourceAlpha" stdDeviation="0.8"/><feOffset dx="0.5" dy="0.7" result="o"/>'
+         '<feFlood flood-color="#000" flood-opacity="0.5"/><feComposite in2="o" operator="in"/>'
+         '<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>'
+         '<filter id="b"><feGaussianBlur stdDeviation="0.5"/></filter></defs>'
+         '<rect x="2" y="2" width="6" height="6" fill="#fc3" filter="url(#f)"/><circle cx="15" cy="5" r="3" fill="#3cf" filter="url(#b)"/></svg>', 40, 20),
+        ("paint: use of a def", f'<svg {ns} xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 20 10"><defs><path id="p" d="M0 0 L3 0 L1.5 2.6 Z"/></defs>'
+         '<use href="#p" x="2" y="1" fill="#c22"/><use xlink:href="#p" x="8" y="3" fill="#2c2"/>'
+         '<use href="#p" transform="translate(14 1) scale(1.5)" fill="#22c"/></svg>', 40, 20),
+        ("paint: a group scaled by a half", f'<svg {ns} viewBox="0 0 10 10"><g transform="scale(0.5)">'
+         '<path d="M2 2 L18 4 L14 17 Z" fill="#c33"/><circle cx="6.6" cy="14.2" r="3.3" fill="#36c"/></g></svg>', 40, 40),
+        ("paint: switch takes the first child that speaks English", f'<svg {ns} viewBox="0 0 20 10"><switch>'
+         '<rect systemLanguage="de" width="20" height="10" fill="#c33"/><rect systemLanguage="fr,en" width="20" height="10" fill="#3c3"/>'
+         '<rect width="20" height="10" fill="#33c"/></switch></svg>', 40, 20),
+        ("paint: nothing drawn", f'<svg {ns} viewBox="0 0 20 10"/>', 40, 20),
+        # shape-rendering: the option is only the default for an element that does not say
+        ("shape-rendering: the option is the default, an attribute wins", f'<svg {ns} viewBox="0 0 40 10">{shapes}</svg>', 160, 40),
+        ("shape-rendering: a group's attribute is inherited", f'<svg {ns} viewBox="0 0 20 10"><g shape-rendering="geometricPrecision">'
+         '<circle cx="5.3" cy="5.3" r="4.1" fill="#d22"/></g><circle cx="15.3" cy="5.3" r="4.1" fill="none" stroke="#22d" stroke-width="1.3"/></svg>', 80, 40),
+        # text: no fonts are loaded, so the glyphs are absent, which is what skip_system_fonts gives
+        ("text: no glyphs without fonts", f'<svg {ns} viewBox="0 0 20 10"><rect width="20" height="10" fill="#eef"/>'
+         '<text x="1" y="8" font-family="sans-serif" font-size="6" fill="#000">Hi</text></svg>', 40, 20),
+        # refusals
+        ("error: empty", "", 40, 20),
+        ("error: not an svg", "not svg", 40, 20),
+        ("error: truncated", "<svg", 40, 20),
+        ("error: another root", "<html/>", 40, 20),
+        ("error: zero width", f'<svg {ns} width="0" height="5"/>', 40, 20),
+        ("error: negative width", f'<svg {ns} width="-5" height="5"/>', 40, 20),
+        ("error: zero target width", f'<svg {ns} viewBox="0 0 20 10">{scene}</svg>', 0, 20),
+        ("error: zero target height", f'<svg {ns} viewBox="0 0 20 10">{scene}</svg>', 40, 0),
+    ]
+
+    def outcome(svg: str, width: int, height: int, crisp: bool) -> dict:
+        kw = {"shape_rendering": "crisp_edges"} if crisp else {}
+        try:
+            png = bytes(resvg_py.svg_to_bytes(svg_string=svg, width=width, height=height, skip_system_fonts=True, **kw))
+        except ValueError as exc:
+            try:
+                render(svg, width, height, crisp=crisp)
+            except ValueError:
+                return {"error": str(exc)}
+            raise AssertionError("quality.render accepts what svg_to_bytes refuses")
+        raw = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
+        out = render(svg, width, height, crisp=crisp)
+        res = {"width": raw.shape[1], "height": raw.shape[0], "png": png.hex()}
+        if raw.shape == out.shape:
+            assert np.array_equal(raw, out)      # quality.render leaves an exact-size render alone
+        else:
+            res["forced"] = [out.shape[1], out.shape[0]]   # Pillow's resize to exactly the size asked for
+        return res
+
+    out = []
+    for name, svg, width, height in cases:
+        out.append({"name": name, "svg": svg, "width": width, "height": height,
+                    "aa": outcome(svg, width, height, False), "crisp": outcome(svg, width, height, True)})
+    assert sum("error" in c["aa"] for c in out) == 11 and any("forced" in c["aa"] for c in out)
+    assert any(c["aa"].get("width") != c["aa"].get("height") for c in out)
+    write("render_cases", out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
