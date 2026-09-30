@@ -143,6 +143,80 @@ def _intake() -> None:
     cases["exif6"] = {"file": "intake_exif6.jpg", "width": out.width, "height": out.height}
     assert (out.width, out.height) == (20, 40)
 
+    # 16-bit-per-channel PNGs, built by hand (Pillow cannot write 16-bit RGB or grey+alpha),
+    # 16x16, opening with the samples where rounding and scaling rules part company: 0x0182
+    # (high byte 1, (c+128)/257 says 2), 0x80FF (128; Pillow's grey path clips it to 255).
+    edge = [0x0000, 0x0001, 0x007F, 0x00FF, 0x0100, 0x0182, 0x0183, 0x7FFF, 0x8000, 0x80FF, 0x8100, 0xFEFF, 0xFF00, 0xFF7F, 0xFF80, 0xFFFF]
+
+    def png16(colour_type: int, channels: int) -> tuple[bytes, list[int]]:
+        n = 16 * 16 * channels
+        samples = (edge + [(i * 40503 + 0x0182) & 0xFFFF for i in range(n)])[:n]
+        rows = b"".join(
+            b"\0" + b"".join(struct.pack(">H", samples[(y * 16 + x) * channels + c]) for x in range(16) for c in range(channels))
+            for y in range(16)
+        )
+
+        def chunk(tag: bytes, body: bytes) -> bytes:
+            return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body))
+
+        head = struct.pack(">IIBBBBB", 16, 16, 16, colour_type, 0, 0, 0)
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", head) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""), samples
+
+    cases["bit16"] = {}
+    for key, colour_type, channels in (("grey", 0, 1), ("rgb", 2, 3), ("la", 4, 2), ("rgba", 6, 4)):
+        data, samples = png16(colour_type, channels)
+        file = f"intake_16_{key}.png"
+        (OUT / file).write_bytes(data)
+        pillow = list(load_upload(data, max_bytes=big, max_pixels=big).image.tobytes())
+        if key == "grey":
+            # Not Pillow's decode: Pillow reads 16-bit grey as I;16 and clips it to 255 (0x80FF -> 255,
+            # everything above the darkest 0.4% turns white). The intake deliberately keeps the high byte instead.
+            want = [v for s in samples for v in ((s >> 8),) * 3 + (255,)]
+            assert want != pillow, "Pillow was expected to clip 16-bit grey"
+            basis = "high byte of the source samples; deliberately not Pillow's clipped decode"
+        else:
+            # Pillow takes the high byte of every channel; the exporter asserts that, so the
+            # Rust is held to Pillow and to the rule in one.
+            want = pillow
+            high = [s >> 8 for s in samples]
+            if key == "rgb":
+                assert pillow == [v for i in range(256) for v in high[i * 3:i * 3 + 3] + [255]]
+            elif key == "la":
+                assert pillow == [v for i in range(256) for v in (high[i * 2],) * 3 + (high[i * 2 + 1],)]
+            else:
+                assert pillow == high
+            basis = "Pillow's decode (the high byte of every channel)"
+        cases["bit16"][key] = {"file": file, "width": 16, "height": 16, "basis": basis, "rgba_hex": bytes(want).hex()}
+
+    # JPEGs that must load although they look odd, and the damaged ones Pillow refuses.
+    jpg = (OUT / "intake_jpg.jpg").read_bytes()
+    tbuf = io.BytesIO()
+    src.convert("RGB").resize((8, 8)).save(tbuf, "JPEG")
+    thumb = tbuf.getvalue()
+
+    # An EXIF block carrying a complete 8x8 JPEG thumbnail (its own SOI ... SOS ... EOI), as
+    # cameras write them: a check that looks for any FFD9 would take the thumbnail's for the
+    # picture's. IFD0 = {Orientation: 1}, IFD1 = {JPEGInterchangeFormat, ...Length}.
+    ifd0 = struct.pack("<H", 1) + struct.pack("<HHI", 0x0112, 3, 1) + struct.pack("<HH", 1, 0) + struct.pack("<I", 26)
+    ifd1 = struct.pack("<H", 2) + struct.pack("<HHII", 0x0201, 4, 1, 56) + struct.pack("<HHII", 0x0202, 4, 1, len(thumb)) + struct.pack("<I", 0)
+    tiff = b"II*\0" + struct.pack("<I", 8) + ifd0 + ifd1 + thumb
+    assert len(ifd0) == 18 and len(ifd1) == 30
+    with_thumb = save(src.convert("RGB"), "JPEG", "intake_jpg_thumb.jpg", quality=90, exif=b"Exif\0\0" + tiff)
+    assert with_thumb.count(b"\xff\xd8") >= 2 and with_thumb.count(b"\xff\xd9") >= 2  # two pictures in the file
+    # Two pictures in one file, MPO style: the first is complete, the file goes on after its EOI.
+    trailing = jpg + thumb + b"\0" * 64
+    (OUT / "intake_jpg_trailing.jpg").write_bytes(trailing)
+
+    cases["jpeg_ok"] = {}
+    for key, file, data in (("thumb", "intake_jpg_thumb.jpg", with_thumb), ("trailing", "intake_jpg_trailing.jpg", trailing)):
+        out = load_upload(data, max_bytes=big, max_pixels=big)
+        assert (out.width, out.height) == (96, 96), key
+        cases["jpeg_ok"][key] = {"file": file, "width": 96, "height": 96, "rgba_sum": sum(out.image.tobytes())}
+
+    sos = jpg.index(b"\xff\xda")  # the first, and only, scan of a baseline file
+    sos_end = sos + 2 + struct.unpack(">H", jpg[sos + 2:sos + 4])[0]
+    assert jpg.endswith(b"\xff\xd9") and jpg.count(b"\xff\xda") == 1
+
     # Rejections: the code and the words the frontend shows, for the limits the test replays.
     png = (OUT / "intake_png.png").read_bytes()
     tiff = save(Image.new("RGB", (4, 4), (9, 9, 9)), "TIFF", "intake_tiff.tif")
@@ -175,6 +249,17 @@ def _intake() -> None:
         "unsupported_tiff": reject(tiff, "intake_tiff.tif", small, 40_000_000),
         "truncated_png": reject(png[: len(png) // 2], None, small, 40_000_000),
     }
+    # Pillow's `load` raises "image file is truncated" for each of these; zune-jpeg, the
+    # decoder behind `image`, would hand back a half-grey picture.
+    for key, file, data in (
+        ("truncated_jpg_half", "intake_jpg_half.jpg", jpg[: len(jpg) // 2]),
+        ("truncated_jpg_after_sos", "intake_jpg_sos.jpg", jpg[:sos_end]),
+        ("truncated_jpg_no_eoi", "intake_jpg_noeoi.jpg", jpg[:-2]),
+        ("truncated_jpg_thumb_half", "intake_jpg_thumb_half.jpg", with_thumb[: len(with_thumb) // 2]),
+    ):
+        (OUT / file).write_bytes(data)
+        cases["errors"][key] = reject(data, file, small, 40_000_000)
+        assert cases["errors"][key]["code"] == "corrupt_image", key
     write("intake", cases)
 
 
