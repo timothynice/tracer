@@ -122,9 +122,30 @@ DUMPDIR LABEL` prints a dumped region's alpha distribution and connectivity).
   kept, ±1 rounding counted); `conftest.noisy_halo_disc` now draws alpha-1 noise from {0,255} only.
 - Rust rebuilt with both; Python changed-test set passes (7). Rust verification pending.
 
+## Round 3 (round 2 verified: diffcheck 6 stages 0 failing over 96, Rust suite pass, but the bench
+## regressed further: inset-card ΔE 0.486 F1 0.707, thin-mark-128 slivers 16, alpha-fade-512 art 10.7)
+- inset-card: both engines agree (trace_labels exact, 2 paths + filter) and are wrong the same way:
+  the inset bands are NOT absorbed by the shadow stage (kept, painted through the filter) and the
+  card's shape is "card + what it encloses"; once the corner bits join the band the band touches the
+  backdrop, the recomputed enclosure drops it, and the card is painted without its band ring. FIX:
+  the shard pass keeps the enclosure computed before it (both engines) — the shards are the host's
+  edge; moving their pixels is bookkeeping for the boundary build, not a change of what lies inside.
+- alpha-fade-512: the synthetic corpus is rendered premultiplied, so its ramp tails are ON the grid
+  (153,102,255,5), (170,85,255,3) … — the grid rule is right; the nearest-source inpainting is not
+  (the nearest reliable pixel is the foreign disc). At alpha 1–2 no consistency check can work (the
+  cell is ±64 or wider). FIX: the colour under faint on-grid noise is the alpha-weighted mean of the
+  faint noise pixels within `NOISE_RADIUS` 3 (7×7 brings ±64 to ±9 levels ≈ 3.5 ΔE, under the seed
+  threshold) — `prepare.smooth_faint_noise`/`_box_sum` with a fixed add order, Rust `box_sum` the
+  same order, result cast through f32; alpha-0 inpainting unchanged (nearest α>0 pixel).
+- thin-mark-128: (0,0,0) is on every grid, so the near-black 2× ringing was half-inpainted. The
+  ringing carries black because `upsample2x` resamples the RAW rgba; FIX: the 2× input takes the
+  prepared colour, floor(rgb+0.5) as u8 (both engines; tie-safe rounding).
+- Tests: prepare test rewritten (checker noise → smooth mean, off-grid kept, alpha-0 nearest).
+  Python changed-test set passes; Rust rebuilt (pending verification).
+
 ## Next
 - pytest (Rust), diffcheck all six stages in batches, bench run + compare + per-item, heldout5,
-  update CLAUDE.md bullet (rescue → engine.absorb_shards, grid rule), final commit, report.
+  update CLAUDE.md bullet (smoothing, enclosure kept, clean upsample input), final commit, report.
 - Sweep COLOUR_ALPHA_FLOOR ∈ {4, 8, 16} on the corpus bench if 8 leaves regressions.
 - `python -m bench run --engines vexel --no-media --workers 3` + compare vs bench/baselines/vexel.json;
   per-item check; heldout items with vexel-auto (`panel3.py`); re-run fragsurvey after.

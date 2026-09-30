@@ -65,25 +65,37 @@ def test_flat_image_is_one_region_and_gradient_does_not_split_on_edges():
     assert labels[20, 20] not in np.unique(labels[:8, :])  # the square is not the ramp region
 
 
-def test_colour_under_faint_alpha_is_inpainted_from_the_nearest_pixel_that_shows():
+def test_colour_under_faint_alpha_noise_is_its_neighbourhoods_mean_and_never_a_shapes():
     """A rasteriser that works premultiplied and unpremultiplies for the file
     leaves, under a pixel of alpha a, a colour quantised to steps of 255/a: at
-    alpha 1 or 2 only 0, 128 and 255 per channel. That colour means nothing,
-    like the colour under alpha 0, and is read from the nearest pixel whose
-    alpha is high enough for its colour to be its own."""
-    img = rgba(color=(0, 0, 0, 0))
+    alpha 1 or 2 only 0, 128 and 255 per channel. That colour is noise, known
+    by its grid, and is replaced by the alpha-weighted mean of the faint noise
+    pixels around it — a smooth field the partition seeds, not the ridges of
+    the noise — never by a neighbouring shape's colour. A faint colour off the
+    grid is a straight-alpha file's own and stays; alpha 0 is inpainted from
+    the nearest pixel that shows, as before."""
+    from studi0trace.engines.vexel.prepare import unpremultiply_noise
+
+    img = rgba(h=48, w=48, color=(0, 0, 0, 0))
     img[8:24, 8:24] = (200, 50, 50, 255)  # red square
-    img[24:28, 8:24] = (255, 0, 255, 2)  # a faint halo below it, magenta noise (on the 255/2 grid)
-    img[28:30, 8:24] = (255, 255, 255, 1)  # and fainter, white (the only values alpha 1 can hold)
+    ys, xs = np.mgrid[0:48, 0:48]
+    halo = (ys >= 26) & (ys < 40) & (xs >= 4) & (xs < 44)  # a faint band below it
+    checker = ((xs + ys) % 2 == 0)[halo]
+    img[halo, :3] = np.where(checker[:, None], (255, 255, 255), (0, 0, 0))  # white/black noise, alpha 2
+    img[halo, 3] = 2
     img[8:24, 24:26] = (255, 255, 255, 40)  # a real anti-aliased rim: its colour is its own
     img[8:24, 4:6] = (120, 40, 200, 3)  # off the 255/3 grid: a straight-alpha file's own colour
+    assert unpremultiply_noise(img[..., :3].astype(np.float32), img[..., 3])[halo].all()
+    assert not unpremultiply_noise(img[..., :3].astype(np.float32), img[..., 3])[16, 4]
     p = prepare(img)
-    assert tuple(p.rgb[26, 16]) == (200, 50, 50)
-    assert tuple(p.rgb[29, 16]) == (200, 50, 50)
+    inner = halo & (ys >= 30) & (ys < 36) & (xs >= 8) & (xs < 40)  # a full 7×7 window of noise around each
+    assert np.abs(p.rgb[inner] - 127.5).max() < 20, "the checker's mean, not white, black or the square's red"
+    assert np.abs(p.rgb[inner] - p.rgb[inner].mean(axis=0)).max() < 20, "a smooth field"
     assert tuple(p.rgb[16, 24]) == (255, 255, 255)
     assert tuple(p.rgb[16, 4]) == (120, 40, 200), "a colour no unpremultiply could have made is kept"
-    assert np.isclose(p.alpha[26, 16], 2 / 255) and np.isclose(p.alpha[29, 16], 1 / 255)
-    assert np.isclose(p.features[26, 16, 3], 100 * 2 / 255, atol=1e-3)
-    # the grid at alpha 3 is 0, 85, 170, 255: a level of rounding either way still counts
+    assert np.isclose(p.alpha[30, 16], 2 / 255)
+    assert np.isclose(p.features[30, 16, 3], 100 * 2 / 255, atol=1e-3)
+    assert np.abs(p.rgb[46, 16] - p.rgb[39, 16]).max() < 1e-3, "alpha 0 takes the nearest pixel that shows"
+    # the grid at alpha 3 is 0, 85, 170, 255: a level of rounding either way still counts as noise
     img[8:24, 4:6] = (86, 169, 0, 3)
-    assert tuple(prepare(img).rgb[16, 4]) == (200, 50, 50)
+    assert unpremultiply_noise(img[..., :3].astype(np.float32), img[..., 3])[16, 4]

@@ -642,10 +642,12 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                 None => vec![[0.0; 4]; qx.len()],
             }
         };
+        // The enclosure stands as it was: the shards are the host's own edge,
+        // and handing their pixels over is bookkeeping for the four-connected
+        // boundary build, not a change of what lies inside what (see the Python).
         if absorb_shards(&mut l, p.min_region, &invisible, &xs, &ys, &rgba255, &fill_at) {
             index = LabelIndex::build(&l);
             ids = labels::unique_ids(&l);
-            enc = enclosure(&l);
         }
     }
     t.lap("shards");
@@ -908,7 +910,14 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     // are the evidence for the upsample, not a narrow band.
     if p.upsample == "always" || (p.upsample == "auto" && crate::upsample::wants_upsample(&levels.unbanded(&l), height, width)) {
         crate::dump::text("upsample", "2x\n");
-        let up = crate::upsample::upsample2x(rgba, height, width);
+        // The colour the resampler sees is the prepared one (see the Python).
+        let clean: Vec<u8> = (0..height * width)
+            .flat_map(|i| {
+                let c = |k: usize| (prep.rgb.data[i * 3 + k] + 0.5).floor().clamp(0.0, 255.0) as u8;
+                [c(0), c(1), c(2), rgba[i * 4 + 3]]
+            })
+            .collect();
+        let up = crate::upsample::upsample2x(&clean, height, width);
         let mut q = p.clone();
         q.upsample = "never".to_string();
         return crate::upsample::halve(&trace_rgba(&up, 2 * height, 2 * width, &q), width, height);

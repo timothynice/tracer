@@ -42,11 +42,18 @@ class Prepared:
 COLOUR_ALPHA_FLOOR = 8
 # Such noise is known by its grid: every channel of an unpremultiplied colour at
 # alpha a is round(k·255/a), within a level of rounding either way. A colour off
-# the grid is one a straight-alpha file wrote and means what it says — the tail
-# of a synthetic alpha ramp beside a solid disc took the disc's colour when every
-# faint pixel was inpainted, and the Lanczos ringing of a 2× upsample carries
-# real mixtures at alpha 1–7.
+# the grid is one a straight-alpha file wrote and means what it says (the
+# Lanczos ringing of a 2× upsample carries real mixtures at alpha 1–7).
 GRID_TOL = 1.0
+# The colour under such a pixel is the alpha-weighted mean of the faint noise
+# pixels within this radius — its own neighbourhood's samples, never a shape's
+# colour: inpainted from the nearest pixel that shows, the tail of a synthetic
+# alpha ramp beside a solid disc took the disc's colour (and the corpus is
+# rendered premultiplied, so its ramps' tails are on the grid too). Seven by
+# seven brings the ±64 levels of alpha-2 noise under ±9, some 3.5 ΔE, below
+# the partition's seed threshold; the halo of a speech balloon comes out a
+# smooth field its own region, and the shape's edge is placed where it is.
+NOISE_RADIUS = 3
 
 
 def unpremultiply_noise(rgb: np.ndarray, alpha255: np.ndarray, floor: int = COLOUR_ALPHA_FLOOR) -> np.ndarray:
@@ -67,19 +74,44 @@ def unpremultiply_noise(rgb: np.ndarray, alpha255: np.ndarray, floor: int = COLO
     return out
 
 
-def inpaint_transparent(rgb: np.ndarray, alpha: np.ndarray, alpha255: np.ndarray | None = None,
-                        floor: int = COLOUR_ALPHA_FLOOR) -> np.ndarray:
-    """Replace RGB under alpha == 0, and under alpha below `floor`/255 where the
-    colour is unpremultiply noise, with the nearest other pixel's colour.
+def _box_sum(a: np.ndarray, radius: int) -> np.ndarray:
+    """Sum over the (2r+1)² window, zero beyond the frame: rows then columns,
+    each a run of shifted adds in one fixed order (the Rust adds the same terms
+    in the same order, so the two agree to the bit)."""
+    h, w = a.shape[:2]
+    p = np.pad(a, ((0, 0), (radius, radius)) + ((0, 0),) * (a.ndim - 2))
+    acc = p[:, 0:w].copy()
+    for k in range(1, 2 * radius + 1):
+        acc = acc + p[:, k:k + w]
+    p = np.pad(acc, ((radius, radius), (0, 0)) + ((0, 0),) * (a.ndim - 2))
+    acc = p[0:h].copy()
+    for k in range(1, 2 * radius + 1):
+        acc = acc + p[k:k + h]
+    return acc
 
-    PNG encoders store arbitrary (often black) RGB under transparent pixels,
-    and a premultiplied pipeline leaves quantisation noise under nearly
-    transparent ones (`COLOUR_ALPHA_FLOOR`, `unpremultiply_noise`); letting
-    that leak into gradient fits or edge detection would be wrong.
+
+def smooth_faint_noise(rgb: np.ndarray, alpha255: np.ndarray, floor: int = COLOUR_ALPHA_FLOOR,
+                       radius: int = NOISE_RADIUS) -> np.ndarray:
+    """Replace the colour under unpremultiply noise (`unpremultiply_noise`) with
+    the alpha-weighted mean colour of the noise pixels within `radius`."""
+    noise = unpremultiply_noise(rgb, alpha255, floor)
+    if not noise.any():
+        return rgb
+    w = np.where(noise, alpha255.astype(np.float64), 0.0)
+    num = _box_sum(rgb.astype(np.float64) * w[..., None], radius)
+    den = _box_sum(w, radius)
+    out = rgb.copy()
+    out[noise] = (num[noise] / den[noise][:, None]).astype(np.float32)
+    return out
+
+
+def inpaint_transparent(rgb: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    """Replace RGB under alpha == 0 with the nearest visible pixel's colour.
+
+    PNG encoders store arbitrary (often black) RGB under transparent pixels;
+    letting that leak into gradient fits or edge detection would be wrong.
     """
     invisible = alpha <= 0.0
-    if alpha255 is not None:
-        invisible = invisible | unpremultiply_noise(rgb, alpha255, floor)
     if not invisible.any() or invisible.all():
         return rgb
     _, (rows, cols) = ndimage.distance_transform_edt(invisible, return_indices=True)
@@ -93,7 +125,8 @@ def prepare(rgba: np.ndarray) -> Prepared:
         raise ValueError("prepare() expects an (H, W, 4) RGBA array")
     rgb = rgba[..., :3].astype(np.float32)
     alpha = rgba[..., 3].astype(np.float32) / 255.0
-    rgb = inpaint_transparent(rgb, alpha, rgba[..., 3])
+    rgb = smooth_faint_noise(rgb, rgba[..., 3])
+    rgb = inpaint_transparent(rgb, alpha)
     lab = rgb2lab(rgb / 255.0).astype(np.float32)
     # Colour is kept at full strength everywhere (inpainted under transparency):
     # anti-aliased rims against transparency then differ from the ink only in

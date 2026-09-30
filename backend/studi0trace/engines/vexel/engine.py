@@ -563,12 +563,15 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
 
     # A piece of a region below min_region is not a region: the shards the
     # rescue leaves of a host join their surroundings, now that the shadow
-    # stage has had its say (an inset shadow's bands rejoin the card here, and
-    # the card's own edge bits at the corners rejoin the card with them).
+    # stage has had its say. The enclosure stands as it was: the shards are
+    # the host's own edge, and handing their pixels over is bookkeeping for
+    # the four-connected boundary build, not a change of what lies inside
+    # what — an inset shadow's band is enclosed by its card through the
+    # card's edge bits at the corners, and with those bits in the band and
+    # the enclosure read again, the card was painted without its band ring.
     shards = absorb_shards(labels, p.min_region, invisible, xs, ys, rgba255, fill_at)
     if shards is not None:
         labels = shards
-        enc = enclosure(labels)
 
     # Thin regions are drawn lines. A single line often arrives as several
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions
@@ -718,7 +721,12 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # before the cut are.
     if p.upsample == "always" or (p.upsample == "auto" and wants_upsample(bands.unbanded(labels), height, width)):
         dump.text("upsample", "2x\n")
-        return halve(trace_rgba(upsample2x(rgba), p.model_copy(update={"upsample": "never"})), width, height)
+        # The colour the resampler sees is the prepared one: what a file stores
+        # under alpha 0 (black, as a rule) would otherwise be mixed into the
+        # ringing beside every edge, and the ringing then read as a colour of
+        # its own along every thin line.
+        clean = np.concatenate([np.floor(prep.rgb + 0.5).astype(np.uint8), rgba[..., 3:]], axis=-1)
+        return halve(trace_rgba(upsample2x(clean), p.model_copy(update={"upsample": "never"})), width, height)
     place_at = fill_at
     if shadow_plan.ground is not None and shadow_plan.canvas is not None:
         ground_lab, ground = shadow_plan.canvas, shadow_plan.ground
