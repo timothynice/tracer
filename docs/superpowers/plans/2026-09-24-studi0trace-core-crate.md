@@ -355,7 +355,7 @@ pub fn fields() -> Vec<Field> {
         Field { name: "shadows", kind: Bool { default: true },
             description: "Rebuild drop shadows, glows and inner shadows as SVG filters instead of banded paths",
             ui: ui(json!({"control": "toggle", "group": "Effects"})) },
-        Field { name: "stroke_tolerance", kind: Number { default: 0.2, min: 0.05, max: 1.0 },
+        Field { name: "stroke_tolerance", kind: Number { default: 0.13, min: 0.05, max: 1.0 },
             description: "Largest error a centreline may leave before the thin region is drawn filled instead of stroked; lower keeps more shapes filled",
             ui: ui(json!({"control": "slider", "step": 0.01, "group": "Curves", "label": "Stroke tolerance"})) },
         Field { name: "overlaps", kind: Bool { default: true },
