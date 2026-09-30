@@ -4,6 +4,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod color;
+pub mod drawing;
 pub mod edges;
 pub mod intake;
 pub mod params;

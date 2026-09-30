@@ -786,6 +786,243 @@ def _resample() -> None:
                        "unpremultiplied": hashlib.sha256(back.tobytes()).hexdigest()})
 
 
+@exporter("drawing")
+def _drawing() -> None:
+    import math
+    import warnings
+
+    import numpy as np
+
+    from studi0trace.imaging import quality
+
+    # quality.parse and quality.path_polylines, summarised: per contour its point count, flags,
+    # paint, coordinate sums and three of its points; per drawing its counters. What the Python
+    # raises travels as the exception's class name. JSON has no NaN or infinity: those are strings.
+    def num(x):
+        x = float(x)
+        return x if math.isfinite(x) else repr(x)
+
+    def points(pts: np.ndarray) -> dict:
+        n, cols = pts.shape
+
+        def row(i: int):
+            return [num(v) for v in pts[i]] if n else None
+
+        return {"n": n, "columns": cols, "sum": [num(pts[:, j].sum()) for j in range(cols)],
+                "first": row(0), "mid": row(n // 2), "last": row(-1)}
+
+    def run(fn, *args):
+        with warnings.catch_warnings(), np.errstate(all="ignore"):
+            warnings.simplefilter("ignore")
+            try:
+                return fn(*args), None
+            except Exception as e:  # ParseError, ValueError, IndexError, OverflowError, RecursionError
+                return None, type(e).__name__
+
+    def drawing(svg: str, size) -> dict:
+        d, err = run(quality.parse, svg, None if size is None else tuple(size))
+        if err:
+            return {"error": err}
+        return {"elements": d.elements, "segments": d.segments, "strokes": d.strokes, "covers": list(d.covers),
+                "contours": [{"element": c.element, "closed": bool(c.closed), "paint": c.paint, "fill_rule": c.fill_rule,
+                              "stroke": None if c.stroke is None else num(c.stroke), **points(c.pts)}
+                             for c in d.contours]}
+
+    def polylines(d: str) -> dict:
+        out, err = run(quality.path_polylines, d)
+        if err:
+            return {"d": d, "error": err}
+        return {"d": d, "subpaths": [{"closed": bool(closed), **points(p)} for p, closed in out]}
+
+    # Traced output (at its own size and at the scorecard's 2x) and a spread of vector truths:
+    # arcs and curves, rects with rx, circles, ellipses, polygons, lines, strokes, rotate and
+    # matrix transforms, <use>, clipPaths, a DOCTYPE with entities and a latin-1 declaration.
+    sizes = {c["stem"]: (c["width"], c["height"]) for c in json.loads((OUT / "render.json").read_text())}
+    heldout = ["fluent-color/black-nib.svg", "fluent-color/cityscape-at-dusk.svg",
+               "fluent-color/man-in-motorized-wheelchair-facing-right.svg", "fluent-color/smiling-face-with-heart-eyes.svg",
+               "fluent-flat/mobile-phone.svg", "noto/u0030.svg", "noto/u1f307.svg", "noto/u1f469-200d-1f33e.svg",
+               "noto/u1f97e.svg", "noto/u2640.svg"]
+    files = []
+    for path in sorted(OUT.glob("render_*.svg")) + [ROOT / "backend/bench/heldout" / h for h in sorted(heldout)]:
+        svg = path.read_text(encoding="utf-8")
+        stem = path.stem.removeprefix("render_")
+        for size in [None] + ([list(sizes[stem])] if stem in sizes else []):
+            files.append({"file": path.relative_to(ROOT).as_posix(), "size": size, "drawing": drawing(svg, size)})
+
+    ns = 'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"'
+
+    def svg(body: str, root: str = 'viewBox="0 0 64 64"') -> str:
+        return f"<svg {ns} {root}>{body}</svg>"
+
+    tri = 'd="M0 0L4 0 4 4Z"'
+    boxed = '<path d="M10 20L60 20 60 45Z" stroke="#000" stroke-width="2"/>'
+    cases = [
+        # the path grammar
+        ("path: every command, absolute",
+         svg('<path d="M2 3 L10 4 H20 V12 C22 14 26 18 30 12 S38 6 40 14 Q44 20 48 14 T56 14 A6 4 20 0 1 60 24 Z"/>'), None),
+        ("path: every command, relative",
+         svg('<path d="m2 3 l8 1 h10 v8 c2 2 6 6 10 0 s8 -6 10 2 q4 6 8 0 t8 0 a6 4 20 0 1 4 10 z"/>'), None),
+        ("path: arguments repeated without the letter",
+         svg('<path d="M1 1 2 2 3 1 L4 4 5 5 H6 7 V8 9 C1 1 2 2 3 3 4 4 5 5 6 6 S7 7 8 8 9 9 10 10 Q1 2 3 4 5 6 7 8'
+             ' T9 9 10 10 A1 1 0 0 1 3 3 2 2 0 1 0 6 6"/><path d="m1 1 2 2 3 1 l1 1 1 1 h1 1 v1 1 c1 1 2 2 3 3 4 4 5 5 6 6'
+             ' s1 1 2 2 3 3 4 4 q1 2 3 4 5 6 7 8 t1 1 2 2 a1 1 0 0 1 3 3 2 2 0 1 0 6 6"/>'), None),
+        ("path: closepath, then drawing on without a moveto",
+         svg('<path d="M0 0 L10 0 10 10 Z L20 20 30 20 Z l5 5 5 -5 z m3 3 h4 v4 z z"/>'), None),
+        ("path: number forms and separators",
+         svg('<path d="M.5.5L-1-2e1 3E-1,4 1.5.5+5+6 1e2e3 4 7. 8.Z"/>'), None),
+        ("path: S and T reflect only after their own kind",
+         svg('<path d="M0 0 Q5 5 10 0 S15 5 20 0 C22 2 24 2 26 0 T30 0 T34 0 S38 4 40 0 L42 0 S44 4 46 0 T50 0'
+             ' C51 1 52 1 53 0 C1 2 S56 4 58 0 Q1 2 T60 1"/>'), None),
+        ("path: arcs",  # both flags each way, rx 0, radii scaled up, rotated, zero length, negative radii, run-together flags
+         svg('<path d="M10 10 A5 5 0 0 0 20 10 A5 5 0 0 1 30 10 A5 5 0 1 0 40 10 A5 5 0 1 1 50 10 A0 5 0 0 1 55 15'
+             ' A1 1 0 0 1 60 30 A3 6 45 1 1 40 40 A2 2 0 0 1 40 40 A-4 -3 0 0 1 30 45 a1 1 0 00.5.5 A2 2 0 2 -1 20 50'
+             ' A4 4 90 0 1 10 50.000001 a3 2 -30 1 0 -5 -5 A1 1 0 0 1 -5 35.00000001"/>'), None),
+        ("path: truncated, empty and missing data",
+         svg('<path d="M0 0 L5"/><path d="M1 2 3"/><path d="Q1 2"/><path d=""/><path/><path d="5 5 L1 1 2 2"/>'
+             '<path d="M5 Z L1 2 3 4"/><path d="M5 Z V3 4"/><path d="M5 Z m1 2 L3 3"/><path d="M Z A0 1 0 0 1 9 9 L3 3"/>'
+             '<path d="M0 0 C1 2 3"/><path d="M0 0 A1 1 0 0"/><path d="M5 Z C1 2 3 4 5 6 S7 8 9 9 T1 1"/>'), None),
+        ("path: infinite coordinates",
+         svg('<path d="M1e999 0 L5 5"/><path d="M0 0 L1e999 0 Z" fill="none" stroke="#000"/>'
+             '<path d="M1e999 m-1e999 z" fill="none"/>'), None),
+        ("path: unicode digits", svg('<path d="M ٣ ٤ L ５ ９ L 1٠ 0 Z"/>'), None),
+        # transforms
+        ("transforms", svg("".join(f'<path transform="{t}" d="M1 2 L5 2 L5 6 Z"/>' for t in [
+            "translate(1 2)", "translate(3)", "translate(1,2)", "scale(2)", "scale(2 3)", "scale(-1, 1)", "rotate(30)",
+            "rotate(30 10 10)", "rotate(30 5)", "rotate(-45,4,4)", "skewX(20)", "skewY(20)", "matrix(1 0.2 0.3 1 5 6)",
+            "matrix(1,2,3)", "translate(5,5) rotate(10) scale(1.5)", "translate(5 5)junk", "translate(5 5", "foo(1) translate(2 0)",
+            "Translate(5)", "translate (3 4)", "  scale(0.5)  translate(4)", "rotate(90 1e999 0)", "scale(1e999)",
+            "translate(1e999 0)", "matrix(1 0 0 1 1e999 0) scale(2)", "rotate(1e308)", ""])
+            + '<g transform="translate(10 0)"><g transform="scale(2)"><path transform="rotate(5)" d="M0 0L3 0L3 3Z"'
+              ' stroke="#f00" stroke-width="2"/></g></g>'), None),
+        # <use>, <defs>, what is skipped and what is not drawn
+        ("use", svg('<defs><path id="p" d="M0 0L4 0L4 4Z" transform="translate(1 1)" fill="#f00" opacity="0.8"/>'
+                    '<g id="grp" fill="#0f0"><path id="inner" d="M0 0L1 1 1 0Z"/></g><circle id="c" r="2"/></defs>'
+                    '<use href="#p" x="10" y="5"/><use xlink:href="#p" x="20" transform="rotate(10)" fill="#00f" opacity="0.5"/>'
+                    '<use href="#grp"/><use href="#inner" y="30"/><use href="#missing"/><use href="" xlink:href="#p" y="40"/>'
+                    '<use href="##p" x="50"/><use href="p" x="1e999" y="3"/>'
+                    '<use xlink:href="#c" x="3" y="3" stroke="#000" stroke-width="3" transform="scale(2)"/>'
+                    '<path id="shown" d="M40 40 L50 40 L50 50Z"/><use href="#shown" x="-30"/><use id="self" href="#self"/>'), None),
+        ("skipped and unknown elements",
+         svg('<defs><path d="M0 0L9 9 9 0Z"/></defs><linearGradient><path d="M0 0L9 9 9 0Z"/></linearGradient>'
+             '<radialGradient/><filter><path d="M0 0L1 1"/></filter><mask><path d="M0 0L1 1"/></mask>'
+             '<clipPath><path d="M0 0L1 1"/></clipPath><symbol><path d="M0 0L1 1"/></symbol><pattern><path d="M0 0L1 1"/></pattern>'
+             '<style>path{fill:red}</style><title>t</title><desc>d</desc><metadata><path d="M0 0L1 1"/></metadata>'
+             '<a><path d="M0 0L1 1 1 0Z"/></a><switch><path d="M0 0L1 1 1 0Z"/></switch><text x="1" y="1">hi</text>'
+             '<image href="x.png" width="4" height="4"/><foo:path xmlns:foo="urn:foo" d="M0 0L5 5 5 0Z"/>'
+             '<svg x="10" y="10" transform="scale(3)" opacity="0.1" fill="#123"><path d="M0 0L2 0 2 2Z"/></svg>'
+             '<path class="c" d="M3 3L6 3 6 6Z" display="none" visibility="hidden" style="display:none"/>'), None),
+        ("no error: bad transforms that are never read",
+         svg('<defs><path transform="scale()" d="M0 0L1 1"/></defs><svg transform="translate()"><path d="M0 0L1 1 1 0Z"/></svg>'
+             '<use href="#nothing" transform="rotate()"/>'), None),
+        # paint
+        ("paint", svg(
+            f'<path {tri} fill="none" stroke="#f00" stroke-width="2"/><path {tri} fill="none" stroke="none"/>'
+            f'<path {tri} fill="" stroke=""/><path {tri} fill="None"/>'
+            f'<path {tri} fill="#f00" style="fill:#0f0;stroke: #00f ;stroke-width:3px"/>'
+            f'<path {tri} style=" fill : #abc ; fill-opacity:0.2;opacity:0.9"/><path {tri} style="xfill:#f00;fill-opacity:0.5"/>'
+            f'<g fill="#f0f" stroke="#0ff" stroke-width="0.5" fill-rule="evenodd" opacity="0.5"><path {tri} opacity="0.9"/>'
+            f'<path {tri} style="fill-rule: evenodd "/><g style="stroke:none" fill-rule="nonzero"><path {tri}/></g></g>'
+            f'<path {tri} fill-rule=" evenodd"/><path {tri} fill-rule="EvenOdd"/><path {tri} fill-opacity="50%"/>'
+            f'<path {tri} fill-opacity="49%"/><path {tri} fill="none" stroke="#000" stroke-opacity="0.4"/>'
+            f'<path {tri} fill="none" stroke="#000" stroke-opacity="0.4" opacity="2"/><path {tri} opacity="50%" fill-opacity="abc"/>'
+            f'<path {tri} stroke="#000" stroke-width="abc"/><path {tri} stroke="#000" stroke-width="50%" transform="scale(2 3)"/>'
+            f'<path {tri} stroke="#000" stroke-width="1" transform="matrix(0 1 1 0 0 0)"/>'
+            f'<path {tri} stroke="#000" transform="scale(0)"/><path {tri} stroke="#000" transform="rotate(33) scale(1.7 0.3)"/>'
+            '<line x1="1" y1="2" x2="30" y2="40" stroke="#000" stroke-width="4"/><line x1="1" y1="2" x2="3" y2="4" fill="#f00"/>'
+            '<polyline points="1 1 5 5 9 1" fill="#f00" stroke="#00f"/><rect width="5" height="5" class="k"/>'
+            f'<style>.k{{fill:none}}</style><path {tri} fill="url(#g)" stroke="currentColor"/>'), None),
+        # shapes
+        ("shapes", svg(
+            '<rect width="10" height="6"/><rect x="1" y="2" width="10" height="6" rx="2"/><rect width="10" height="6" ry="2"/>'
+            '<rect width="10" height="6" rx="2" ry="1"/><rect width="10" height="6" rx="9"/><rect width="10" height="6" rx="auto" ry="3"/>'
+            '<rect width="10" height="6" rx="0" ry="3"/><rect width="-10" height="6" rx="2"/><rect width="50%" height="6px" rx="1.5"/>'
+            '<rect/><rect x="0.1" y="0.2" width="0.3" height="0.7" rx="0.05"/>'
+            '<circle cx="5" cy="6" r="3"/><circle r="0"/><circle r="-2"/><circle r="40"/><ellipse cx="3" cy="4" rx="5" ry="2"/>'
+            '<ellipse rx="1" ry="9"/><ellipse rx="1e-300" ry="0"/>'
+            '<polygon points="1,1 5,1 5,5 7"/><polygon points=""/><polygon points="3 3"/><polygon/>'
+            '<polyline points="1 1 5 1 5 5"/><polyline points="2 2"/><line x1="1" y1="2" x2="3" y2="4"/><line/>'), None),
+        ("rect whose width is infinite", svg('<rect width="1e999" height="5" rx="1"/>'), None),
+        ("rect whose width is infinite, unrounded", svg('<rect width="1e999" height="5"/>'), None),
+        # the root, namespaces and the XML itself
+        ("root attributes",
+         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" fill="#f00" opacity="0.1" transform="scale(5)"'
+         f' stroke="#000"><path {tri}/></svg>', None),
+        ("root is a group",
+         f'<g xmlns="http://www.w3.org/2000/svg" transform="translate(5 5)" opacity="0.4"><path {tri}/></g>', None),
+        ("root is a path", f'<path xmlns="http://www.w3.org/2000/svg" {tri} transform="scale(2)" fill="#0f0"/>', None),
+        ("root is defs", f'<defs xmlns="http://www.w3.org/2000/svg"><path {tri}/></defs>', None),
+        ("no namespace", f'<svg viewBox="0 0 10 10"><path {tri}/><circle r="2"/></svg>', None),
+        ("prefixed SVG namespace",
+         '<s:svg xmlns:s="http://www.w3.org/2000/svg" xmlns:l="http://www.w3.org/1999/xlink"><s:defs>'
+         f'<s:path id="q" d="M0 0L1 0 1 1Z"/></s:defs><s:use l:href="#q" x="2"/><s:path {tri}/></s:svg>', None),
+        ("xlink bound to another URI",
+         '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="urn:not-xlink"><defs><path id="q" d="M0 0L1 0 1 1Z"/></defs>'
+         '<use xlink:href="#q"/><use href="#q" x="1"/></svg>', None),
+        ("doctype, entities, a latin-1 declaration, a comment and a PI",
+         '<?xml version="1.0" encoding="iso-8859-1"?>\n<!DOCTYPE svg [<!ENTITY ns "http://www.w3.org/2000/svg">'
+         '<!ENTITY d "M0 0L7 0 7 7Z">]>\n<!-- c --><svg xmlns="&ns;"><path d="&d;" fill="&#x23;f00"/><?pi x?></svg>', None),
+        ("duplicate ids: the last wins",
+         svg('<defs><path id="a" d="M0 0L1 0 1 1Z"/><path id="a" d="M0 0L9 0 9 9Z"/></defs><use href="#a"/>'), None),
+        ("attribute whitespace", svg('<path d="M0\n0\tL5\r\n5 5 0Z" style="fill:&#9;#f00&#9;;stroke:\n#000\n"/>'), None),
+        ("groups nested 900 deep", svg("<g>" * 900 + '<path d="M0 0L1 1 1 0Z"/>' + "</g>" * 900), None),
+        # size: root user units onto a raster through the viewBox
+        ("size: viewBox with an offset", svg(boxed, 'viewBox="10 20 100 50"'), [200, 100]),
+        ("size: the same without a size", svg(boxed, 'viewBox="10 20 100 50"'), None),
+        ("size: commas and a non-uniform scale", svg(boxed, 'viewBox="0,0,10,20"'), [30, 30]),
+        ("size: a viewBox of three numbers is ignored", svg(boxed, 'viewBox="0 0 10"'), [30, 30]),
+        ("size: a viewBox of five numbers is ignored", svg(boxed, 'viewBox="0 0 10 10 10"'), [30, 30]),
+        ("size: a viewBox of zero width is ignored", svg(boxed, 'viewBox="0 0 0 10"'), [30, 30]),
+        ("size: no viewBox", svg(boxed, 'width="10" height="10"'), [30, 30]),
+        ("size: an infinite viewBox origin", svg(boxed, 'viewBox="-1e999 2 10 10"'), [30, 30]),
+        ("size: an infinite viewBox width", svg(boxed, 'viewBox="0 0 1e999 10"'), [30, 30]),
+        ("size: zero", svg(boxed, 'viewBox="0 0 10 10"'), [0, 0]),
+        # what the Python raises
+        ("error: a moveto of one number, then a line", svg('<path d="M5 L1 2"/>'), None),
+        ("error: a bare relative moveto", svg('<path d="m"/>'), None),
+        ("error: a horizontal line from a one-number point", svg('<path d="M5 Z H3"/>'), None),
+        ("error: a relative vertical line from a one-number point", svg('<path d="M5 Z v3 4"/>'), None),
+        ("error: an arc from a one-number point", svg('<path d="M5 Z A1 1 0 0 1 9 9"/>'), None),
+        ("error: an arc from an empty point", svg('<path d="M Z A1 1 0 0 1 9 9"/>'), None),
+        ("error: closing back to a one-number start", svg('<path d="M5 Z z L3 3 z"/>'), None),
+        ("error: a curve from an empty point", svg('<path d="M Z Z C1 2 3 4 5 6"/>'), None),
+        ("error: an arc of infinite radius", svg('<path d="M0 0 A1e999 1 0 0 1 5 5"/>'), None),
+        ("error: an arc whose radii square to zero", svg('<path d="M0 0 A1e-200 1e-200 0 0 1 3 3"/>'), None),
+        ("error: an arc rotated by infinity", svg('<path d="M0 0 A1 1 1e999 0 1 5 5"/>'), None),
+        ("error: a cubic through infinity", svg('<path d="M0 0 C1e999 0 1 1 2 2"/>'), None),
+        ("error: a circle of infinite radius", svg('<circle r="1e999"/>'), None),
+        ("error: a one-column subpath painted", svg('<path d="M1e999 m-1e999 z"/>'), None),
+        ("error: translate without numbers", svg('<g transform="translate()"><path d="M0 0L1 1"/></g>'), None),
+        ("error: scale without numbers", svg('<path transform="scale( )" d="M0 0L1 1"/>'), None),
+        ("error: rotate by infinity", svg('<path transform="rotate(1e999)" d="M0 0L1 1"/>'), None),
+        ("error: a bad transform on an element that is not drawn", svg('<text transform="translate()">x</text>'), None),
+        ("error: a bad transform on a use", svg('<defs><path id="p" d="M0 0L1 1"/></defs><use href="#p" transform="rotate()"/>'), None),
+        ("error: malformed XML", "<svg><path></svg>", None),
+        ("error: an empty document", "", None),
+        ("error: an undefined entity", svg('<path d="&nope;"/>'), None),
+        ("error: an unbound prefix", '<svg><x:path d="M0 0L1 1"/></svg>', None),
+        ("error: groups nested 1000 deep", svg("<g>" * 1000 + '<path d="M0 0L1 1 1 0Z"/>' + "</g>" * 1000), None),
+    ]
+    cases = [{"name": name, "svg": text, "size": size, "drawing": drawing(text, size)} for name, text, size in cases]
+
+    # path_polylines on its own: what it makes of degenerate data, and of every prefix of one
+    # path, so that each place the data can be cut short is held to the Python.
+    paths = [polylines(d) for d in [
+        "M 5 Z L 1 2 3 4", "M 5 L 1 2", "M1e999 m-1e999 z", "M 0 0 L 5", "m", "M Z l 1 2", "M5 Z V 3 4", "M5 Z v 3 4", "M5 Z H 3",
+        "M5 Z C 1 2 3 4 5 6", "M5 Z S 1 2 3 4 S 5 6 7 8", "M5 Z T 1 2 T 3 4", "M5 Z A 1 1 0 0 1 5 5", "M5 Z A 1 1 0 0 1 9 9",
+        "M5 Z a 0 1 0 0 1 9 9 L 3 3", "M Z A 0 1 0 0 1 9 9 L 3 3", "M Z A 1 1 0 0 1 9 9", "M 5 m", "M 5 m 3", "M Z m 3",
+        "M5 Z z L 3 3 z", "M 5 Z m 1 2 L 3 3", "M1e999 0 L 5 5", "M0 0 A 1e999 1 0 0 1 5 5", "M0 0 A 1 1 1e999 0 1 5 5",
+        "M0 0 C 1e999 0 1 1 2 2", "M0 0L1e999 0 Z", "M 1 2 3", "M1 2 3 4 5", "Q1 2", "M0 0 Q 1 1 2 0 T 4 0 5 5 T", "5 5 L 1 1 2 2",
+        "M0 0 L1 1ZL 3 3", "M0,0 1,1 2,0z m 5 5 l 1 1", "M.5.5.5.5", "M1e2e3 4", "M0 0a1 1 0 00.5.5", "M0 0a1 1 0 1 0 5 5",
+        "M0 0 A 1 2 30 1 1 10 0", "M1e308 0 L-1e308 0 m1e308 1e308 l1e308 1e308", "M0 0 C 1e300 0 -1e300 0 1 1",
+        "M-0 -0 L0 0 Z", "M0 0 A5 5 0 0 1 0.00001 0 A5 5 0 0 1 10 10 A 5 5 360 1 1 0 0 A 5 5 -720 0 0 1 1",
+        "M 5 Z v 3", "M 5 Z m 1 v 3 h 2", "M 5 Z Q 1 2 3 4 T 5 6 T 7 8", "M 5 Z T 1 2 T 3 4 S 5 6 7 8", "",
+    ]]
+    long = ("M10 20 L30-5.5e1 h4v-3 H12 V8 C1 2 3 4 5 6 s7 8 9 10 Q11 12 13 14 t15 16 A5 3 20 1 0 40 40"
+            " a2 2 0 0 1 -3 -3 Z m1 1 l2 2 z")
+    prefixes = [polylines(long[:k]) for k in range(len(long) + 1)]
+    write("drawing", {"files": files, "cases": cases, "paths": paths, "prefixes": prefixes})
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")

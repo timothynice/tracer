@@ -699,6 +699,7 @@ dependencies = [
  "rayon",
  "regex",
  "resvg",
+ "roxmltree",
  "serde",
  "serde_json",
  "sha2",
