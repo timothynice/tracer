@@ -45,6 +45,14 @@ def _schema() -> None:
     })
 
 
+@exporter("presets")
+def _presets() -> None:
+    from studi0trace.engines.presets import all_presets
+
+    # `GET /presets` as the API sends it, `detail` lines and all.
+    write("presets", [p.model_dump() for p in all_presets()])
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")

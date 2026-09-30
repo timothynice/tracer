@@ -1,0 +1,105 @@
+[
+ {
+  "auto_candidate": false,
+  "description": "Traces your image with Balanced, Logo & icon, Detailed illustration and Simplified, and keeps the cleanest result that is as faithful as the best. Start here.",
+  "detail": "ΔE 0.22 · 3 shapes · clean on 82% of 104 test images",
+  "engine": "vexel",
+  "id": "auto",
+  "kind": "auto",
+  "label": "Auto",
+  "params": {},
+  "sample": "auto.png"
+ },
+ {
+  "auto_candidate": true,
+  "description": "Gradients, shadows, strokes and overlaps all reconstructed. The most faithful all-rounder.",
+  "detail": "ΔE 0.25 · 3 shapes · clean on 81% of 104 test images",
+  "engine": "vexel",
+  "id": "balanced",
+  "kind": "preset",
+  "label": "Balanced",
+  "params": {},
+  "sample": "balanced.png"
+ },
+ {
+  "auto_candidate": true,
+  "description": "Merges harder and fits whole shapes, for a small, clean, hand-editable file. Best where the mark matters more than the last half-pixel.",
+  "detail": "ΔE 0.31 · 3 shapes · clean on 83% of 104 test images",
+  "engine": "vexel",
+  "id": "logo",
+  "kind": "preset",
+  "label": "Logo & icon",
+  "params": {
+   "corner_threshold": 70.0,
+   "curve_tolerance": 0.6,
+   "detail": 10.0,
+   "min_region": 16
+  },
+  "sample": "logo.png"
+ },
+ {
+  "auto_candidate": true,
+  "description": "Keeps subtler colour steps and more gradient stops, and fits a little tighter. For illustration where soft shading matters.",
+  "detail": "ΔE 0.25 · 4 shapes · clean on 72% of 104 test images",
+  "engine": "vexel",
+  "id": "detailed",
+  "kind": "preset",
+  "label": "Detailed illustration",
+  "params": {
+   "curve_tolerance": 0.4,
+   "detail": 3.5,
+   "max_stops": 6,
+   "min_region": 6
+  },
+  "sample": "detailed.png"
+ },
+ {
+  "auto_candidate": true,
+  "description": "Fewest shapes; the cleanest on busy art and soft shadows. Skips stroke, overlap and shadow recovery and merges hard.",
+  "detail": "ΔE 0.40 · 3 shapes · clean on 86% of 104 test images",
+  "engine": "vexel",
+  "id": "dense",
+  "kind": "preset",
+  "label": "Simplified",
+  "params": {
+   "detail": 14.0,
+   "min_region": 24,
+   "overlaps": false,
+   "shadows": false,
+   "strokes": false
+  },
+  "sample": "dense.png"
+ },
+ {
+  "auto_candidate": false,
+  "description": "A style choice, not a quality setting: solid colours only, no gradients and no filters. Also the safest file for an old importer. Auto never picks it.",
+  "detail": "ΔE 0.62 · 7 shapes · clean on 77% of 104 test images",
+  "engine": "vexel",
+  "id": "flat",
+  "kind": "preset",
+  "label": "Flat & poster",
+  "params": {
+   "detail": 14.0,
+   "gradients": false,
+   "min_region": 16,
+   "shadows": false
+  },
+  "sample": "flat.png"
+ },
+ {
+  "auto_candidate": false,
+  "description": "An output format, not a quality setting: shapes that never overlap and no filters, for plotters and cutting machines. Auto never picks it.",
+  "detail": "ΔE 0.35 · 4 shapes · clean on 74% of 104 test images",
+  "engine": "vexel",
+  "id": "cutfile",
+  "kind": "preset",
+  "label": "Cut file",
+  "params": {
+   "detail": 10.0,
+   "layering": "cutout",
+   "shadows": false,
+   "strokes": false
+  },
+  "sample": "cutfile.png"
+ }
+]
