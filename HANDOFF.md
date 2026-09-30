@@ -143,9 +143,23 @@ DUMPDIR LABEL` prints a dumped region's alpha distribution and connectivity).
 - Tests: prepare test rewritten (checker noise → smooth mean, off-grid kept, alpha-0 nearest).
   Python changed-test set passes; Rust rebuilt (pending verification).
 
-## Next
-- pytest (Rust), diffcheck all six stages in batches, bench run + compare + per-item, heldout5,
-  update CLAUDE.md bullet (smoothing, enclosure kept, clean upsample input), final commit, report.
+## Round 3 verification (commit 52cd362 + CLAUDE.md)
+- Rust suite: all pass. diffcheck rgb/features/labels0/wedges: 0 failing over 96; arcs+under batches
+  flat/gradient/shadow/real 0 failing (logo batch finishing at hand-off time).
+- bench (bench-after3/): every class at or above baseline (flat +0.0002, gradient +0.0065, logo
+  +0.0058, shadow +0.0003, `ok`). Totals ΔE 43.1→38.7, artifact 1337→922, slivers 18→15, pinholes
+  5→5, seam 433k→274k, outline 28.2→20.2, edge_f1 101.55→101.97, score 99.965→100.328. No per-item
+  score / edge_f1 / pinhole regression. Single metrics still above baseline: blobs-128 art 46→52
+  (wobble 185→207), sticker-512-ds art 5.1→9.2 (inflections 4→8), alpha-fade-512 ΔE 0.217→0.246 (art
+  1.3→0.67, seam 54→41), alpha-fade-512-ds art 2.1→4.8 (outline 6.3→1.8, F1 .937→1.0), thin-mark-128
+  slivers 3→7 (ΔE .71→.37, art 134→50), thin-mark-512-ds slivers 0→3 / art 59→63 (ΔE .58→.34, score
+  .77→.91), inset-well-512 art 0→0.67, radii-128 art 53→55 (F1 .914→.950), logomark-128 seam
+  8k→15k (ΔE .46→.29, art 88→15), cutout-512-ds seam 54→144 (art 30→10), studi0clip ΔE .164→.193
+  (art 100→2.2).
+- held-out with vexel-auto (h2h5c/): see the report table.
+- Remaining: man-feeding-baby's artifact index (81 vs VTracer 51) is aliased-edge wobble, a
+  fitter/placement question; the balloon's seam_ppm 2400 (target < 500) is the outline's
+  ~0.26 px inward bias along the whole rim (outline_px 0.264), not a hole.
 - Sweep COLOUR_ALPHA_FLOOR ∈ {4, 8, 16} on the corpus bench if 8 leaves regressions.
 - `python -m bench run --engines vexel --no-media --workers 3` + compare vs bench/baselines/vexel.json;
   per-item check; heldout items with vexel-auto (`panel3.py`); re-run fragsurvey after.

@@ -207,20 +207,27 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   speech balloon out to the far end of its shadow's alpha-2 halo and the
   rescue carved the halo back out as an "invisible" region that took the rim
   with it. A colour on that grid (`unpremultiply_noise`, a level of rounding
-  either way) is inpainted from the nearest other pixel, like alpha 0, the
-  alpha kept; a colour off the grid is a straight-alpha file's own and stays
-  (a synthetic ramp's tail beside a disc, the 2× upsample's ringing). And a
-  four-connected piece of a region below `min_region` is not a region: the
+  either way) becomes the alpha-weighted mean of the noise pixels within
+  `NOISE_RADIUS` (`smooth_faint_noise`, 7×7: alpha-2 noise from ±64 to ±9
+  levels), its own neighbourhood's samples and never a shape's — inpainted
+  from the nearest pixel that shows, a ramp's tail beside a disc took the
+  disc's colour (the corpus is rendered premultiplied: its tails are on the
+  grid too). A colour off the grid is a straight-alpha file's own and stays.
+  The 2× upsample resamples the prepared colour, not the file's: what a file
+  stores under alpha 0 was mixed into the ringing beside every thin line. And
+  a four-connected piece of a region below `min_region` is not a region: the
   shards carving a feature leaves of its host — the islands the host's fill
   passes through, the one-pixel thread of the host's own edge between the
   feature and a third region, a sliver each in `_directed_rings` — join the
   nearest neighbouring region as `split_rim` hands a rim over
   (`engine.absorb_shards`: distance, own colour, lower label; never an
   invisible one while a visible one is as near; a label whose every piece is
-  small is a dotted line, not shards), after the shadow stage: an inset
-  shadow's bands rejoin the card there and take the card's corner bits with
-  them, and absorbed earlier those bits let the band touch the backdrop and
-  the shadow model no longer fitted.
+  small is a dotted line, not shards), after the shadow stage and without
+  reading the enclosure again: the shards are the host's edge, and an inset
+  shadow's band is enclosed by its card through the card's corner bits — with
+  those bits in the band and the enclosure read again, the card was painted
+  without its band ring; absorbed before the shadow stage, the band touched
+  the backdrop and the shadow model no longer fitted.
 - Rounded rectangles are read under blur (`vexel/rects.py`: the blur is taken
   out of each radius, r² ≈ r_read² − (1.86σ)² − 0.58), given one radius per
   shape and across shapes, one size and shared edge levels, and a corner that
