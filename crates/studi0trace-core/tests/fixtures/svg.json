@@ -88,15 +88,15 @@
   "svg": "<svg width=\"1\" height=\"1\" />"
  },
  {
-  "normalized": "<svg fill=\"#ABC\" fill=\"none\" style=\"fill:#ABC;stroke:none\" viewBox=\"0 0 64 32\"><path d=\"M0 0\"/></svg>",
+  "normalized": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 32\"><path style=\"fill:#ABC;stroke:none\" d=\"M0 0L4 0L4 4Z\"/><path fill=\"none\" d=\"M0 0L1 1\"/></svg>",
   "stats": {
-   "bytes": 81,
+   "bytes": 151,
    "gradients": 0,
-   "nodes": 1,
-   "paths": 1,
+   "nodes": 5,
+   "paths": 2,
    "unique_fills": 1
   },
-  "svg": "<svg fill=\"#ABC\" fill=\"none\" style=\"fill:#ABC;stroke:none\"><path d=\"M0 0\"/></svg>"
+  "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 4 4\"><path style=\"fill:#ABC;stroke:none\" d=\"M0 0L4 0L4 4Z\"/><path fill=\"none\" d=\"M0 0L1 1\"/></svg>"
  },
  {
   "normalized": "<?xml version=\"1.0\"?>\n<svg viewBox=\"0 0 64 32\"><path d=\"M0 0\"/></svg>",

@@ -288,7 +288,7 @@ def _svg() -> None:
         '<SVG WIDTH="5" HEIGHT="5" VIEWBOX="0 0 1 1"><path d="M0 0"/></SVG>',
         "<svg width='5' height='5' viewbox='0 0 1 1'><path d='M0 0'/></svg>",
         '<svg width="1" height="1" />',
-        '<svg fill="#ABC" fill="none" style="fill:#ABC;stroke:none"><path d="M0 0"/></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><path style="fill:#ABC;stroke:none" d="M0 0L4 0L4 4Z"/><path fill="none" d="M0 0L1 1"/></svg>',
         '<?xml version="1.0"?>\n<svg width="1" height="1"><path d="M0 0"/></svg>',
     ])
 
