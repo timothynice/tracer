@@ -519,7 +519,8 @@ def _fill_vals(f) -> tuple[str, list[float]]:
     """A Python fill in the layout `vexel_rs._fit_fill` returns (see `_rust_fill`)."""
     if isinstance(f, Solid):
         return "solid", [float(v) for v in f.rgba]
-    head = [f.x1, f.y1, f.x2, f.y2] if isinstance(f, Linear) else [f.cx, f.cy, f.r]
+    head = ([f.x1, f.y1, f.x2, f.y2] if isinstance(f, Linear)
+            else [f.cx, f.cy, f.r, f.cx if f.fx is None else f.fx, f.cy if f.fy is None else f.fy])
     return f.kind, [float(v) for v in head] + [float(v) for st in f.stops for v in (st.offset, *st.rgba)]
 
 

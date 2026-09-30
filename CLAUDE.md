@@ -81,9 +81,11 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   outlines agree to 0.1 px after translation) are written once into `<defs>`
   and painted as `<use href x y fill>` (`vexel/reuse.py`); anything that
   reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`. A shape
-  that carries a filter is written in full: a filter on a `<use>` applies in
-  the use's own user space, which its x and y shift, so a filter region in
-  the file's units moves with the copy and clips it.
+  that carries a filter or a gradient is written in full: a filter or a
+  `userSpaceOnUse` gradient on a `<use>` applies in the use's own user space,
+  which its x and y shift, so a filter region in the file's units moves with
+  the copy and clips it, and a gradient solved in the file's units paints the
+  copy with the wrong stretch of itself (a cherry 240 px right of its twin).
 - A ring that is a circle or a rectangle draws as that primitive, and its
   arcs carry the primitive's outline (`topology._imprint`, after the fit and
   the regularity snap, before the bleed): the nodes move onto it and every arc
@@ -125,7 +127,11 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   to one direction (axis within `snap_axis_deg`, exactly perpendicular to a
   heavier cluster within a degree). Lines turn about their node end or their
   midpoint; nodes never move, so rings still close. A line with a node at both
-  ends is left alone.
+  ends is left alone. No snap — this stage's, `_snap_axis`'s in the arc fit or
+  `snap_axis_lines`'s on a closed contour — may move a line's end further
+  than `SNAP_END_MOVE` (0.15 px, what the placement knows an edge to): a
+  side drawn 1.3° off vertical is inside the snap angle, and turning a 330 px
+  one onto the axis took 3.6 px off each end of a glyph's bar.
 - Junction nodes are placed where the incident arcs' approach lines cross, at
   any angle, and held on the canvas edge; the vertices inside a node's approach
   window are never fitted (`NODE_TRIM`, `TIP_TRIM`, capped at `TRIM_SHARE` of
@@ -145,8 +151,30 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   tiebreaker; `core/skeleton.rs` sorts by the same key. Never break the
   tie by raster index: on a two-pixel line that thins the same side first
   everywhere and puts the centreline half a pixel off, enough for
-  `stroke_fidelity` to fail a ring the random order passes. `tools/diffcheck.py
-  strokes` compares the two per thin group.
+  `stroke_fidelity` to fail a ring the random order passes. The skeleton is
+  only the start: `_refine_centreline` moves every vertex along its normal to
+  the bilinear coverage centroid across the stroke (±(w/2+1) px at 0.25 px,
+  two passes), and `stroke_fidelity` predicts each pixel's coverage from its
+  exact distance to that polyline — never from a rasterised centreline, which
+  scored a line half a pixel off the lattice at the gate whichever way the
+  tie-break fell. The exact measure runs at two thirds of the old one, and
+  the gate (`stroke_tolerance`) is 0.13: over corpus and held-out every drawn
+  line scores at most 0.118, the stems and blobs a stroke would mangle 0.141
+  up. The centreline is then fitted at `STROKE_FIT_SHARE` (half) of the curve
+  tolerance, since its error shows on both edges of the stroke; at the full
+  tolerance the cubics through a 150 px ring sagged 0.14 px inside it.
+  `tools/diffcheck.py strokes` compares the two per thin group.
+- A pixel's stored colour is noise below 8-bit alpha 32 (straight alpha
+  quantises it to ±128/alpha levels; a resampled asset rings every edge with
+  alpha 1–15 noise), so the transparent field is never inpainted from it as
+  it stands: `prepare.inpaint_transparent` reads such a source through
+  `settle_rim`, the alpha-weighted mean of its 5×5 neighbourhood (the ink
+  beside an edge, a faint field's own colour in a halo), and visible pixels
+  keep the colour they have — settling them too moved a shadow's halo to its
+  caster's colour. `upsample2x` inpaints the same way before it resamples,
+  since its channels are straight and the black under transparency would be
+  mixed into every edge at 2×. Inpainted from noise, the field carried seams
+  the partition read as edges: a serrated triangle, a ring in 39 fragments.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
   the fills to a colour level; where the two are allowed to differ, the
@@ -208,6 +236,35 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   map and skipped at paint time, the rescued band stopped a pixel short of the
   caster and the thread of backdrop between them cut the caster's outline into
   two-point arcs, a node at every step of a rounded corner.
+- The colour under a pixel of alpha below `prepare.COLOUR_ALPHA_FLOOR` (8/255)
+  may be unpremultiply noise: a premultiplied pipeline leaves it quantised to
+  steps of 255/a per channel (at alpha 1 or 2 only 0, 128 and 255), about 45/a
+  ΔE of noise against the neighbours over the corpus, and below 8 a halo of it
+  is all ridge and no seed (`seed_mask`'s 8 ΔE/px), so the watershed flooded a
+  speech balloon out to the far end of its shadow's alpha-2 halo and the
+  rescue carved the halo back out as an "invisible" region that took the rim
+  with it. A colour on that grid (`unpremultiply_noise`, a level of rounding
+  either way) becomes the alpha-weighted mean of the noise pixels within
+  `NOISE_RADIUS` (`smooth_faint_noise`, 7×7: alpha-2 noise from ±64 to ±9
+  levels), its own neighbourhood's samples and never a shape's — inpainted
+  from the nearest pixel that shows, a ramp's tail beside a disc took the
+  disc's colour (the corpus is rendered premultiplied: its tails are on the
+  grid too). A colour off the grid is a straight-alpha file's own and stays.
+  The 2× upsample resamples the prepared colour, not the file's: what a file
+  stores under alpha 0 was mixed into the ringing beside every thin line. And
+  a four-connected piece of a region below `min_region` is not a region: the
+  shards carving a feature leaves of its host — the islands the host's fill
+  passes through, the one-pixel thread of the host's own edge between the
+  feature and a third region, a sliver each in `_directed_rings` — join the
+  nearest neighbouring region as `split_rim` hands a rim over
+  (`engine.absorb_shards`: distance, own colour, lower label; never an
+  invisible one while a visible one is as near; a label whose every piece is
+  small is a dotted line, not shards), after the shadow stage and without
+  reading the enclosure again: the shards are the host's edge, and an inset
+  shadow's band is enclosed by its card through the card's corner bits — with
+  those bits in the band and the enclosure read again, the card was painted
+  without its band ring; absorbed before the shadow stage, the band touched
+  the backdrop and the shadow model no longer fitted.
 - Rounded rectangles are read under blur (`vexel/rects.py`: the blur is taken
   out of each radius, r² ≈ r_read² − (1.86σ)² − 0.58), given one radius per
   shape and across shapes, one size and shared edge levels, and a corner that
@@ -259,6 +316,20 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 - A stretch that is lines-first at `KIND_TOL` (0.4 px) stays lines at any
   looser `curve_tolerance`: a loose tolerance buys fewer curve segments, never
   a straight edge drawn as a bow.
+- A soft edge has no position finer than its blur. `_crossing` also returns
+  how far coverage drops across the three pixels it samples (1.0 on a crisp
+  edge); `_place` reads the blur width off the chain's median drop
+  (`SOFT_WIDTH / drop − SOFT_BIAS`) and smooths the placed vertices along the
+  arc by a Gaussian of that width (from 1 px, capped at 4, never a chain
+  shorter than the kernel, never a posterised level line), in both engines
+  (`_soften`, `soften`; `diffcheck placed`). Without it every vertex of a
+  ramp fell to the lattice edge and the fit drew the label staircase as a
+  wobble. Two other things make a soft band wobble and are fixed at their
+  source, not here: `refine_merge`'s edge veto holds only on a *ridge*
+  (`merge.boundary_ridges`, the partition's `NECK_RIDGE` test — a glow's own
+  slope is not a step), and a rescued band takes its parent's edge band up to
+  the outline (`engine.reach_the_edge`), or a strip of the parent runs on
+  between them and puts a node at every row of a diagonal.
 - Presets are measured, never described by hand: `bench.presets_eval
   --write-details` rewrites `engines/preset_details.json`. Auto (`auto.py`,
   `/vectorize auto=true`) traces the candidates concurrently and keeps the

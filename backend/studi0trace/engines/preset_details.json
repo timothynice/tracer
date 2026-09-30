@@ -1,78 +1,78 @@
 {
  "about": "Measured by `python -m bench.presets_eval --write-details`; do not edit by hand.",
- "measured": "2026-09-28",
+ "measured": "2026-09-30",
  "vexel_backend": "rust",
  "corpus_items": 104,
  "lines": {
-  "auto": "ΔE 0.36 · 3 shapes · clean on 72% of 104 test images",
-  "balanced": "ΔE 0.41 · 3 shapes · clean on 70% of 104 test images",
-  "logo": "ΔE 0.53 · 3 shapes · clean on 76% of 104 test images",
-  "detailed": "ΔE 0.39 · 4 shapes · clean on 65% of 104 test images",
-  "dense": "ΔE 0.60 · 3 shapes · clean on 72% of 104 test images",
-  "flat": "ΔE 0.75 · 8 shapes · clean on 68% of 104 test images",
-  "cutfile": "ΔE 0.54 · 3 shapes · clean on 63% of 104 test images"
+  "auto": "ΔE 0.22 · 3 shapes · clean on 82% of 104 test images",
+  "balanced": "ΔE 0.25 · 3 shapes · clean on 81% of 104 test images",
+  "logo": "ΔE 0.31 · 3 shapes · clean on 83% of 104 test images",
+  "detailed": "ΔE 0.25 · 4 shapes · clean on 72% of 104 test images",
+  "dense": "ΔE 0.40 · 3 shapes · clean on 86% of 104 test images",
+  "flat": "ΔE 0.62 · 7 shapes · clean on 77% of 104 test images",
+  "cutfile": "ΔE 0.35 · 4 shapes · clean on 74% of 104 test images"
  },
  "numbers": {
   "auto": {
-   "delta_e_mean": 0.3592,
+   "delta_e_mean": 0.2186,
    "shapes_median": 3,
-   "clean_pct": 72.1,
-   "artifact_index_mean": 10.79,
-   "artifact_index_median": 0.74,
+   "clean_pct": 81.7,
+   "artifact_index_mean": 5.14,
+   "artifact_index_median": 0.44,
    "items": 104,
    "picks": {
-    "balanced": 67.3,
+    "balanced": 63.5,
     "logo": 18.3,
-    "detailed": 8.7,
-    "dense": 5.8
+    "detailed": 10.6,
+    "dense": 7.7
    }
   },
   "balanced": {
-   "delta_e_mean": 0.4149,
+   "delta_e_mean": 0.2489,
    "shapes_median": 3,
-   "clean_pct": 70.2,
-   "artifact_index_mean": 12.85,
-   "artifact_index_median": 0.91,
+   "clean_pct": 80.8,
+   "artifact_index_mean": 6.29,
+   "artifact_index_median": 0.48,
    "items": 104
   },
   "logo": {
-   "delta_e_mean": 0.5294,
+   "delta_e_mean": 0.3051,
    "shapes_median": 3,
-   "clean_pct": 76.0,
-   "artifact_index_mean": 8.91,
-   "artifact_index_median": 0.4,
+   "clean_pct": 82.7,
+   "artifact_index_mean": 4.25,
+   "artifact_index_median": 0.16,
    "items": 104
   },
   "detailed": {
-   "delta_e_mean": 0.3868,
+   "delta_e_mean": 0.2504,
    "shapes_median": 4,
-   "clean_pct": 65.4,
-   "artifact_index_mean": 18.18,
-   "artifact_index_median": 2.14,
+   "clean_pct": 72.1,
+   "artifact_index_mean": 8.92,
+   "artifact_index_median": 0.56,
    "items": 104
   },
   "dense": {
-   "delta_e_mean": 0.6002,
+   "delta_e_mean": 0.405,
    "shapes_median": 3,
-   "clean_pct": 72.1,
-   "artifact_index_mean": 12.92,
-   "artifact_index_median": 1.03,
+   "clean_pct": 85.6,
+   "artifact_index_mean": 4.47,
+   "artifact_index_median": 0.52,
    "items": 104
   },
   "flat": {
-   "delta_e_mean": 0.746,
-   "shapes_median": 8,
-   "clean_pct": 68.3,
-   "artifact_index_mean": 11.86,
-   "artifact_index_median": 3.26,
+   "delta_e_mean": 0.6246,
+   "shapes_median": 7,
+   "clean_pct": 76.9,
+   "artifact_index_mean": 6.04,
+   "artifact_index_median": 2.14,
    "items": 104
   },
   "cutfile": {
-   "delta_e_mean": 0.5444,
-   "shapes_median": 3,
-   "clean_pct": 63.5,
-   "artifact_index_mean": 28.17,
-   "artifact_index_median": 11.24,
+   "delta_e_mean": 0.3481,
+   "shapes_median": 4,
+   "clean_pct": 74.0,
+   "artifact_index_mean": 16.1,
+   "artifact_index_median": 7.38,
    "items": 104
   }
  }

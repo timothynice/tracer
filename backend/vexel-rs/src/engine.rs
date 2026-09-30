@@ -7,7 +7,7 @@ use crate::core::morphology::dilate_cross;
 use crate::curves::{fit_shape, CurveParams, Shape};
 use crate::fills::{fit_fill, Fill, FitParams, INVISIBLE_ALPHA};
 use crate::merge::{adjacency, merge_regions, MergeParams};
-use crate::order::{enclosure, paint_order, shape_labels, shape_mask, Enclosure};
+use crate::order::{boundary_band, enclosure, paint_order, shape_labels, shape_mask, Enclosure};
 use crate::topology::{self, Boundary};
 use crate::overlaps::decompose_overlaps;
 use crate::partition::{discontinuity, initial_labels};
@@ -16,7 +16,7 @@ use crate::prepare::{prepare, Prepared};
 use crate::refine::refine_merge;
 use crate::rescue::rescue_features;
 use crate::shadows::{detect_shadows, shadow_filter_svg, ShadowPlan};
-use crate::strokes::{is_thin_at, stroke_fidelity, stroke_geometry, stroke_svg};
+use crate::strokes::{is_thin, is_thin_at, stroke_fidelity, stroke_geometry, stroke_svg};
 use crate::timing::Timer;
 use crate::weights::{interior, interior_at, interior_weights_at};
 use rayon::prelude::*;
@@ -63,7 +63,7 @@ impl Default for VexelParams {
             upsample: "auto".to_string(),
             strokes: true,
             shadows: true,
-            stroke_tolerance: 0.2,
+            stroke_tolerance: 0.13,
             overlaps: true,
             path_precision: 2,
         }
@@ -155,6 +155,233 @@ fn split_rim(
     for (i, v) in assign {
         l.data[i] = v;
     }
+}
+
+/// How many four-neighbour pairs each label has with the pixels of `m`.
+fn contacts(l: &Labels, m: &Mask) -> HashMap<i32, usize> {
+    let (h, w) = (l.h, l.w);
+    let mut out: HashMap<i32, usize> = HashMap::new();
+    for r in 0..h {
+        for c in 0..w {
+            let i = r * w + c;
+            if c + 1 < w && m.data[i] != m.data[i + 1] {
+                let other = if m.data[i] { l.data[i + 1] } else { l.data[i] };
+                *out.entry(other).or_insert(0) += 1;
+            }
+            if r + 1 < h && m.data[i] != m.data[i + w] {
+                let other = if m.data[i] { l.data[i + w] } else { l.data[i] };
+                *out.entry(other).or_insert(0) += 1;
+            }
+        }
+    }
+    out
+}
+
+/// A rescued region reaches the outline of the region it was carved from: every
+/// edge-band pixel of the parent (`boundary_band` of the map with the region
+/// merged back into its parent) within two pixels of it, on the outline's side
+/// (nearer the parent's boundary with a neighbour at least as large as the
+/// region than the rescued pixels within two are; exact distances, the least
+/// over those pixels) goes to whichever of the two is nearer, the pixel's own
+/// colour breaking a tie (`split_rim`). A thin region is left to the stroke
+/// stage. `rescued` marks the pixels the rescue promoted: a region most of
+/// whose pixels are among them is a rescued region, whatever it has been
+/// renumbered to since; its parent is the label it touches most (the lower on
+/// a tie). Regions in order of their label. `engine.reach_the_edge` in the
+/// Python, which says why.
+#[allow(clippy::too_many_arguments)]
+fn reach_the_edge(
+    l: &mut Labels,
+    rescued: &Mask,
+    xs: &Grid<f64>,
+    ys: &Grid<f64>,
+    rgba255: &[[f64; 4]],
+    fill_at: &dyn Fn(i32, &[f64], &[f64]) -> Vec<[f64; 4]>,
+    skip: &HashSet<i32>,
+) -> bool {
+    let (h, w) = (l.h, l.w);
+    let mut counts: HashMap<i32, (usize, usize)> = HashMap::new(); // label -> (pixels, rescued pixels)
+    for i in 0..l.len() {
+        let e = counts.entry(l.data[i]).or_insert((0, 0));
+        e.0 += 1;
+        if rescued.data[i] {
+            e.1 += 1;
+        }
+    }
+    // `skip`: the bands a shadow filter explains that stay in the map unpainted
+    let mut targets: Vec<i32> = counts
+        .iter()
+        .filter(|(k, (n, r))| **k > 0 && 2 * r > *n && !skip.contains(k))
+        .map(|(k, _)| *k)
+        .collect();
+    targets.sort_unstable();
+    let mut moved = false;
+    for r in targets {
+        let m = labels::mask_of(l, r);
+        let n_r = m.data.iter().filter(|v| **v).count();
+        if n_r == 0 || is_thin(&m) {
+            continue;
+        }
+        let mut touch = contacts(l, &m);
+        touch.remove(&0);
+        touch.remove(&r);
+        let mut parent: Option<(i32, usize)> = None;
+        let mut keys: Vec<i32> = touch.keys().copied().collect();
+        keys.sort_unstable();
+        for k in keys {
+            let n = touch[&k];
+            if parent.map_or(true, |(_, best)| n > best) {
+                parent = Some((k, n));
+            }
+        }
+        let Some((parent, _)) = parent else { continue };
+        let merged = Grid { h, w, data: (0..l.len()).map(|i| if m.data[i] { parent } else { l.data[i] }).collect() };
+        let mut sizes: HashMap<i32, usize> = HashMap::new();
+        for v in &merged.data {
+            *sizes.entry(*v).or_insert(0) += 1;
+        }
+        let big = Grid {
+            h,
+            w,
+            data: (0..l.len()).map(|i| merged.data[i] != parent && merged.data[i] != 0 && sizes[&merged.data[i]] >= n_r).collect(),
+        };
+        if !big.data.iter().any(|v| *v) {
+            continue;
+        }
+        let band = boundary_band(&merged);
+        let to_edge = crate::core::edt::edt_to_true(&big);
+        let near = crate::core::morphology::dilate_cross_n(&m, 2);
+        let mut beside = vec![f64::INFINITY; l.len()];
+        for i in 0..l.len() {
+            if !m.data[i] {
+                continue;
+            }
+            let (r0, c0) = ((i / w) as i64, (i % w) as i64);
+            for dr in -2i64..=2 {
+                for dc in -2i64..=2 {
+                    if dr.abs() + dc.abs() > 2 {
+                        continue;
+                    }
+                    let (rr, cc) = (r0 + dr, c0 + dc);
+                    if rr >= 0 && cc >= 0 && (rr as usize) < h && (cc as usize) < w {
+                        let j = rr as usize * w + cc as usize;
+                        beside[j] = beside[j].min(to_edge.data[i]);
+                    }
+                }
+            }
+        }
+        let strip = Grid {
+            h,
+            w,
+            data: (0..l.len())
+                .map(|i| band.data[i] && near.data[i] && l.data[i] == parent && to_edge.data[i] < beside[i])
+                .collect(),
+        };
+        if !strip.data.iter().any(|v| *v) {
+            continue;
+        }
+        let scratch = l.data.iter().copied().max().unwrap_or(0) + 1;
+        for i in 0..l.len() {
+            if strip.data[i] {
+                l.data[i] = scratch;
+            }
+        }
+        split_rim(l, &strip, &[parent, r], xs, ys, rgba255, fill_at);
+        moved = true;
+    }
+    moved
+}
+
+/// Every four-connected piece below `min_region` of a label that has a piece
+/// at least that big joins its surroundings: each pixel to the nearest
+/// neighbouring region as `split_rim` hands a rim over (distance, then the
+/// pixel's own colour, then the lower label), never its own label and never
+/// an invisible one while a visible one is as near. The shards the rescue
+/// leaves of a host — islands inside the feature, the one-pixel thread of
+/// the host's edge between the feature and a third region, a sliver each in
+/// the four-connected boundary build. Runs after the shadow stage on purpose
+/// (see `engine.absorb_shards`). Returns whether anything moved.
+fn absorb_shards(
+    l: &mut Labels,
+    min_region: usize,
+    invisible: &HashSet<i32>,
+    xs: &Grid<f64>,
+    ys: &Grid<f64>,
+    rgba255: &[[f64; 4]],
+    fill_at: &dyn Fn(i32, &[f64], &[f64]) -> Vec<[f64; 4]>,
+) -> bool {
+    if min_region <= 1 {
+        return false;
+    }
+    let n = l.len();
+    let mut shard = vec![false; n];
+    for lab in labels::unique_ids(l) {
+        let pieces = labels::label_mask(&labels::mask_of(l, lab), 1);
+        let k = pieces.data.iter().copied().max().unwrap_or(0) as usize;
+        if k <= 1 {
+            continue;
+        }
+        let mut sizes = vec![0usize; k + 1];
+        for v in &pieces.data {
+            sizes[*v as usize] += 1;
+        }
+        if sizes[1..].iter().copied().max().unwrap_or(0) < min_region {
+            continue; // a family of small pieces, not shards
+        }
+        for i in 0..n {
+            let c = pieces.data[i] as usize;
+            if c > 0 && sizes[c] < min_region {
+                shard[i] = true;
+            }
+        }
+    }
+    if !shard.iter().any(|b| *b) {
+        return false;
+    }
+    let shard_mask = Grid { h: l.h, w: l.w, data: shard.clone() };
+    let ring = dilate_cross(&shard_mask);
+    let mut cands: BTreeSet<i32> = BTreeSet::new();
+    for i in 0..n {
+        if ring.data[i] && !shard[i] && l.data[i] != 0 {
+            cands.insert(l.data[i]);
+        }
+    }
+    let mut seen: Vec<i32> = cands.iter().copied().filter(|c| !invisible.contains(c)).collect();
+    if seen.is_empty() {
+        seen = cands.into_iter().collect();
+    }
+    // to a region's distance map a shard of its own label is not the region
+    let body = Grid { h: l.h, w: l.w, data: (0..n).map(|i| if shard[i] { 0 } else { l.data[i] }).collect() };
+    let dists: Vec<Grid<f64>> = seen
+        .par_iter()
+        .map(|c| crate::core::edt::edt_to_true(&labels::mask_of(&body, *c)))
+        .collect();
+    let assign: Vec<(usize, i32)> = (0..n)
+        .filter(|i| shard[*i])
+        .map(|i| {
+            let own = l.data[i];
+            let dist = |k: usize| if seen[k] == own { f64::INFINITY } else { dists[k].data[i] };
+            let nearest = (0..seen.len()).map(dist).fold(f64::INFINITY, f64::min);
+            let mut best = 0usize;
+            let mut best_off = f64::INFINITY;
+            for k in 0..seen.len() {
+                if dist(k) > nearest + 1e-9 {
+                    continue;
+                }
+                let f = fill_at(seen[k], &[xs.data[i]], &[ys.data[i]])[0];
+                let off = (0..3).map(|c| (rgba255[i][c] - f[c]).powi(2)).sum::<f64>().sqrt();
+                if off < best_off {
+                    best_off = off;
+                    best = k;
+                }
+            }
+            (i, seen[best])
+        })
+        .collect();
+    for (i, v) in assign {
+        l.data[i] = v;
+    }
+    true
 }
 
 struct FitOut {
@@ -400,6 +627,13 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     crate::dump::labels("labels_clear", &l);
     let (rescued_labels, rescued) = rescue_features(&l, &residual, 1.0, p.min_region, Some(&explained), Some(&core_map));
     l = rescued_labels;
+    // the pixels the rescue promoted, for `reach_the_edge` after the shadow stage
+    let rescued_pixels: Option<Mask> = if rescued.is_empty() {
+        None
+    } else {
+        let set: HashSet<i32> = rescued.iter().copied().collect();
+        Some(Grid { h: height, w: width, data: l.data.iter().map(|v| set.contains(v)).collect() })
+    };
     crate::dump::labels("labels_rescue", &l);
     if !rescued.is_empty() {
         index = LabelIndex::build(&l);
@@ -412,7 +646,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     t.lap("rescue + refit");
     // Join gradient fragments (glows, off-centre radials) that one real fill explains.
     let (refined, refit_fills, changed) = refine_merge(
-        &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60,
+        &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60, rescued_pixels.as_ref(),
     );
     l = refined;
     fills = refit_fills;
@@ -425,7 +659,7 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
                 break;
             }
             let (refined, refit_fills, more) = refine_merge(
-                &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60,
+                &l, &xs, &ys, &rgba255, &grad, fills, &fit_params, 0.6 * p.detail, 60, rescued_pixels.as_ref(),
             );
             l = refined;
             fills = refit_fills;
@@ -537,6 +771,48 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     }
 
     t.lap("shadows");
+    // A rescued band beside its parent's outline takes the parent's edge band
+    // there, so it reaches the outline; after the shadow stage, since a band a
+    // filter explains has joined its ground. See the Python.
+    if p.gradients {
+        if let Some(rp) = rescued_pixels.as_ref() {
+            let fill_now = |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+                match levels.model(lab).or_else(|| fills.get(&lab)) {
+                    Some(f) => f.evaluate(qx, qy),
+                    None => vec![[0.0; 4]; qx.len()],
+                }
+            };
+            let moved = reach_the_edge(&mut l, rp, &xs, &ys, &rgba255, &fill_now, &shadow_plan.absorbed);
+            if moved {
+                index = LabelIndex::build(&l);
+                enc = enclosure(&l);
+                order = paint_order(&enc);
+            }
+        }
+    }
+    t.lap("reach");
+
+    // A piece of a region below min_region is not a region: the shards the
+    // rescue leaves of a host join their surroundings, now that the shadow
+    // stage has had its say. See the Python.
+    {
+        let fills_snapshot = fills.clone();
+        let levels_snapshot = levels.clone();
+        let fill_at = move |lab: i32, qx: &[f64], qy: &[f64]| -> Vec<[f64; 4]> {
+            match levels_snapshot.model(lab).or_else(|| fills_snapshot.get(&lab)) {
+                Some(f) => f.evaluate(qx, qy),
+                None => vec![[0.0; 4]; qx.len()],
+            }
+        };
+        // The enclosure stands as it was: the shards are the host's own edge,
+        // and handing their pixels over is bookkeeping for the four-connected
+        // boundary build, not a change of what lies inside what (see the Python).
+        if absorb_shards(&mut l, p.min_region, &invisible, &xs, &ys, &rgba255, &fill_at) {
+            index = LabelIndex::build(&l);
+            ids = labels::unique_ids(&l);
+        }
+    }
+    t.lap("shards");
     // Thin regions are drawn lines. A single line often arrives as several
     // regions (split at junctions, broken by anti-aliasing gaps), so thin
     // regions that touch and share an ink colour are grouped and stroked together.
@@ -796,7 +1072,14 @@ pub fn trace_rgba(rgba: &[u8], height: usize, width: usize, p: &VexelParams) -> 
     // are the evidence for the upsample, not a narrow band.
     if p.upsample == "always" || (p.upsample == "auto" && crate::upsample::wants_upsample(&levels.unbanded(&l), height, width)) {
         crate::dump::text("upsample", "2x\n");
-        let up = crate::upsample::upsample2x(rgba, height, width);
+        // The colour the resampler sees is the prepared one (see the Python).
+        let clean: Vec<u8> = (0..height * width)
+            .flat_map(|i| {
+                let c = |k: usize| (prep.rgb.data[i * 3 + k] + 0.5).floor().clamp(0.0, 255.0) as u8;
+                [c(0), c(1), c(2), rgba[i * 4 + 3]]
+            })
+            .collect();
+        let up = crate::upsample::upsample2x(&clean, height, width);
         let mut q = p.clone();
         q.upsample = "never".to_string();
         return crate::upsample::halve(&trace_rgba(&up, 2 * height, 2 * width, &q), width, height);

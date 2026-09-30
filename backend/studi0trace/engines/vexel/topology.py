@@ -49,6 +49,7 @@ from studi0trace.engines.vexel.symmetry import reflect, ring_symmetries
 from studi0trace.engines.vexel.curves import (
     CORNER_REACH,
     MERGE_DEG,
+    SNAP_END_MOVE,
     CircArc,
     Circle,
     Cubic,
@@ -647,18 +648,20 @@ def _crossing(
     rows, cols = padded.shape
     step = p_out - p_in
 
-    def sample(pix: np.ndarray, want: int, fallback: np.ndarray | None) -> np.ndarray:
+    def sample(pix: np.ndarray, want: int) -> tuple[np.ndarray, np.ndarray]:
         clipped = np.column_stack([np.clip(pix[:, 0], 0, rows - 1), np.clip(pix[:, 1], 0, cols - 1)])
         cov = _coverage(pad_rgba, clipped, a, b, fill_at, local)
         usable = (padded[clipped[:, 0], clipped[:, 1]] == want) & np.all(clipped == pix, axis=1) & np.isfinite(cov)
-        return cov if fallback is None else np.where(usable, cov, fallback)
+        return cov, usable
 
     here = _coverage(pad_rgba, p_in, a, b, fill_at, local)
     there = _coverage(pad_rgba, p_out, a, b, fill_at, local)
     here = np.where(np.isfinite(here), here, 1.0)
     there = np.where(np.isfinite(there), there, 0.0)
-    before = sample(p_in - step, a, here)
-    after = sample(p_out + step, b, there)
+    outer_in, ok_in = sample(p_in - step, a)
+    outer_out, ok_out = sample(p_out + step, b)
+    before = np.where(ok_in, outer_in, here)
+    after = np.where(ok_out, outer_out, there)
 
     level = np.stack([before, here, there, after], axis=1)
     at = np.array([-1.0, 0.0, 1.0, 2.0])
@@ -700,8 +703,83 @@ def _crossing(
         none = ~np.isfinite(best)
         side[none & np.all(level < 0.5, axis=1)] = -1
         side[none & np.all(level >= 0.5, axis=1)] = 1
-        return placed, side
+        # How much coverage drops from the pixel before the label edge to the
+        # pixel after it, three pixels apart: the edge's softness (`_soften`).
+        # A sample that fell back to its neighbour says nothing about that.
+        drop = np.where(ok_in & ok_out, outer_in - outer_out, np.nan)
+        return placed, side, drop
     return placed
+
+
+# --- soft edges ---------------------------------------------------------------------
+#
+# An edge's blur width is read from how far coverage drops across the three
+# pixels the placement samples, one before the label edge to one after it: a
+# crisp anti-aliased edge drops the whole way (1.0 ± 0.05 over the corpus), a
+# Gaussian ramp of σ px drops erf(1.5 / (σ√2)), which SOFT_WIDTH / drop −
+# SOFT_BIAS inverts within 8 % for σ between 1 and 8 px. Across a soft edge the
+# four samples seldom cross a half, so every vertex falls to the lattice edge
+# and the arc is the label staircase: over 652 chains of 28 images the vertex
+# noise about a local line is 0.08 px where the drop is 0.95 or more, 0.12 at
+# 0.8–0.9, 0.22 at 0.7–0.8 and 0.4–0.55 (the staircase) below 0.7, and the
+# wobble the scorecard counts rises with it, 78 to 2000 degrees per 100 px. An
+# edge has no position finer than its blur, so the vertices are smoothed along
+# the arc by a Gaussian of that width, from SOFT_SIGMA up and capped at
+# SOFT_SIGMA_MAX: a Gaussian of σ pulls a circle of radius R in by σ²/2R, a
+# fifth of a pixel at the cap on a 40 px circle. A drop of nothing (or less:
+# the fills read the wrong way round) is an edge that is not there, smoothed at
+# the cap. A chain placed on a posterised ramp's level line is exact already.
+SOFT_WIDTH = 1.2
+SOFT_BIAS = 0.35
+SOFT_SIGMA = 1.0       # px; smoothing starts at this blur (a drop under 0.89)
+SOFT_SIGMA_MAX = 4.0   # px
+SOFT_REACH = 3.0       # the kernel is truncated this many sigmas out
+
+
+def _softness(drop: np.ndarray) -> float:
+    """The smoothing sigma an arc's coverage drops ask for, 0 for a crisp edge.
+
+    The chain's drop is the median over the vertices whose two outer samples
+    were both read (the lower middle value on an even count is not taken: both
+    engines average the two, as numpy does)."""
+    drops = drop[np.isfinite(drop)]
+    if drops.size == 0:
+        return 0.0
+    d = float(np.median(drops))
+    if d <= 0.0:
+        return SOFT_SIGMA_MAX
+    sigma = SOFT_WIDTH / d - SOFT_BIAS
+    if sigma < SOFT_SIGMA:
+        return 0.0
+    return min(sigma, SOFT_SIGMA_MAX)
+
+
+def _soften(pts: np.ndarray, sigma: float, closed: bool) -> np.ndarray:
+    """Gaussian smoothing of the vertices along the arc, by index (the
+    vertices sit a pixel apart or less). An open arc keeps its two ends, which
+    are lattice nodes the junction stage places; where the kernel runs off an
+    end it is renormalised over what is there, so a straight run stays put."""
+    n = len(pts)
+    if sigma <= 0.0 or n < 3:
+        return pts
+    r = int(np.ceil(SOFT_REACH * sigma))
+    if n < 2 * r + 1:
+        # A chain shorter than the kernel is a feature the size of the blur,
+        # not an edge with a position along it: smoothing it only pulls it
+        # onto its chord (a stub between the spokes of wedge-fan-128's hub,
+        # and a pinhole where its neighbours no longer met it).
+        return pts
+    w = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
+    out = pts.copy()
+    if closed:
+        idx = (np.arange(n)[:, None] + np.arange(-r, r + 1)[None, :]) % n
+        out = (pts[idx] * w[None, :, None]).sum(axis=1) / w.sum()
+        return out
+    for i in range(1, n - 1):
+        lo, hi = max(0, i - r), min(n - 1, i + r)
+        ww = w[lo - i + r: hi - i + r + 1]
+        out[i] = (pts[lo: hi + 1] * ww[:, None]).sum(axis=0) / ww.sum()
+    return out
 
 
 def _place(
@@ -738,13 +816,17 @@ def _place(
 
         t = np.full(len(ch["edges"]), 0.5)
         side = np.zeros(len(ch["edges"]), dtype=np.int8)
+        sigma = 0.0
         if a != 0 and b != 0:
-            t, side = _crossing(pad_rgba, padded, p_in, p_out, a, b, fill_at, with_found=True, local=local)
+            t, side, drop = _crossing(pad_rgba, padded, p_in, p_out, a, b, fill_at, with_found=True, local=local)
+            sigma = _softness(drop)
             on_level = levels.crossing(a, b, c_in, c_out) if levels else None
             if on_level is not None:
                 exact = np.isfinite(on_level)
                 t = np.where(exact, on_level, t)
                 side = np.where(exact, 0, side).astype(np.int8)
+                if exact.any():
+                    sigma = 0.0
         # `c_in` is always the centre of the pixel labelled `a` and `c_out` that of
         # the pixel labelled `b`, so this step is the direction from one side of
         # the arc to the other. It is one pixel long and axis aligned already.
@@ -792,6 +874,7 @@ def _place(
         pts = _unfold(pts)
         if handed_back:
             pts = _settle(pts, crowded.tolist())
+        pts = _soften(pts, sigma, ch["n0"] is None)
         out.append((pts, step, crowded))
     return out
 
@@ -3401,7 +3484,9 @@ def _reflect_segment(seg: Segment, c: np.ndarray, d: np.ndarray) -> Segment:
 def _snap_axis(segments: list[Segment], snap_deg: float) -> list[Segment]:
     """Make a nearly horizontal or vertical line exactly so, as `curves.snap_axis_lines`
     does for a whole contour — but never moving the arc's own ends, which are
-    nodes that the arcs on the other side have already been fitted to."""
+    nodes that the arcs on the other side have already been fitted to, and
+    never moving an end further than `curves.SNAP_END_MOVE`: a line that would
+    have to is not on the axis, it is drawn a degree off it."""
     n = len(segments)
     for i, seg in enumerate(segments):
         if not isinstance(seg, Line):
@@ -3415,6 +3500,8 @@ def _snap_axis(segments: list[Segment], snap_deg: float) -> list[Segment]:
         if head and tail:
             continue
         value = seg.p1[axis] if head else (seg.p0[axis] if tail else (seg.p0[axis] + seg.p1[axis]) / 2)
+        if max(abs(seg.p0[axis] - value), abs(seg.p1[axis] - value)) > SNAP_END_MOVE:
+            continue
         if not head:
             seg.p0[axis] = value
             segments[i - 1].p1 = seg.p0.copy()

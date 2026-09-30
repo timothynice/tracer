@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import ndimage
 
 from studi0trace.engines.vexel.rescue import boundary_band, edge_mix, rescue_features
 
@@ -144,3 +145,30 @@ def test_a_feature_that_reaches_the_core_keeps_its_edge_band_pixels():
     residual[5:35, 12:20] = 2.0  # from depth 3 to depth 10
     out, rescued = rescue_features(labels, residual, threshold=1.0, min_region=3, core=core)
     assert len(rescued) == 1 and (out[5:35, 12:20] == rescued[0]).all()
+
+
+def test_carving_a_feature_along_an_edge_leaves_the_hosts_thread_and_islands():
+    """A band rescued along the host's edge with a third region starts two
+    pixels in (the boundary band is never a candidate) and grows one back, so
+    a one-pixel thread of the host is left between the feature and the third
+    region, and pixels the host's fill happened to pass through stay as
+    islands inside the band. The rescue leaves them (`engine.absorb_shards`
+    hands them over once the shadow stage has run); this pins the shape it
+    hands over."""
+    h = w = 48
+    ys, xs = np.mgrid[0:h, 0:w]
+    s = xs + ys
+    labels = np.where(s >= 56, 2, 1).astype(np.int32)
+    residual = np.zeros((h, w), np.float32)
+    residual[(s >= 44) & (s <= 53)] = 3.0  # the band, inside the host along the diagonal edge
+    residual[s == 54] = 0.8  # its own anti-aliasing: taken by the growth
+    residual[s == 55] = 0.3  # the host's edge pixels: the thread
+    residual[25, 20] = 0.2  # islands the host's fill passes through
+    residual[32, 14] = 0.2
+    out, rescued = rescue_features(labels, residual, threshold=1.0, min_region=6)
+    assert len(rescued) == 1
+    new = rescued[0]
+    assert (out[(s >= 44) & (s <= 54) & ~((ys == 25) & (xs == 20)) & ~((ys == 32) & (xs == 14))] == new).all()
+    assert out[25, 20] == 1 and out[32, 14] == 1 and (out[s == 55] == 1).all()
+    comp, n = ndimage.label(out == 1)
+    assert n > 30, "the thread is a chain of one-pixel pieces touching only at corners"

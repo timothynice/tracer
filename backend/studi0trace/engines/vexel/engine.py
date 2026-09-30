@@ -32,7 +32,7 @@ from studi0trace.engines.vexel.partition import discontinuity, initial_labels
 from studi0trace.engines.vexel.posterize import Levels, posterize_fills
 from studi0trace.engines.vexel.prepare import prepare
 from studi0trace.engines.vexel.refine import refine_merge
-from studi0trace.engines.vexel.rescue import edge_mix, rescue_features
+from studi0trace.engines.vexel.rescue import boundary_band, edge_mix, rescue_features
 from studi0trace.engines.vexel.upsample import halve, upsample2x, wants_upsample
 from studi0trace.engines.vexel.strokes import is_thin, stroke_fidelity, stroke_geometry, stroke_svg
 from studi0trace.engines.vexel.weights import interior, interior_weights
@@ -117,8 +117,12 @@ class VexelParams(BaseModel):
         True, description="Rebuild drop shadows, glows and inner shadows as SVG filters instead of banded paths",
         json_schema_extra={"ui": {"control": "toggle", "group": "Effects"}},
     )
+    # 0.13: over corpus + held-out every thin group that is a drawn line scores
+    # at most 0.118 against its own coverage (hairlines under a pixel the
+    # highest), and the letter stems and blobs a stroke would mangle 0.141 up;
+    # the old rasterised measure ran 1.5× higher and gated at 0.2.
     stroke_tolerance: float = Field(
-        0.2, ge=0.05, le=1.0,
+        0.13, ge=0.05, le=1.0,
         description="Largest error a centreline may leave before the thin region is drawn filled instead of stroked; lower keeps more shapes filled",
         json_schema_extra={"ui": {"control": "slider", "step": 0.01, "group": "Curves", "label": "Stroke tolerance"}},
     )
@@ -212,6 +216,153 @@ def split_rim(labels: np.ndarray, rim: np.ndarray, cands: list[int], xs: np.ndar
     out = labels.copy()
     out[rim] = np.asarray(cands)[np.argmin(off, axis=0)]
     return out
+
+
+def absorb_shards(labels: np.ndarray, min_region: int, invisible: set[int], xs: np.ndarray, ys: np.ndarray,
+                  rgba255: np.ndarray, fill_at) -> np.ndarray | None:
+    """Every four-connected piece below `min_region` of a label that has a
+    piece at least that big joins its surroundings; None when there is none.
+
+    The partition never makes one: a watershed label is four-connected and a
+    small one is absorbed whole. Carving a feature out of a host does — the
+    host's pixels the feature's fill happens to pass through, now islands
+    inside it, and where the feature runs along the host's edge with a third
+    region, the host's own edge pixels (a rescue candidate is never within a
+    pixel of a label change and the growth brings back one), a thread one
+    pixel wide between the two. On a diagonal the thread touches itself only
+    at corners, and the four-connected boundary build
+    (`topology._directed_rings`) returned it as one sliver per pixel: 69 along
+    a speech balloon's bevel, 19 along a sleeve. A per-label size check never
+    sees either: the host itself is large. A label whose every piece is small
+    is a family, not shards — a dotted line the rescue found as one feature.
+
+    Each pixel goes to the nearest neighbouring region as `split_rim` hands a
+    rim over: distance, then the pixel's own colour, then the lower label,
+    never its own label and never an invisible one while a visible one is as
+    near. Not the discontinuity: flooded along it, a thread on an edge where
+    the two sides tie went pixel by pixel to whichever side was pushed first.
+    This runs after the shadow stage on purpose: an inset shadow's bands
+    rejoin the card there and reconnect the card's edge bits at the corners;
+    absorbed earlier, those bits joined the band, the band touched the
+    backdrop, and the shadow model no longer fitted.
+    """
+    if min_region <= 1:
+        return None
+    shard = np.zeros(labels.shape, bool)
+    for lab in np.unique(labels):
+        if lab == 0:
+            continue
+        comp, n = ndimage.label(labels == lab)
+        if n <= 1:
+            continue
+        sizes = np.bincount(comp.ravel())
+        if sizes[1:].max() < min_region:
+            continue
+        small = sizes < min_region
+        small[0] = False
+        shard |= small[comp]
+    if not shard.any():
+        return None
+    ring = ndimage.binary_dilation(shard, _CROSS) & ~shard
+    cands = sorted(int(v) for v in np.unique(labels[ring]) if v != 0)
+    seen = [c for c in cands if c not in invisible]
+    if not seen:
+        seen = cands
+    # to a region's distance map a shard of its own label is not the region
+    body = np.where(shard, 0, labels)
+    dists = np.stack([ndimage.distance_transform_edt(body != n)[shard] for n in seen])
+    dists[np.asarray(seen)[:, None] == labels[shard][None, :]] = np.inf
+    qx, qy, colour = xs[shard], ys[shard], rgba255[shard][:, :3]
+    off = np.stack([np.linalg.norm(colour - fill_at(n, qx, qy)[:, :3], axis=1) for n in seen])
+    nearest = dists.min(axis=0)
+    off = np.where(dists <= nearest + 1e-9, off, np.inf)
+    out = labels.copy()
+    out[shard] = np.asarray(seen)[np.argmin(off, axis=0)]
+    return out
+
+
+def _contacts(labels: np.ndarray, m: np.ndarray) -> np.ndarray:
+    """How many four-neighbour pairs each label has with the pixels of `m`."""
+    k = int(labels.max()) + 1
+    out = np.zeros(k, dtype=np.int64)
+    for la, lb, ma, mb in ((labels[:, :-1], labels[:, 1:], m[:, :-1], m[:, 1:]),
+                           (labels[:-1, :], labels[1:, :], m[:-1, :], m[1:, :])):
+        out += np.bincount(lb[ma & ~mb], minlength=k)
+        out += np.bincount(la[mb & ~ma], minlength=k)
+    return out
+
+
+def reach_the_edge(labels: np.ndarray, rescued: np.ndarray, xs: np.ndarray, ys: np.ndarray,
+                   rgba255: np.ndarray, fill_at, skip: set[int] | None = None) -> np.ndarray:
+    """A rescued region reaches the outline of the region it was carved from.
+
+    The rescue leaves its parent's edge band alone (`rescue.boundary_band`:
+    the anti-aliasing there disagrees with the parent's fill for the edge's
+    reason), so a band rescued beside the parent's outline stopped two pixels
+    short of it, and a strip of the parent ran on between the band and the
+    canvas: the wrong colour along the outline, and on a diagonal a lattice
+    vertex where the strip's two boundaries touch at every row — a node each,
+    and the outline drawn as dozens of three-vertex arcs (the chin of fluent's
+    heart-eyes, the shadow band of over-gradient). Here every band pixel of
+    the parent within two pixels of a rescued region, on the outline's side of
+    it — nearer the parent's boundary (the map with the region merged back
+    into its parent) than the rescued pixels beside it are (exact distances;
+    the least over the rescued pixels within two, so nothing rests on which of
+    two equidistant pixels is found first) — goes to whichever of the two is
+    nearer, the pixel's own colour breaking a tie (`split_rim`). The band
+    between a rescued ring and the parent's body is not on the outline's side
+    and stays: the 1.5 px ring of thin-mark-128 is a stroke only at its own
+    width. The outline reached is that of a neighbour at least as large as the
+    rescued region: the strip that does the harm runs along a long outline (a
+    canvas, a backdrop); the two pixels of ring between a rescued ring fragment
+    and a ten-pixel dot on the ring are the stroke stage's to bridge, and
+    joined to the dot the ring could no longer be stroked. A thin rescued
+    region (`strokes.is_thin`) is left as it is: it is drawn as a stroke along
+    its middle, which no strip disturbs, and one reddish pixel of band on the
+    flank of that ring was a wart its medial axis could not carry.
+
+    `rescued` marks the pixels the rescue promoted; a region most of whose
+    pixels are among them is a rescued region, whatever it has been renumbered
+    to since. This runs once the shadow stage has claimed its bands: a drop
+    shadow's band beside its caster is the caster's to explain as a filter,
+    and given the backdrop's rim along the caster it no longer was. `skip`
+    names the bands a shadow filter explains that stay in the map, unpainted
+    (an inner shadow's, which have no ground to join): given the caster's rim,
+    they took its outline with them and nothing painted it (inset-card-512).
+    Its parent is the label it touches most (the lower on a tie). Regions are
+    visited in order of their label.
+    """
+    counts = np.bincount(labels.ravel())
+    inside = np.bincount(labels.ravel(), weights=rescued.ravel().astype(np.float64), minlength=counts.size)
+    dy, dx = np.mgrid[-2:3, -2:3]
+    diamond = np.abs(dy) + np.abs(dx) <= 2  # the pixels within two steps, as the cross dilation reaches
+    for r in range(1, counts.size):
+        if counts[r] == 0 or 2.0 * inside[r] <= counts[r] or (skip and r in skip):
+            continue
+        m = labels == r
+        if is_thin(m):
+            continue
+        contacts = _contacts(labels, m)
+        contacts[0] = 0
+        contacts[r] = 0
+        if not contacts.any():
+            continue
+        parent = int(np.argmax(contacts))
+        merged = np.where(m, parent, labels)
+        sizes = np.bincount(merged.ravel())
+        big = (merged != parent) & (merged != 0) & (sizes[merged] >= int(m.sum()))
+        if not big.any():
+            continue
+        band = boundary_band(merged)
+        to_edge = ndimage.distance_transform_edt(~big)  # to the parent's boundary with a large neighbour
+        near = ndimage.binary_dilation(m, _CROSS, iterations=2)
+        beside = ndimage.grey_erosion(np.where(m, to_edge, np.inf), footprint=diamond, mode="constant", cval=np.inf)
+        strip = band & near & (labels == parent) & (to_edge < beside)
+        if not strip.any():
+            continue
+        scratch = int(labels.max()) + 1
+        labels = split_rim(np.where(strip, scratch, labels), strip, [parent, r], xs, ys, rgba255, fill_at)
+    return labels
 
 
 def _ring_area(poly: np.ndarray) -> float:
@@ -409,6 +560,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     explained = edge_mix(labels, rgba255, pred, prep.alpha, residual > 1.0)
     dump.labels("labels_clear", labels)
     labels, rescued = rescue_features(labels, residual, threshold=1.0, min_region=p.min_region, explained=explained, core=core_map)
+    rescued_pixels = np.isin(labels, rescued) if rescued else None
     dump.labels("labels_rescue", labels)
     if rescued:
         ids = [int(i) for i in np.unique(labels) if i != 0]
@@ -417,7 +569,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         fit_regions(ids)
 
     # Join gradient fragments (glows, off-centre radials) that one real fill explains.
-    labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
+    labels, fills, changed = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail, rescued=rescued_pixels)
     if not p.gradients:
         # Posterised, a region boundary through one smooth field is a visible
         # colour step along whatever line the partition drew, so the ramps are
@@ -427,7 +579,7 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
         for _ in range(POSTERIZE_JOIN_ROUNDS):
             if not again:
                 break
-            labels, fills, again = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail)
+            labels, fills, again = refine_merge(labels, xs, ys, rgba255, grad, fills, fit_params, edge_limit=0.6 * p.detail, rescued=rescued_pixels)
     dump.labels("labels_refine", labels)
     if changed:
         ids = [int(i) for i in np.unique(labels) if i != 0]
@@ -498,6 +650,28 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
                 m = labels == lab
                 w, core = interior(m)
                 fills[lab] = fit_fill(xs[m], ys[m], shadow_plan.corrected[m], fit_params, weights=w, core=core)
+
+    # A rescued band beside its parent's outline takes the parent's edge band
+    # there, so it reaches the outline (the fills are fitted on the cores,
+    # which the band is not part of, so they stand). After the shadow stage:
+    # a band a filter explains has joined its ground.
+    if p.gradients and rescued_pixels is not None:
+        reached = reach_the_edge(labels, rescued_pixels, xs, ys, rgba255, fill_at, skip=shadow_plan.absorbed)
+        if reached is not labels and bool((reached != labels).any()):
+            labels = reached
+            enc = enclosure(labels)
+            order = paint_order(enc)
+    # A piece of a region below min_region is not a region: the shards the
+    # rescue leaves of a host join their surroundings, now that the shadow
+    # stage has had its say. The enclosure stands as it was: the shards are
+    # the host's own edge, and handing their pixels over is bookkeeping for
+    # the four-connected boundary build, not a change of what lies inside
+    # what — an inset shadow's band is enclosed by its card through the
+    # card's edge bits at the corners, and with those bits in the band and
+    # the enclosure read again, the card was painted without its band ring.
+    shards = absorb_shards(labels, p.min_region, invisible, xs, ys, rgba255, fill_at)
+    if shards is not None:
+        labels = shards
 
     # Thin regions are drawn lines. A single line often arrives as several
     # regions (split at junctions, broken by anti-aliasing gaps), so thin regions
@@ -647,7 +821,12 @@ def trace_rgba(rgba: np.ndarray, p: VexelParams) -> str:
     # before the cut are.
     if p.upsample == "always" or (p.upsample == "auto" and wants_upsample(bands.unbanded(labels), height, width)):
         dump.text("upsample", "2x\n")
-        return halve(trace_rgba(upsample2x(rgba), p.model_copy(update={"upsample": "never"})), width, height)
+        # The colour the resampler sees is the prepared one: what a file stores
+        # under alpha 0 (black, as a rule) would otherwise be mixed into the
+        # ringing beside every edge, and the ringing then read as a colour of
+        # its own along every thin line.
+        clean = np.concatenate([np.floor(prep.rgb + 0.5).astype(np.uint8), rgba[..., 3:]], axis=-1)
+        return halve(trace_rgba(upsample2x(clean), p.model_copy(update={"upsample": "never"})), width, height)
     place_at = fill_at
     if shadow_plan.ground is not None and shadow_plan.canvas is not None:
         ground_lab, ground = shadow_plan.canvas, shadow_plan.ground
