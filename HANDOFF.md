@@ -157,3 +157,23 @@ CLAUDE.md: one bullet (soft edges; the ridge veto; reach_the_edge).
   shadow test pass against the finished build; `pytest tests/test_vexel_backends.py`: 17 passed.
 - `VEXEL_BACKEND=rust pytest tests`: 387 passed. `cargo test`: 77 passed.
 - Pipeline (pipeline2.log): BUILD_DONE; diffcheck default in progress (0 failing so far).
+
+## Round 3 (after the first full pipeline at bb9971f): corpus regressions found and fixed (c934fc8 +)
+The first full run: diffcheck 0 failing (default 1728 ok, stages 384 ok); held-out artifact 23.5 -> 17.5,
+wobble 47.7 -> 31.9, slivers 1.6 -> 0.1; but `bench compare` flagged the shadow class (score
+0.9664 -> 0.9435): inset-card-512 dE 0.054 -> 0.723, inset-well, radii-512 0.094 -> 0.421, and
+thin-mark-128 (auto 2x) 19 -> 38 shapes without its stroke. Isolated ($SCRATCH/q3s/isolate_item.py):
+- inset-card: reach_the_edge. An inner shadow's bands are `absorbed` (skipped at paint time) but have
+  no ground to join, so they stay in the map; reach took the card's rim into an unpainted band.
+  -> reach_the_edge(skip=shadow_plan.absorbed), both engines.
+- radii-512: the ramp-relaxed join ate the four shadow bands into the backdrop as radials before the
+  shadow stage. -> a pair with a rescued member (majority of its pixels promoted by the rescue) never
+  takes the relaxed path (refine_merge(..., rescued=mask), both engines).
+- thin-mark-128 at 2x: the relaxed path joined shards of the ring along 4-9-pair boundaries (ridge
+  share decided by 2-3 px; parts' rms 20-30). -> RAMP_MIN_PAIRS = 24 (both engines), test toggles it.
+After: inset-card 0.053/1 filter, radii 0.096/4 filters, thin-mark 19 shapes + stroke (dE 0.706 as
+baseline, art 134 -> 125), glow-512-ds detailed still joined (art 0.72, dE 0.379), heart-eyes logo
+art 4.86. Also: heart-eyes-q75 / u1f307-q75 dE rises on held-out are Auto picking `dense` as "the
+cleanest at the same fidelity" within its slack (balanced 1.955/art 17 vs dense 2.359/2.3): policy.
+Next: rebuild (build4 running), then run-verify.sh (no rebuild): diffcheck, stages, bench, compare,
+held-out, corpus-auto; both suites; cargo test; report.
