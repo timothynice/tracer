@@ -788,6 +788,7 @@ def _resample() -> None:
 
 @exporter("drawing")
 def _drawing() -> None:
+    import hashlib
     import math
     import warnings
 
@@ -811,6 +812,17 @@ def _drawing() -> None:
         return {"n": n, "columns": cols, "sum": [num(pts[:, j].sum()) for j in range(cols)],
                 "first": row(0), "mid": row(n // 2), "last": row(-1)}
 
+    def samples(pts: np.ndarray) -> dict:
+        # Every point of a contour of up to 32, else 24 spread along it with both ends, as
+        # "index x y" triples of repr floats in one string (exact, one line a contour); and a
+        # digest of all of them, float64 little-endian with NaN made canonical, which sees an
+        # ulp anywhere.
+        n = len(pts)
+        at = range(n) if n <= 32 else sorted({0, n - 1, *np.linspace(0, n - 1, 24).round().astype(int).tolist()})
+        exact = np.where(np.isnan(pts), np.nan, pts).astype("<f8")
+        return {"samples": " ".join(f"{i} {float(pts[i, 0])!r} {float(pts[i, 1])!r}" for i in at),
+                "digest": hashlib.sha256(exact.tobytes()).hexdigest()[:16]}
+
     def run(fn, *args):
         with warnings.catch_warnings(), np.errstate(all="ignore"):
             warnings.simplefilter("ignore")
@@ -825,7 +837,8 @@ def _drawing() -> None:
             return {"error": err}
         return {"elements": d.elements, "segments": d.segments, "strokes": d.strokes, "covers": list(d.covers),
                 "contours": [{"element": c.element, "closed": bool(c.closed), "paint": c.paint, "fill_rule": c.fill_rule,
-                              "stroke": None if c.stroke is None else num(c.stroke), **points(c.pts)}
+                              "stroke": None if c.stroke is None else num(c.stroke), **points(c.pts),
+                              **samples(c.pts)}
                              for c in d.contours]}
 
     def polylines(d: str) -> dict:
@@ -843,9 +856,20 @@ def _drawing() -> None:
                "fluent-flat/mobile-phone.svg", "noto/u0030.svg", "noto/u1f307.svg", "noto/u1f469-200d-1f33e.svg",
                "noto/u1f97e.svg", "noto/u2640.svg"]
     files = []
-    for path in sorted(OUT.glob("render_*.svg")) + [ROOT / "backend/bench/heldout" / h for h in sorted(heldout)]:
+    # and a trace small enough to be upsampled, drawn back inside <g transform="scale(0.5)">
+    from studi0trace.engines.vexel.engine import VexelEngine, VexelParams
+    from studi0trace.imaging.intake import load_upload
+
+    small = load_upload((ROOT / "backend/bench/corpus/synthetic/flat/overlap-128.png").read_bytes(),
+                        max_bytes=1 << 30, max_pixels=1 << 30)
+    upsampled = VexelEngine().trace(small, VexelParams()).svg
+    assert '<g transform="scale(0.5)">' in upsampled
+    (OUT / "drawing_overlap-128.svg").write_text(upsampled, encoding="utf-8")
+    sizes["overlap-128"] = (small.width, small.height)
+    for path in (sorted(OUT.glob("render_*.svg")) + [OUT / "drawing_overlap-128.svg"]
+                 + [ROOT / "backend/bench/heldout" / h for h in sorted(heldout)]):
         svg = path.read_text(encoding="utf-8")
-        stem = path.stem.removeprefix("render_")
+        stem = path.stem.removeprefix("render_").removeprefix("drawing_")
         for size in [None] + ([list(sizes[stem])] if stem in sizes else []):
             files.append({"file": path.relative_to(ROOT).as_posix(), "size": size, "drawing": drawing(svg, size)})
 
@@ -877,6 +901,11 @@ def _drawing() -> None:
          svg('<path d="M10 10 A5 5 0 0 0 20 10 A5 5 0 0 1 30 10 A5 5 0 1 0 40 10 A5 5 0 1 1 50 10 A0 5 0 0 1 55 15'
              ' A1 1 0 0 1 60 30 A3 6 45 1 1 40 40 A2 2 0 0 1 40 40 A-4 -3 0 0 1 30 45 a1 1 0 00.5.5 A2 2 0 2 -1 20 50'
              ' A4 4 90 0 1 10 50.000001 a3 2 -30 1 0 -5 -5 A1 1 0 0 1 -5 35.00000001"/>'), None),
+        ("path: rotated arcs whose radii are scaled to reach",  # co = sqrt(num/den) magnifies any rounding
+         svg('<path d="M4.438 41 A8 29.4 27 0 0 61 -3.089"/><path d="M10 10 A3 7 33 1 1 50 30"/>'
+             '<path d="M0 60 a2 5 -60 0 1 30 -20" fill="none" stroke="#000"/><path d="M5 5 A1 1 45 1 0 40 45"/>'
+             '<path d="M60 2 A4 9 115 0 0 3 58 A0.5 20 -170 1 1 60 2Z"/><path d="M1 1 A30 2 89.5 0 1 63 63"/>'
+             '<path transform="rotate(15 32 32)" d="M8 32 A6 3 71 1 0 56 30"/>'), None),
         ("path: truncated, empty and missing data",
          svg('<path d="M0 0 L5"/><path d="M1 2 3"/><path d="Q1 2"/><path d=""/><path/><path d="5 5 L1 1 2 2"/>'
              '<path d="M5 Z L1 2 3 4"/><path d="M5 Z V3 4"/><path d="M5 Z m1 2 L3 3"/><path d="M Z A0 1 0 0 1 9 9 L3 3"/>'

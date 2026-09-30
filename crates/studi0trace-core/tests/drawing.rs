@@ -14,17 +14,47 @@ fn num(v: &Value) -> f64 {
 }
 
 /// The largest differences seen from the Python, for the report: coordinates (absolute) and
-/// coordinate sums (relative; numpy sums pairwise, this adds in order).
+/// coordinate sums (relative; numpy sums pairwise, this adds in order), and how many contours'
+/// digests of every point differ.
 #[derive(Default)]
 struct Worst {
     point: f64,
     sum: f64,
+    digests: usize,
+    contours: usize,
 }
 
 impl Worst {
     fn report(&self, what: &str) {
-        eprintln!("{what}: worst coordinate difference {:e}, worst relative sum difference {:e}", self.point, self.sum);
+        eprintln!(
+            "{what}: worst coordinate difference {:e}, worst relative sum difference {:e}, {} of {} contour digests differ",
+            self.point, self.sum, self.digests, self.contours
+        );
+        // The fixtures come from numpy with Accelerate and Apple's libm on arm64, and there this
+        // port matches every point to the bit. Elsewhere a libm may round cos or sin an ulp
+        // apart, which the 1e-9 comparisons allow.
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            assert_eq!(self.digests, 0, "{what}: points that differ from the Python's in the last bit");
+        }
     }
+}
+
+/// The interior points the exporter spread along a contour ("index x y" triples), at 1e-9,
+/// and the digest of all of them: SHA-256 of float64 little-endian, NaN made canonical.
+fn check_samples(what: &str, pts: &[[f64; 2]], want: &Value, worst: &mut Worst) {
+    let samples: Vec<&str> = want["samples"].as_str().unwrap().split_whitespace().collect();
+    for t in samples.chunks(3) {
+        let i: usize = t[0].parse().unwrap();
+        for j in 0..2 {
+            let (got, w) = (pts[i][j], t[1 + j].parse::<f64>().unwrap());
+            let d = same(got, w, 1e-9).unwrap_or_else(|| panic!("{what}: point {i}[{j}] {got} != {w}"));
+            worst.point = worst.point.max(d);
+        }
+    }
+    let bytes: Vec<u8> =
+        pts.iter().flatten().flat_map(|&v| if v.is_nan() { f64::NAN } else { v }.to_le_bytes()).collect();
+    worst.contours += 1;
+    worst.digests += (common::sha256_hex(&bytes)[..16] != *want["digest"].as_str().unwrap()) as usize;
 }
 
 /// `got` equals `want` within `tol`, NaN equal to NaN and an infinity only to itself.
@@ -97,6 +127,7 @@ fn check_drawing(what: &str, got: Result<Drawing, DrawingError>, want: &Value, w
             (got, _) => panic!("{what}: stroke {got:?}, the Python {}", w["stroke"]),
         }
         check_points(&what, &c.pts, 2, w, worst);
+        check_samples(&what, &c.pts, w, worst);
     }
 }
 

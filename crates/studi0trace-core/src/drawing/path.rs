@@ -90,12 +90,21 @@ pub(super) fn py_ceil(x: f64) -> Result<f64, DrawingError> {
     }
 }
 
+/// `cos(a)` and `sin(a)` as numpy and CPython get them: two separate calls to libm's `cos` and
+/// `sin`. Asked for both of one argument, LLVM fuses the calls into one `sincos`
+/// (`__sincos_stret` on Apple), whose `sin` rounds differently from libm's for about one
+/// argument in 500, and only in an optimised build. Hiding the argument from the optimiser for
+/// each call keeps them apart. Never `f64::sin_cos`, which is that fused call.
+pub(super) fn cos_sin(a: f64) -> (f64, f64) {
+    (std::hint::black_box(a).cos(), std::hint::black_box(a).sin())
+}
+
 /// `(math.cos(a), math.sin(a))`, which raise on an infinite angle.
 pub(super) fn py_cos_sin(a: f64) -> Result<(f64, f64), DrawingError> {
     if a.is_infinite() {
         return Err(geometry("math domain error"));
     }
-    Ok((a.cos(), a.sin()))
+    Ok(cos_sin(a))
 }
 
 // ---------------------------------------------------------------- numpy's points
@@ -319,7 +328,7 @@ fn arc_pt(p0: Pt, rx: f64, ry: f64, phi_deg: f64, large: bool, sweep: bool, p1: 
     let mut pts: Vec<[f64; 2]> = unit_steps(n)
         .map(|s| {
             let t = t1 + dt * s;
-            let (cos, sin) = (t.cos(), t.sin());
+            let (cos, sin) = cos_sin(t);
             [cx + rx * cos * cp - ry * sin * sp, cy + rx * cos * sp + ry * sin * cp]
         })
         .collect();

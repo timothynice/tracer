@@ -21,7 +21,9 @@
 //!   NaN or infinity in a sample count, is raised here too ([`DrawingError::Geometry`]).
 //! - **Arithmetic** is float64 in numpy's order. Where numpy hands the work to Accelerate
 //!   (`m @ t`, `pts @ m.T`, `det`) the fused multiply-adds its kernels use on arm64 are used
-//!   as well (measured against numpy 2.5.3); on the fixtures every point agrees to the bit.
+//!   as well (measured against numpy 2.5.3). `cos` and `sin` are libm's, called apart as numpy
+//!   calls them: an optimised build would otherwise fuse them into a `sincos` that rounds `sin`
+//!   differently. On the fixtures every point agrees to the bit, in either build.
 //!
 //! # XML: roxmltree, where the Python has ElementTree (expat)
 //!
@@ -54,7 +56,7 @@ use std::sync::OnceLock;
 
 pub mod path;
 
-use path::{first_num, nums, polylines, py_ceil, py_cos_sin, py_max, re, Budget};
+use path::{cos_sin, first_num, nums, polylines, py_ceil, py_cos_sin, py_max, re, Budget};
 pub use path::{arc, cubic, path_polylines, quad, segments_in, Subpath};
 
 /// `quality.STEP`: the sampling step along every outline, px.
@@ -273,8 +275,8 @@ fn ellipse_in(cx: f64, cy: f64, rx: f64, ry: f64, budget: &mut Budget) -> Result
     let step = 2.0 * PI / n as f64;
     let pts = (0..=n)
         .map(|i| {
-            let t = if i == n { 2.0 * PI } else { i as f64 * step };
-            [cx + rx * t.cos(), cy + ry * t.sin()]
+            let (cos, sin) = cos_sin(if i == n { 2.0 * PI } else { i as f64 * step });
+            [cx + rx * cos, cy + ry * sin]
         })
         .collect();
     Ok(Subpath { pts, closed: true, columns: 2 })
