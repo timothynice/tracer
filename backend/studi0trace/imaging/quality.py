@@ -699,6 +699,28 @@ def _turns(q: np.ndarray, closed: bool, k: int) -> np.ndarray:
     return _wrap(np.diff(ang))
 
 
+def _visible_runs(q: np.ndarray, vis: np.ndarray, closed: bool) -> list[tuple[np.ndarray, bool]]:
+    """The maximal stretches of `q` that are on screen, each flagged whole when
+    it is the outline entire (closed as it is, when nothing is hidden); else
+    open runs, a closed outline's wrapped so that a run through sample 0 is one."""
+    if vis.all():
+        return [(q, True)]
+    if not vis.any():
+        return []
+    n = len(q)
+    start = 0
+    if closed and vis[0] and vis[-1]:
+        start = int(np.nonzero(~vis)[0][-1]) + 1  # begin just after the last hidden sample
+    idx = (np.arange(n) + start) % n
+    v = vis[idx]
+    out = []
+    edges = np.nonzero(np.diff(np.concatenate([[False], v, [False]]).astype(np.int8)))[0]
+    for a, b in zip(edges[::2], edges[1::2]):
+        if b - a >= 3:
+            out.append((q[idx[a:b]], False))
+    return out
+
+
 def _cancelled(q: np.ndarray, closed: bool, k: int) -> np.ndarray:
     """Turning cancelled inside a k-sample window, per sample.
 
@@ -1035,22 +1057,20 @@ def geometry_card(svg: str, size: tuple[int, int] | None = None, visibility: boo
         if shown <= 0.0:
             continue
         length += shown
-        excess_at = _cancelled(q, c.closed, kw)
-        if c.closed:
-            vis_at = vis
-        else:
-            h = kw // 2
-            vis_at = np.concatenate([np.full(h, vis[0]), vis, np.full(h, vis[-1])])
-        excess = max(0.0, float(excess_at[vis_at].sum()))
+        # Each stretch on screen is scored on its own, as an open outline: the
+        # turning a hidden stretch does beside it (the jog a bled copy makes at
+        # a junction, two right angles a pixel apart) is not spread into it.
+        excess = 0.0
+        for run, whole in _visible_runs(q, vis, c.closed):
+            excess_at = _cancelled(run, whole and c.closed, kw)
+            excess += max(0.0, float(excess_at.sum()))
+            # where: cancelled turning summed over a 2L window
+            if excess_at.sum() > math.radians(5):
+                local = np.convolve(excess_at, np.ones(2 * kw), "same")
+                for j in np.nonzero(local > math.radians(20))[0][:: kw]:
+                    p = run[min(max(j - kw // 2, 0), len(run) - 1)]
+                    loc_wobble.append((float(p[0]), float(p[1]), math.degrees(float(local[j]))))
         wobble += math.degrees(excess)
-        # where: cancelled turning summed over a 2L window, reported on screen only
-        if excess > math.radians(5):
-            box = np.ones(2 * kw)
-            local = np.convolve(excess_at, box, "same")
-            off = 0 if c.closed else kw // 2
-            for j in np.nonzero((local > math.radians(20)) & vis_at)[0][:: kw]:
-                p = q[min(max(j - off, 0), len(q) - 1)]
-                loc_wobble.append((float(p[0]), float(p[1]), math.degrees(float(local[j]))))
         for j in _inflections(q, c.closed, ki):
             if vis[j % len(q)]:
                 inflections += 1

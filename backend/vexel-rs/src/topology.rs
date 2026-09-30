@@ -2893,7 +2893,20 @@ fn dist2p(a: P, b: P) -> f64 {
 /// The primitive's outline from the point nearest e0 to the point nearest e1,
 /// the way round that passes nearest `mid`; and those two points
 /// (`topology._outline_between`).
-fn outline_between(shape: &Shape, e0: P, e1: P, mid: P) -> Option<(Vec<Segment>, P, P)> {
+/// The outline position a node goes to: its nearest point, or a sharp corner
+/// within `tol` of it (`topology._onto_rect`, which says why).
+fn onto_rect(m: &crate::rects::Model, e: P, tol: f64) -> f64 {
+    let (s, _) = crate::rects::project(m, e);
+    let corners = [[m.x0, m.y0], [m.x1, m.y0], [m.x1, m.y1], [m.x0, m.y1]];
+    for (k, c) in corners.iter().enumerate() {
+        if m.r[k] <= 1e-9 && dist2p(e, *c).sqrt() <= tol {
+            return crate::rects::project(m, *c).0;
+        }
+    }
+    s
+}
+
+fn outline_between(shape: &Shape, e0: P, e1: P, mid: P, tol: f64) -> Option<(Vec<Segment>, P, P)> {
     match shape {
         Shape::Circle { cx, cy, r } => {
             let c = [*cx, *cy];
@@ -2920,8 +2933,8 @@ fn outline_between(shape: &Shape, e0: P, e1: P, mid: P) -> Option<(Vec<Segment>,
             let rx = if let Shape::RoundedRect { rx, .. } = shape { *rx } else { 0.0 };
             let m = crate::rects::Model { x0: *x, y0: *y, x1: x + w, y1: y + h, r: [rx; 4], votes: [0.0; 4], gaps: [Vec::new(), Vec::new(), Vec::new(), Vec::new()] };
             let total = crate::rects::perimeter(&m);
-            let (s0, _) = crate::rects::project(&m, e0);
-            let (s1, _) = crate::rects::project(&m, e1);
+            let s0 = onto_rect(&m, e0, tol);
+            let s1 = onto_rect(&m, e1, tol);
             let (q0, q1) = (crate::rects::point_at(&m, s0), crate::rects::point_at(&m, s1));
             let fwd = (s1 - s0).rem_euclid(total);
             let back = (s0 - s1).rem_euclid(total);
@@ -2973,7 +2986,7 @@ pub fn imprint(bnd: &mut Boundary, params: &CurveParams, skip: &std::collections
             let e0 = seg_p0(&arc.segments[0]);
             let e1 = seg_p1(&arc.segments[arc.segments.len() - 1]);
             let mid = arc.pts[arc.pts.len() / 2];
-            match outline_between(&shape, e0, e1, mid) {
+            match outline_between(&shape, e0, e1, mid, params.tol) {
                 Some((segs, q0, q1)) if !segs.is_empty() && dist2p(q0, e0).max(dist2p(q1, e1)) <= params.tol => {
                     plan.push((*idx, segs, e0, e1, q0, q1));
                 }

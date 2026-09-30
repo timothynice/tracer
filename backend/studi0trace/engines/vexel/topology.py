@@ -2853,10 +2853,26 @@ def _rect_model(shape: Rect | RoundedRect) -> rects.Model:
     return rects.Model(shape.x, shape.y, shape.x + shape.w, shape.y + shape.h, [rx] * 4, [0.0] * 4, [np.zeros(0, np.int64)] * 4)
 
 
-def _outline_between(shape: Circle | Rect | RoundedRect, e0: np.ndarray, e1: np.ndarray, mid: np.ndarray
-                     ) -> tuple[list[Segment], np.ndarray, np.ndarray]:
+def _onto_rect(m: rects.Model, e: np.ndarray, tol: float) -> float:
+    """The outline position a node goes to: its nearest point, or a sharp
+    corner within `tol` of it. A node a few hundredths off a corner projects
+    onto one side, and the outline from there to the next node then runs a
+    stub along that side before turning up the other; the stub's normal is
+    square to the edge's, and the bled copy started a pixel off the wrong way
+    (a curl of wrong colour at every tile corner)."""
+    s, d = rects.project(m, e)
+    for k, corner in enumerate(((m.x0, m.y0), (m.x1, m.y0), (m.x1, m.y1), (m.x0, m.y1))):
+        c = np.array(corner, dtype=float)
+        if m.r[k] <= 1e-9 and float(np.linalg.norm(e - c)) <= tol:
+            return rects.project(m, c)[0]
+    return s
+
+
+def _outline_between(shape: Circle | Rect | RoundedRect, e0: np.ndarray, e1: np.ndarray, mid: np.ndarray,
+                     tol: float = 0.0) -> tuple[list[Segment], np.ndarray, np.ndarray]:
     """The primitive's outline from the point nearest e0 to the point nearest
-    e1, the way round that passes nearest `mid`; and those two points."""
+    e1 (a sharp corner within `tol` of either counts as nearest), the way
+    round that passes nearest `mid`; and those two points."""
     if isinstance(shape, Circle):
         c = np.array([shape.cx, shape.cy])
         def onto(e: np.ndarray) -> np.ndarray:
@@ -2873,8 +2889,8 @@ def _outline_between(shape: Circle | Rect | RoundedRect, e0: np.ndarray, e1: np.
         return [CircArc(q0.copy(), q1.copy(), float(shape.r), span > math.pi, False)], q0, q1
     m = _rect_model(shape)
     total = rects.perimeter(m)
-    s0, _ = rects.project(m, e0)
-    s1, _ = rects.project(m, e1)
+    s0 = _onto_rect(m, e0, tol)
+    s1 = _onto_rect(m, e1, tol)
     q0, q1 = rects.point_at(m, s0), rects.point_at(m, s1)
     fwd = (s1 - s0) % total
     back = (s0 - s1) % total
@@ -2926,7 +2942,7 @@ def _imprint(bnd: Boundary, params: CurveParams, skip: set[int]) -> int:
             arc = bnd.arcs[idx]
             e0, e1 = arc.segments[0].p0, arc.segments[-1].p1
             mid = arc.pts[len(arc.pts) // 2]
-            segs, q0, q1 = _outline_between(shape, e0, e1, mid)
+            segs, q0, q1 = _outline_between(shape, e0, e1, mid, params.tol)
             if not segs or max(float(np.linalg.norm(q0 - e0)), float(np.linalg.norm(q1 - e1))) > params.tol:
                 plan = []
                 break
