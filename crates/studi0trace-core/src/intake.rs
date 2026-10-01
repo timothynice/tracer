@@ -25,7 +25,7 @@
 //!
 //! Pillow refuses a JPEG that stops before its end-of-image marker ("image file is
 //! truncated"). The decoder behind `image` runs lax and returns what it has, with the
-//! rest of the picture filled in, so [`jpeg_is_truncated`] asks the question of the
+//! rest of the picture filled in, so `jpeg_is_truncated` asks the question of the
 //! bytes first and a cut-short JPEG is `corrupt_image` here too.
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Rgba, RgbaImage};
@@ -57,9 +57,14 @@ impl fmt::Display for IntakeError {
 
 impl std::error::Error for IntakeError {}
 
+/// What an upload may be. `max_pixels` above 2^26 (about 67.1 MP) lets through images that Auto
+/// cannot score (its renders at 2x would exceed [`crate::render::MAX_PIXELS`]); see
+/// [`crate::api::Core::with_limits`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
+    /// The file's size in bytes (20 MiB by default).
     pub max_bytes: usize,
+    /// Width times height, checked from the header before the pixels are decoded (40 MP by default).
     pub max_pixels: u64,
 }
 

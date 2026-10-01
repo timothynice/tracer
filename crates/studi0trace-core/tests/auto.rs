@@ -619,7 +619,7 @@ fn check_image(entry: &Value) {
             if c.svg.as_deref() != Some(stored.as_str()) {
                 let got = c.svg.as_deref().unwrap_or("");
                 let at_byte = got.bytes().zip(stored.bytes()).position(|(a, b)| a != b).unwrap_or(got.len().min(stored.len()));
-                panic!("{at}: the SVG differs from {svg_file} ({} bytes vs {}) from byte {at_byte}", got.len(), stored.len());
+                panic!("{at}: the SVG differs from {svg_file} ({} bytes vs {}) from byte {at_byte}; {}", got.len(), stored.len(), common::REEXPORT);
             }
         } else {
             assert!(c.svg.as_deref().is_some_and(|s| s.starts_with("<svg")), "{at}: no SVG");

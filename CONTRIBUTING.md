@@ -48,9 +48,17 @@ npm --prefix frontend run dev
 
 ```bash
 cd backend           && .venv/bin/python -m pytest
-cd backend/vexel-rs  && cargo test
+cargo test --workspace --release        # at the repo root: the engine and the core
+RUSTDOCFLAGS="-D warnings" cargo doc -p studi0trace-core --no-deps   # the core's docs build clean
 cd frontend          && npm run test:run && npm run build
 ```
+
+`cargo test --workspace --release` is the Rust line, not `cd backend/vexel-rs &&
+cargo test`: inside the workspace that runs the engine alone. The core's golden
+fixtures (`crates/studi0trace-core/tests/fixtures`) embed the SVG the engine
+writes (`api.json`, `auto.json`, `auto_*.svg`), so a change to the engine that
+alters its output breaks the core's tests on macOS arm64, where they compare the
+bytes. Re-export them before you push (the next section).
 
 New behaviour ships with a test. The concurrency and CORS-on-error tests in
 `backend/tests/test_api.py` are regression guards for real production
@@ -74,6 +82,26 @@ table at the top of that file says so and says why. Its `scorecard` stage holds
 the Rust core's scorecard to the Python's and needs the second `maturin` line
 above: without `studi0trace_core` it exits at once with that command, and naming
 stages (`tools.diffcheck labels0 rects`) runs only those.
+
+A change to either that alters what the engine writes has a third step, because
+the Rust core (`crates/studi0trace-core`) holds the engine's SVG to the byte on
+macOS arm64. With the Rust `vexel_rs` built and installed from your checkout
+(`maturin develop --release -m vexel-rs/Cargo.toml`, the first line above), on
+macOS arm64:
+
+```bash
+cd backend && .venv/bin/python -m tools.export_core_fixtures --only api,auto
+cargo test --workspace --release
+```
+
+`api` and `auto` are the two fixtures the core's tests compare a live trace with
+(`tests/api.rs`, `tests/auto.rs`); they fail until they are re-exported. The
+other exporters that trace (`svg,render,drawing,holes,geometry,scorecard`) store
+the trace as an input, so their tests keep passing; re-export them too
+(`.venv/bin/python -m tools.export_core_fixtures` is everything) so the fixtures
+stand for what the engine writes now, and review the diff as you would code.
+Off macOS arm64 the SVG bytes are not compared (the crate's README says what is),
+and the exporter refuses to run there.
 
 Run the suite against both:
 

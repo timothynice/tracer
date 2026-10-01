@@ -32,19 +32,25 @@ Studi0Trace becomes a free MIT Mac app (Tauri 2) whose engine is the Rust core, 
 version kept as the same core compiled to WebAssembly. Nothing Python ships; Python stays as
 developer tooling (reference engine, bench, diffcheck). Four plans (distribution is unsigned, via GitHub Releases):
 
-1. **Core crate** — `docs/superpowers/plans/2026-09-24-studi0trace-core-crate.md` (15 tasks,
-   written, **not started**: there is no `crates/` directory yet). A Cargo workspace with
-   `backend/vexel-rs` and a new `crates/studi0trace-core` that ports everything the Python server
+1. **Core crate** — `docs/superpowers/plans/2026-09-24-studi0trace-core-crate.md` (15 tasks).
+   **Done on branch `claude/core-crate-mac-app-handoff-393d71`** (not merged): a Cargo workspace
+   with `backend/vexel-rs` and `crates/studi0trace-core`, which ports everything the Python server
    does around the engine (intake, params and schema, presets, SVG finishing, the scorecard, Auto)
-   behind one `Core` facade, held to the Python by golden fixtures.
+   behind one `Core` facade, held to the Python by golden fixtures and by `tools.diffcheck
+   scorecard`. Where the implementation differs from the plan, read the plan's "As built"
+   section; what a shell (plans 2 and 3) must do around `Core` is in
+   `crates/studi0trace-core/README.md` (the "What a shell must do" list: pixel cap, a worker
+   thread, the wasm clocks).
 2. **Desktop app** — Tauri 2 in `apps/desktop`; not yet written as a plan.
 3. **Web on WebAssembly** — `crates/studi0trace-wasm`; not yet written as a plan.
 4. **Release and retirement** — GitHub Releases (unsigned, no notarization), removal of the FastAPI
    deploy; not yet written as a plan.
 
-**Start with plan 1.** It was written before the quality pass, so check it against the current
-code before executing. I checked the ports it lists: `imaging/` (intake, quality, the scorecard),
-`auto.py` and `engines/base.py` are unchanged since the plan. Two things moved:
+**Plan 1 is done; start with plan 2 or 3** (both call the core; read the crate's `README.md`
+first). What follows is the note this handoff carried before plan 1 was executed, kept because
+its method still applies to plans 2 and 3: the ports a plan lists must be checked against the
+current code before it is executed. For plan 1, `imaging/` (intake, quality, the scorecard),
+`auto.py` and `engines/base.py` were unchanged since the plan, and two things had moved:
 
 - **Fixed in the plan already:** `stroke_tolerance` now defaults to 0.13 (was 0.2) in both
   engines. The plan's parameter table carried 0.2.
@@ -53,9 +59,9 @@ code before executing. I checked the ports it lists: `imaging/` (intake, quality
   do not reuse numbers from the plan text.
 - The plan's commit trailer says Claude Opus 5.5; use the trailer your session is given.
 
-How to execute it: the plan says to use `superpowers:subagent-driven-development` or
-`superpowers:executing-plans`, one task at a time, each ending with `cargo test -p
-studi0trace-core` green and a commit.
+How plan 1 was executed: `superpowers:subagent-driven-development`, one task at a time, each
+ending with `cargo test -p studi0trace-core` green and a commit; plans 2 to 4 can be run the
+same way.
 
 ## Toolchain on this Mac (checked 2026-09-30)
 

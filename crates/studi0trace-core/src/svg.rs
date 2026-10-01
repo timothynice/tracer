@@ -28,7 +28,7 @@ pub struct Stats {
     pub unique_fills: u64,
 }
 
-/// Remove width/height from the root <svg> and set viewBox="0 0 W H".
+/// Remove width/height from the root `<svg>` and set viewBox="0 0 W H".
 ///
 /// Only the root tag is touched; nested elements keep their attributes.
 /// Idempotent.

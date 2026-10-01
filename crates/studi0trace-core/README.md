@@ -73,12 +73,23 @@ platform:
   their `stats`. It still compares the pick, the reason, the API's rounded scores
   and each candidate's full scorecard against the Python's (integers exactly,
   floats to 1e-9 relative).
-- `tests/scorecard.rs` holds every float to 1e-9 relative on every platform, and to
-  the bit as well on macOS arm64 (but for CIEDE2000).
+- `tests/scorecard.rs` holds every float to `1e-9 * (1 + |want|)` (relative above 1,
+  absolute below) on every platform, and to the bit as well on macOS arm64 (but for
+  CIEDE2000).
 
 `STUDI0TRACE_FORCE_TOLERANT=1` runs the tolerant branch of all of these on any
 machine, including the arm64 Mac, so that branch is exercised here and not only
 when someone builds elsewhere.
+
+Not every comparison is gated by `exact()`. Results that depend on libm but are
+rounded to f32 or to fixed point before they are compared are held to the bit on
+every platform, and are practically immune to a different libm: the Canny stages
+(`tests/edges.rs`; the Gaussian taps are `f64::exp` stored as f32, and all 25 taps in
+the fixture are correctly rounded), the Lanczos digests (`tests/resample.rs`,
+`tests/render.rs`; the taps are `f64::sin` rounded to 22-bit fixed point) and the holes
+digests. tiny-skia's one architecture-dependent operation, `recip_fast`, is used only
+by the colour-burn and colour-dodge blend modes, which the engine never writes. If one of
+these ever fails on another platform, that is where to look.
 
 **Against the Python, end to end.** `backend/tools/diffcheck.py scorecard` scores
 a finished trace of every corpus item with `imaging/quality.assess` and with this
@@ -96,6 +107,33 @@ cd backend && VIRTUAL_ENV=$PWD/.venv .venv/bin/python -m maturin develop --relea
 
 The feature is off by default; `backend/tests/test_core_scorecard.py` is skipped
 without the module.
+
+## Build, features and dependencies
+
+- **`--features python` cannot link without maturin.** The `python` feature builds the
+  `studi0trace_core` extension module (pyo3 with `extension-module`), which leaves the
+  Python symbols to the interpreter; `cargo build` or `cargo test` with it fails at
+  link time. Build it only through `maturin develop` (the command above). Never use
+  `--all-features` (in CI or by hand): it turns the feature on.
+- **`serde_json` has `preserve_order`.** The API's JSON is ordered (the UI lays its
+  controls out in the order `properties` is written, and `tests/api.rs` compares key
+  order), so every object the core builds keeps its keys in insertion order. Cargo
+  unifies features across a dependency graph: a shell that depends on this crate gets
+  `preserve_order` for all of its own `serde_json` use too.
+- **Auto runs on a pool of its own**: rayon threads named `studi0trace-auto-N` with 8 MiB
+  stacks (rayon's global workers have 2 MiB, too little for resvg on a deep SVG), built on
+  first use and shared by every `Core` in the process. Where threads cannot be spawned
+  (`wasm32-unknown-unknown` without shared memory) the pool is not built and Auto runs on
+  the calling thread, on whatever stack it has (1 MiB on wasm by default); plan 3 must
+  measure that.
+- **The release profile** (`opt-level = 3`, `lto = "fat"`, `codegen-units = 1`) is in the
+  root `Cargo.toml`, the workspace's. `backend/Dockerfile` builds the engine alone from
+  the `backend/` context, which has no root manifest, so it carries the same profile in
+  `CARGO_PROFILE_RELEASE_*` environment variables; change one, change the other.
+- **Test seams** are public but not part of the API: `Core::with_tracer` and
+  `auto::run_with` (with the `auto::Tracer` type) let a test replace the engine so that a
+  panic, a slow trace or an unrenderable SVG can be tried; `Core::cached_images` and
+  `Core::cached_bytes` read the upload store. They are `#[doc(hidden)]`.
 
 ## Known, intentional differences from the Python server
 
@@ -146,8 +184,17 @@ The core answers like the server except where it was decided not to:
 - **Not ported:** the Potrace and VTracer engines (`GET /engines` lists Vexel
   only; the core describes one engine) and the Python `quality.LOWER_IS_BETTER`
   set, which only the bench reads.
-- **The scorecard is bit-exact only on macOS arm64**; elsewhere it agrees to 1e-9
-  relative, and its integers (every count) agree exactly.
+- **The scorecard is bit-exact only on macOS arm64**; elsewhere it agrees to
+  `1e-9 * (1 + |want|)`, and its integers (every count) agree exactly.
+- **Raster images in an SVG** (`<image>`) are left out of a render, where resvg-py
+  draws them: the core builds resvg without its raster decoders, and replaces usvg's
+  `href` resolver, which opens whatever file an `<image>` names, with one that finds
+  nothing (a `data:` URL of a nested SVG is still resolved). A traced SVG carries none.
+- **XML** is read by roxmltree where the Python uses ElementTree (expat). They part on
+  an internal DTD's `<!ATTLIST>` defaults (expat applies them), on an undeclared entity
+  beside an external DTD (expat reads nothing, roxmltree refuses the document) and on
+  `xmlns=""` (an element so marked is left out of the drawing here and drawn there).
+  None occurs in engine output (`drawing.rs`'s module documentation).
 - **`engine_crashed`, not `engine_failed`**, is the code of a trace that panics,
   as in the Python, where it is the code of any exception that is not an
   `EngineError` (which Vexel never raises).
@@ -170,7 +217,27 @@ HTTP half:
 - Parse JSON number text correctly rounded (`serde_json`'s `float_roundtrip`, or
   a browser's `JSON.parse`): the default `serde_json` parser can be an ulp off on a
   decimal of 17 digits, and the core takes the parsed `f64` as it is.
-- On `wasm32-unknown-unknown`, give `auto::trace_finished` a clock: `Instant::now()`
+- On `wasm32-unknown-unknown`, give the trace a clock, in two places. `Instant::now()`
   panics there, and with `panic=abort` (that target's default) the panic ends the
-  module, so `catch_unwind` cannot turn it into an `engine_crashed`.
+  module, so `catch_unwind` cannot turn it into an `engine_crashed`. The core reads the
+  clock once, in `auto::trace_finished`; **the engine reads it too, on every trace**
+  (`vexel_rs`'s `timing::Timer::new` calls `Instant::now()` unconditionally, in
+  `engine::trace_rgba` and in the partition, shadow and topology stages, whether or not
+  `VEXEL_TIMING` is set). Plan 3 must make the engine's `Timer` lazy (read the clock only
+  when `VEXEL_TIMING` is set) or give it a wasm clock, and hand `trace_finished` one.
 - Answer a refusal with `ApiError::status` and `ApiError::response_body()`.
+- **Cap the work, not only the upload, and keep it off the UI thread.** The engine's
+  cost is far above what the intake limit suggests. Measured in the final review, on a
+  2048 x 2048 (4.2 MP) upscaled badge: a plain Balanced trace took 97 s and peaked at
+  7.5 GB of resident memory; Auto took 120 s and 10.8 GB (14.9 GB peak footprint). The
+  40 MP intake limit admits ten times that, a wasm build has 4 GB of address space, and
+  `vectorize` cannot be cancelled and reports no progress. Plans 2 and 3 must measure
+  and set their own pixel cap for tracing (or downscale before tracing), run `vectorize`
+  on a worker thread and never the UI's, and plan for cancellation and progress (a
+  cooperative flag in the engine's stages, or a worker the shell can drop).
+- `Core::with_limits` takes the intake's pixel cap: above 2^26 pixels (about 67.1 MP)
+  Auto cannot score an upload (its renders at 2x would pass `render::MAX_PIXELS`), and
+  degrades to "scoring was unavailable, so the first preset that traced" instead of
+  failing. A plain trace is unaffected. Set the cap well under it (the engine's cost
+  above is the real limit); it is not clamped, because a shell may want a higher one
+  for plain traces.

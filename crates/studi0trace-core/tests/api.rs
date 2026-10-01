@@ -198,7 +198,7 @@ fn every_call_answers_as_the_fastapi_app_does_to_the_letter() {
             blank(&mut want, auto);
         }
         let (got, want) = (serde_json::to_string(&body).unwrap(), serde_json::to_string(&want).unwrap());
-        assert!(got == want, "{name}: the body differs {}", first_difference(&got, &want));
+        assert!(got == want, "{name}: the body differs {}\n(an `svg` field is compared by its SHA-256 here; {})", first_difference(&got, &want), common::REEXPORT);
         *checked.entry(case["call"].as_str().unwrap()).or_default() += 1;
     }
     // every kind of call was made, and by enough cases to mean something

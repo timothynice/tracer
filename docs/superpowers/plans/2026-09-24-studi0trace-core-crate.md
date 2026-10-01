@@ -1601,3 +1601,41 @@ this is the list a later plan needs.
   extension it exits non-zero with the build command.
 - **Distribution is unsigned** (no Developer ID, no notarization): decided 2026-09-30 and recorded in the spec's
   Distribution row.
+- **Found by the final review of the branch** (the fixes are in the commits after Task 15; what a later plan needs):
+  - *Engine changes now reach the core's tests.* The goldens `api.json`, `auto.json`, `auto_*.svg` embed the SVG the
+    engine writes and are compared to the byte on macOS arm64, so a change to the engine that alters its output
+    breaks `tests/api.rs` and `tests/auto.rs` until the fixtures are re-exported
+    (`tools.export_core_fixtures --only api,auto`). `CONTRIBUTING.md` and `CLAUDE.md` say so, and
+    `cargo test --workspace --release` (not `cd backend/vexel-rs && cargo test`, which in a workspace runs the engine
+    alone) is on the pre-PR list.
+  - *The core is not the only clock.* `auto::trace_finished` is the core's one `Instant::now()`, but the engine reads
+    a clock on every trace: `vexel_rs::timing::Timer::new()` calls `Instant::now()` unconditionally (top of
+    `engine::trace_rgba`, again in the partition, shadow and topology stages), whether or not `VEXEL_TIMING` is set.
+    On `wasm32-unknown-unknown` that panics, which is a trap with `panic=abort`. Plan 3 must make the engine's `Timer`
+    lazy (read the clock only when `VEXEL_TIMING` is set) or give it a wasm clock, and hand `trace_finished` one. The
+    engine crate was not changed on this branch.
+  - *The engine's cost is far above the intake limit's.* On a 2048 x 2048 (4.2 MP) upscaled badge a plain Balanced
+    trace took 97 s and 7.5 GB resident; Auto 120 s and 10.8 GB (14.9 GB peak footprint). The 40 MP intake limit admits
+    ten times that, a wasm build has 4 GB of address space, and `vectorize` can be neither cancelled nor observed. Plans 2
+    and 3 must measure and set their own pixel cap (or downscale before tracing), run it off the UI thread and plan
+    for cancellation and progress. `Core::with_limits` with `max_pixels` over 2^26 (about 67.1 MP) makes Auto's 2x
+    renders pass `render::MAX_PIXELS`, and Auto then degrades to "scoring was unavailable" (documented, not clamped).
+  - *Release profile and lockfile in the Docker build.* The image's build context is `backend/`, which has no root
+    manifest, so the workspace's `[profile.release]` is carried by `CARGO_PROFILE_RELEASE_LTO` and
+    `CARGO_PROFILE_RELEASE_CODEGEN_UNITS` in `backend/Dockerfile` (mirror comments in both places).
+    `backend/vexel-rs/Cargo.lock` is used only by that build; cargo never touches it inside the workspace, so
+    `backend/tests/test_vexel_lock_matches_workspace.py` holds it to the vexel-rs closure of the root `Cargo.lock`,
+    and the image builds with `--locked`.
+  - *Dependencies a shell inherits.* `serde_json`'s `preserve_order` (the UI's property order; cargo unifies it into a
+    shell's whole graph) and, since the final fixes, `float_roundtrip` (exact float parsing of a request's numbers).
+  - *Auto's pool.* A dedicated rayon pool, threads named `studi0trace-auto-N`, 8 MiB stacks, built on first use. Where
+    threads cannot be spawned (wasm without shared memory) it is not built and Auto runs on the calling thread.
+  - *Test seams:* `Core::with_tracer` and `auto::run_with` (`auto::Tracer`) replace the engine in tests;
+    `Core::cached_images`/`cached_bytes` read the store. Public, `#[doc(hidden)]`.
+  - *Documented differences that lived only in module docs:* raster `<image>` is dropped by `render` (and the
+    filesystem is never read); roxmltree against expat (`<!ATTLIST>` defaults, undeclared entities, and `xmlns=""`,
+    which leaves an element out here and draws it in the Python); `cargo build/test --features python` cannot link
+    without maturin, so `--all-features` must never be used in CI.
+  - *Provenance.* The fixtures are exact only on macOS arm64 with a given numpy/scipy/scikit-image/Pillow/resvg-py and
+    the Rust `vexel_rs`; the exporter records them in `tests/fixtures/provenance.json` and refuses to run elsewhere
+    without `--force`.

@@ -38,8 +38,8 @@
 //! # Where it differs on purpose
 //!
 //! - [`MAX_SAMPLES`] samples over all the outlines of a drawing is the most this resamples
-//!   ([`CardError::TooLarge`]); the Python has no limit. Memory peaks at about 100 bytes a
-//!   sample of the longest outline.
+//!   ([`CardError::TooLarge`]); the Python has no limit. Memory peaks at about 135 bytes a
+//!   sample of the longest outline (measured).
 //! - A float that JSON cannot hold (an infinite length, a NaN) is `null` in the map, where the
 //!   Python's dict holds the float.
 //! - Errors are values: what the Python raises (`IndexError` on a polygon of no points,

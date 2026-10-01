@@ -12,23 +12,41 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   and the fallback when the extension is missing. `VEXEL_BACKEND=python|rust`
   selects explicitly. **Change one and you change both** — a fix to a stage in
   Python needs the same fix in `vexel-rs/src/`, and `tools/diffcheck.py` is what
-  proves it landed.
+  proves it landed. **And a third step** when the change alters what the engine
+  writes: the core's tests compare that SVG to the byte on macOS arm64, so
+  re-export its fixtures with the Rust `vexel_rs` built from your checkout
+  (`cd backend && .venv/bin/python -m tools.export_core_fixtures --only api,auto`
+  makes the tests pass again; `svg,render,drawing,holes,geometry,scorecard` also
+  hold a trace, as an input, and are worth re-exporting so they stay current) and
+  run `cargo test --workspace --release`.
 - `crates/studi0trace-core/` — the Rust port of everything the Python server does
   around the engine: image intake, the parameters and their JSON schema, presets,
   SVG finishing, the artifact scorecard, Auto, and the `Core` facade that answers
-  the API's five calls with the API's JSON (the desktop app of plan 2 and the web
-  build of plan 3 will call it; neither exists yet; its `README.md` has the facade, the known differences from the Python and
-  the contract a shell must keep). The root `Cargo.toml` is the workspace of it and
-  `backend/vexel-rs`: `cargo test --workspace --release`, Rust ≥ 1.88. Its golden
-  fixtures (`tests/fixtures`) are exported from the Python by
-  `backend/tools/export_core_fixtures.py`, and `tools/diffcheck.py scorecard` holds
-  its scorecard to `imaging/quality.py` over the corpus, through the
-  `studi0trace_core` extension (`--features python`, built apart from `vexel_rs`:
+  the API's five calls with the API's JSON. The desktop app of plan 2 and the web
+  build of plan 3 will call it; neither exists yet. Its `README.md` has the
+  facade, the known differences from the Python and the contract a shell must
+  keep. The root `Cargo.toml` is the workspace of it and `backend/vexel-rs`:
+  `cargo test --workspace --release`, Rust ≥ 1.88. Its golden fixtures
+  (`tests/fixtures`) are exported from the Python by
+  `backend/tools/export_core_fixtures.py` (on macOS arm64 with the Rust
+  `vexel_rs` built; it writes `provenance.json` and refuses to run elsewhere
+  without `--force`), and `tools/diffcheck.py scorecard` holds its scorecard to
+  `imaging/quality.py` over the corpus, through the `studi0trace_core` extension
+  (`--features python`, built apart from `vexel_rs`:
   `maturin develop --release -m ../crates/studi0trace-core/Cargo.toml --features python`
-  from `backend/`). The fixtures were exported on macOS arm64: results that go
-  through libm are compared to the bit there (`tests/common::exact()`) and to a
-  tolerance elsewhere; `STUDI0TRACE_FORCE_TOLERANT=1` runs the tolerant branch on any
-  machine.
+  from `backend/`; never `--all-features`, which cannot link without maturin).
+  The fixtures were exported on macOS arm64: results that go through libm are
+  compared to the bit there (`tests/common::exact()`) and to a tolerance
+  elsewhere; `STUDI0TRACE_FORCE_TOLERANT=1` runs the tolerant branch on any
+  machine. Results that depend on libm but are rounded to f32 or to fixed point
+  before they are compared (the Canny stages in `tests/edges.rs`, whose Gaussian
+  taps are `f64::exp` stored as f32; the Lanczos digests in `tests/resample.rs`
+  and `tests/render.rs`, whose taps are `f64::sin` rounded to 22-bit fixed point;
+  the holes digests) are compared to the bit on every platform and are
+  practically immune: all 25 Gaussian taps in the fixture are correctly rounded,
+  and tiny-skia's one architecture-dependent operation, `recip_fast`, is used only
+  by the colour-burn and colour-dodge blend modes. If one of them ever fails on
+  another platform, that is where to look.
 - `backend/tools/diffcheck.py` — runs a pipeline stage in both implementations
   over the corpus and reports where they disagree. Most stages feed both sides
   one input (`segments` hands the Python's placed arcs to both fitters and
@@ -355,8 +373,10 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   `/vectorize auto=true`) traces the candidates concurrently and keeps the
   cleanest within the fidelity slack of the most faithful.
 - The core is a port, not a fork, and stays wasm-clean: no filesystem, no
-  `Instant` outside `auto::trace_finished`, no threads outside `rayon` in `auto.rs`,
-  no C dependencies. Change the Python scorecard, Auto, intake, presets or API
+  `Instant` outside `auto::trace_finished` (the core's one clock; the engine reads
+  one too, in `vexel-rs/src/timing.rs`'s `Timer::new`, on every trace, which plan 3
+  must make lazy or replace before `wasm32-unknown-unknown` can run it), no threads
+  outside `rayon` in `auto.rs`, no C dependencies. Change the Python scorecard, Auto, intake, presets or API
   and you change the core; `export_core_fixtures` regenerates what its tests hold
   and `diffcheck scorecard` (a default stage) proves the scorecard end to end.
   The preset bundles are `engines/presets.json`, one file both read, and

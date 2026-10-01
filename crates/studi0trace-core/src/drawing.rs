@@ -33,7 +33,10 @@
 //! lookup here asks for an attribute in no namespace (`attr`). Where they still part: expat
 //! applies `<!ATTLIST>` defaults from an internal DTD subset and roxmltree does not; and expat
 //! reads an undeclared entity as nothing when the DOCTYPE names an external DTD, where
-//! roxmltree refuses the document. Neither occurs in engine output or the bench's truths.
+//! roxmltree refuses the document. And an element with `xmlns=""` is in roxmltree's empty
+//! namespace, which matches no SVG element, so it (and what it holds) is left out, where
+//! ElementTree reads it as no namespace at all and draws it (a `<rect xmlns="">` in an SVG
+//! is 1 contour there and 0 here). None of these occurs in engine output or the bench's truths.
 //!
 //! # Where this module differs, on purpose
 //!

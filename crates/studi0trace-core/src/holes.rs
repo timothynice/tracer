@@ -47,10 +47,12 @@
 //!
 //! A render of `w * scale x h * scale` is 4 bytes a sub-pixel, and it is dropped once the short
 //! sub-pixels are found. Labelling then holds 8 bytes a sub-pixel (`label_mask`'s provisional
-//! and final labels) plus one flag: about 1.5 GB for a 40 MP source at 2x, when something is
-//! short at all. The Python holds arrays of the same order. The scorecard renders large
-//! sources at 2x (`quality.assess`), and [`render::MAX_PIXELS`] refuses a render of over 2^28
-//! sub-pixels.
+//! and final labels) plus one flag, which is about 1.5 GB for a 40 MP source at 2x (160 M
+//! sub-pixels) when the holes are small. The worst case is one giant hole, and then what is
+//! built from the labels comes to about 26.6 bytes a sub-pixel (measured): about 4 GB at
+//! 160 M sub-pixels. The Python holds arrays of the same order (about 70 bytes a sub-pixel).
+//! The scorecard renders large sources at 2x (`quality.assess`), and [`render::MAX_PIXELS`]
+//! refuses a render of over 2^28 sub-pixels.
 //!
 //! # The SVG
 //!

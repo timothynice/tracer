@@ -64,14 +64,19 @@
 //!
 //! # Time, and `wasm32`
 //!
-//! A trace is timed with `std::time::Instant` (`auto::trace_finished`, which `elapsed_ms` is
-//! read from), and on `wasm32-unknown-unknown` `Instant::now()` **panics**, which a build with
-//! `panic=abort` (that target's default) turns into a trap that ends the module: `catch_unwind`
-//! cannot catch it where panics abort, so [`Core::vectorize`] cannot report it as an
-//! `engine_crashed` entry.
-//! A web build therefore has to give `trace_finished` a clock (a JavaScript `performance.now()`
-//! behind a parameter or a feature) before it can trace; this is plan 3's, and nothing here
-//! calls a clock anywhere else.
+//! The core's own clock is one: a trace is timed with `std::time::Instant`
+//! (`auto::trace_finished`, which `elapsed_ms` is read from), and nothing else in this crate
+//! reads the time. But **the engine reads a clock too, on every trace**: `vexel_rs`'s
+//! `timing::Timer::new()` calls `Instant::now()` unconditionally (at the top of
+//! `engine::trace_rgba`, and again in the partition, shadow and topology stages), whether or
+//! not `VEXEL_TIMING` is set. On `wasm32-unknown-unknown` `Instant::now()` **panics**, which a
+//! build with `panic=abort` (that target's default) turns into a trap that ends the module:
+//! `catch_unwind` cannot catch it where panics abort, so [`Core::vectorize`] cannot report it
+//! as an `engine_crashed` entry. A web build therefore has to deal with both before it can
+//! trace, and both are plan 3's: give `trace_finished` a clock (a JavaScript
+//! `performance.now()` behind a parameter or a feature), **and** make the engine's `Timer`
+//! lazy (read `Instant::now()` only when `VEXEL_TIMING` is set) or give it a wasm clock. The
+//! engine crate is not changed here.
 //!
 //! # Threads
 //!
@@ -333,6 +338,16 @@ impl Core {
     }
 
     /// A core with the limits of an upload and the cap of the store given.
+    ///
+    /// **Mind `max_pixels`.** Auto scores a candidate by rendering its SVG at 2x the source's
+    /// size (for the holes and for the id map), and [`crate::render::MAX_PIXELS`] (2^28) refuses
+    /// a render of more: so a source of more than 2^26 pixels (about 67.1 MP) cannot be scored,
+    /// and Auto does not fail on it, it degrades: every candidate keeps its SVG without scores
+    /// and the pick is `"scoring was unavailable, so the first preset that traced"`. A plain
+    /// trace (`auto` false) is not scored and is not affected. The default (40 MP) is under it.
+    /// This is not clamped or asserted, because a shell may want the larger cap for plain
+    /// traces; it is documented here and in the crate's README. The engine's cost is the other
+    /// limit, and a much lower one (the README's "What a shell must do").
     pub fn with_limits(limits: Limits, max_cache_bytes: usize) -> Core {
         Core::with_tracer(limits, max_cache_bytes, auto::trace_vexel)
     }
