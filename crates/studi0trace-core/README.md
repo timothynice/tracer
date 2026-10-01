@@ -69,10 +69,12 @@ platform:
   Auto's scores, pick and reason, and an Auto response's `parameters_used`. Everything
   else is compared as a string, key order included: statuses, error bodies, ids,
   sizes, the structure of every response.
-- `tests/auto.rs` does not compare the candidates' SVG bytes (nor the chosen one) or
-  their `stats`. It still compares the pick, the reason, the API's rounded scores
-  and each candidate's full scorecard against the Python's (integers exactly,
-  floats to 1e-9 relative).
+- `tests/auto.rs` scores the SVGs the Python scored (stored beside the fixture) and holds
+  each full scorecard to the Python's (integers exactly, floats to
+  `1e-9 * (1 + |want|)`), and applies the rule to the Python's scores for the pick and
+  the reason, on every platform. The live trace it holds to the response's structure
+  everywhere (four candidates in order, their parameters and keys, all scored); its SVG
+  bytes, `stats`, scores, pick and reason only where `exact()`.
 - `tests/scorecard.rs` holds every float to `1e-9 * (1 + |want|)` (relative above 1,
   absolute below) on every platform, and to the bit as well on macOS arm64 (but for
   CIEDE2000).

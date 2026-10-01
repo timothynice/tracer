@@ -90,6 +90,58 @@ fn every_value_the_engine_reads_is_carried_through() {
     assert_eq!((p.shadows, p.stroke_tolerance, p.overlaps, p.path_precision), (false, 0.5, false, 3));
 }
 
+/// The six booleans of the engine's parameters, in the order they are declared in the table.
+const BOOLS: [&str; 6] = ["gradients", "shape_fitting", "refine", "strokes", "shadows", "overlaps"];
+
+/// What the engine would read for each of [`BOOLS`].
+fn bools_of(p: &vexel_rs::engine::VexelParams) -> [bool; 6] {
+    [p.gradients, p.shape_fitting, p.refine, p.strokes, p.shadows, p.overlaps]
+}
+
+#[test]
+fn each_boolean_goes_to_its_own_field_in_the_engine_and_in_the_dump() {
+    // The test above sets five of the six to false, so a crossed arm in `check` or `dump` (the
+    // value of one field read into another) would pass it. Here one boolean at a time leaves its
+    // default and nothing else moves, and then three patterns in which no two differ alike.
+    let default = bools_of(&vexel_rs::engine::VexelParams::default());
+    let dumped_bools = |dumped: &serde_json::Map<String, Value>| -> [bool; 6] { BOOLS.map(|name| dumped[name].as_bool().unwrap()) };
+    assert_eq!(default, [true, true, false, true, true, true], "the defaults this test is written around moved");
+    for (i, name) in BOOLS.iter().enumerate() {
+        let mut want = default;
+        want[i] = !want[i];
+        let p = params::parse(&json!({ *name: want[i] })).unwrap();
+        assert_eq!(bools_of(&p), want, "only {name} was set");
+        assert_eq!(dumped_bools(&params::dump(&p)), want, "dump of {name}");
+    }
+    for pattern in [[false, true, true, false, true, false], [true, false, true, true, false, false], [false, false, false, true, true, true]] {
+        let values = Value::Object(BOOLS.iter().zip(pattern).map(|(name, on)| (name.to_string(), json!(on))).collect());
+        let p = params::parse(&values).unwrap();
+        assert_eq!(bools_of(&p), pattern, "{values}");
+        assert_eq!(dumped_bools(&params::dump(&p)), pattern, "dump of {values}");
+    }
+}
+
+#[test]
+fn a_dump_of_a_parse_gives_back_every_value_each_in_its_own_field() {
+    // distinct values for every field, twice over, so that no two fields can be swapped unseen
+    for values in [
+        json!({"upsample": "never", "detail": 12.5, "min_region": 20, "gradients": false, "max_stops": 7, "layering": "cutout",
+               "corner_threshold": 90.0, "curve_tolerance": 1.25, "shape_fitting": true, "refine": true, "strokes": false,
+               "shadows": true, "stroke_tolerance": 0.5, "overlaps": false, "path_precision": 3}),
+        json!({"upsample": "always", "detail": 33.25, "min_region": 9, "gradients": true, "max_stops": 5, "layering": "stacked",
+               "corner_threshold": 45.5, "curve_tolerance": 0.75, "shape_fitting": false, "refine": false, "strokes": true,
+               "shadows": false, "stroke_tolerance": 0.2, "overlaps": true, "path_precision": 1}),
+    ] {
+        let p = params::parse(&values).unwrap();
+        let dumped = Value::Object(params::dump(&p));
+        // equal as values, kinds included (an integer field stays an integer, a float a float)
+        assert_eq!(dumped, values);
+        assert_eq!((p.detail, p.corner_threshold, p.curve_tolerance, p.stroke_tolerance), (values["detail"].as_f64().unwrap(), values["corner_threshold"].as_f64().unwrap(), values["curve_tolerance"].as_f64().unwrap(), values["stroke_tolerance"].as_f64().unwrap()));
+        assert_eq!((p.min_region as u64, p.max_stops as u64, p.path_precision as u64), (values["min_region"].as_u64().unwrap(), values["max_stops"].as_u64().unwrap(), values["path_precision"].as_u64().unwrap()));
+        assert_eq!((p.upsample.as_str(), p.layering.as_str()), (values["upsample"].as_str().unwrap(), values["layering"].as_str().unwrap()));
+    }
+}
+
 #[test]
 fn the_bounds_are_inclusive_and_a_wrong_type_is_refused() {
     assert!(params::parse(&json!({"detail": 1.0})).is_ok());

@@ -4,7 +4,8 @@
 //! What is held to Pillow, and how tightly:
 //! - 8-bit PNG, GIF, WebP (lossless and lossy) and BMP, palette, grey and alpha included,
 //!   and 16-bit RGB, RGBA and grey+alpha PNG: every byte the same.
-//! - JPEG: a level or two on average (a different IDCT), and the same rejections.
+//! - JPEG: a fifth of a level on average (a different IDCT; 0.07 measured), the EXIF turn the way
+//!   Pillow turns it (non-uniform pictures, four orientations), and the same rejections.
 //! - 16-bit *grey* PNG: deliberately not Pillow. Pillow clips it to 255 (everything above the
 //!   darkest 0.4% turns white); the intake keeps the high byte, as it does for every 16-bit channel.
 mod common;
@@ -64,32 +65,64 @@ fn animated_files_give_their_first_frame() {
     }
 }
 
+/// Mean and maximum of the absolute differences between two RGBA buffers of one size.
+fn differences(a: &[u8], b: &[u8]) -> (f64, u8) {
+    assert_eq!(a.len(), b.len());
+    let diffs: Vec<u8> = a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).collect();
+    (diffs.iter().map(|d| *d as f64).sum::<f64>() / diffs.len() as f64, *diffs.iter().max().unwrap())
+}
+
 #[test]
-fn jpeg_decodes_to_within_two_levels_of_pillow() {
+fn jpeg_decodes_to_within_a_fifth_of_a_level_of_pillow() {
     let g = common::fixture_json("intake.json");
     let img = decode("intake_jpg.jpg");
     assert_eq!(img.format, "JPEG");
     let sum = checksums(&img).0;
     let want = g["jpg"]["rgba_sum"].as_u64().unwrap();
-    assert!((sum as f64 - want as f64).abs() / (img.rgba.len() as f64) < 2.0);
+    assert!((sum as f64 - want as f64).abs() / (img.rgba.len() as f64) < 0.2);
 
-    // Byte by byte against Pillow's own decode: a different IDCT may round differently, not
-    // by more than a level or two on average.
+    // Byte by byte against Pillow's own decode: a different IDCT rounds some samples the other
+    // way. Measured on this 96 x 96 quality-90 picture: a mean of 0.07 of a level and a
+    // largest difference of 3; the bounds leave room for the decoder's next release and no more.
     let pillow = common::fixture_bytes("intake_jpg.rgba");
-    assert_eq!(pillow.len(), img.rgba.len());
-    let diffs: Vec<u8> = img.rgba.iter().zip(&pillow).map(|(a, b)| a.abs_diff(*b)).collect();
-    let mean = diffs.iter().map(|d| *d as f64).sum::<f64>() / diffs.len() as f64;
-    let max = *diffs.iter().max().unwrap();
+    let (mean, max) = differences(&img.rgba, &pillow);
     eprintln!("jpeg vs Pillow: mean |diff| {mean:.4}, max {max}");
-    assert!(mean < 2.0, "mean {mean}");
+    assert!(mean < 0.2, "mean {mean}");
+    assert!(max <= 4, "max {max}");
 }
 
 #[test]
-fn exif_orientation_is_applied() {
+fn exif_orientation_is_applied_the_way_pillow_applies_it() {
+    // A picture with a white 8x8 marker at its stored top-left and ramps of red and green across it,
+    // saved with orientations 6 and 8 (the rotations), 2 (a mirror) and 5 (the transpose). A uniform
+    // picture comes out the same however it is turned; this one tells every turn from every other
+    // by its size, by where the marker went (exactly: the box of the pixels whose blue is high) and
+    // by the whole picture against what Pillow's `exif_transpose` made of the same file.
     let g = common::fixture_json("intake.json");
-    let img = decode("intake_exif6.jpg");
-    assert_eq!((img.width, img.height), (20, 40));
-    assert_eq!((img.width as u64, img.height as u64), (g["exif6"]["width"].as_u64().unwrap(), g["exif6"]["height"].as_u64().unwrap()));
+    let cases = g["exif"].as_object().unwrap();
+    assert_eq!(cases.keys().collect::<Vec<_>>(), ["2", "5", "6", "8"]);
+    let mut boxes = std::collections::BTreeSet::new();
+    for (orientation, case) in cases {
+        let img = decode(case["file"].as_str().unwrap());
+        let (w, h) = (case["width"].as_u64().unwrap() as u32, case["height"].as_u64().unwrap() as u32);
+        assert_eq!((img.width, img.height), (w, h), "orientation {orientation}");
+        let (mut x0, mut y0, mut x1, mut y1, mut n) = (u32::MAX, u32::MAX, 0, 0, 0);
+        for (i, px) in img.rgba.chunks_exact(4).enumerate() {
+            if px[2] > 150 {
+                let (x, y) = (i as u32 % w, i as u32 / w);
+                (x0, y0, x1, y1, n) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y), n + 1);
+            }
+        }
+        let want: Vec<u64> = case["box"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+        assert_eq!(([x0, y0, x1, y1].map(u64::from).to_vec(), n), (want, 64), "orientation {orientation}: where the marker went ({})", case["corner"]);
+        boxes.insert((w, h, x0, y0));
+        let pillow = common::fixture_bytes(case["rgba_file"].as_str().unwrap());
+        let (mean, max) = differences(&img.rgba, &pillow);
+        eprintln!("exif {orientation}: vs Pillow mean |diff| {mean:.4}, max {max}");
+        assert!(mean < 0.05 && max <= 4, "orientation {orientation}: the picture is not Pillow's turned picture: mean {mean}, max {max}");
+    }
+    // four different turns, four different results
+    assert_eq!(boxes.len(), 4, "{boxes:?}");
 }
 
 #[test]

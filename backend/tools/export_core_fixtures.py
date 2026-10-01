@@ -137,13 +137,50 @@ def _intake() -> None:
         assert second != load_upload(data, max_bytes=big, max_pixels=big).image.tobytes(), f"{fmt}: the frames must differ for the test to pin the first"
         cases[f"anim_{ext}"] = first
 
-    # EXIF orientation 6 (rotate 90° clockwise to display): a 40x20 JPEG that must come out 20x40
-    exif = Image.Exif()
-    exif[0x0112] = 6
-    data = save(Image.new("RGB", (40, 20), (200, 30, 30)), "JPEG", "intake_exif6.jpg", exif=exif.tobytes())
-    out = load_upload(data, max_bytes=big, max_pixels=big)
-    cases["exif6"] = {"file": "intake_exif6.jpg", "width": out.width, "height": out.height}
-    assert (out.width, out.height) == (20, 40)
+    # EXIF orientation. The picture is NOT uniform (a colour uniform picture comes out the same however it
+    # is turned, so a core that rotated the wrong way would pass): 40x20, red ramping left to right, green
+    # ramping top to bottom, and a white 8x8 marker on one JPEG block at the top-left of the stored
+    # picture. Written 4:4:4 at quality 95 so the marker is one flat block and its edge is exact. Orientations 6
+    # and 8 are the two rotations, 2 a mirror and 5 the transpose (the mirror that also swaps the sides):
+    # each file is expected to come out as Pillow's `ImageOps.exif_transpose` gives it, which is stored as
+    # raw RGBA beside it together with where the marker went.
+    def exif_picture() -> Image.Image:
+        pic = np.zeros((20, 40, 3), np.uint8)
+        pic[:, :, 0] = np.linspace(40, 215, 40).astype(np.uint8)[None, :]
+        pic[:, :, 1] = np.linspace(40, 215, 20).astype(np.uint8)[:, None]
+        pic[:, :, 2] = 40
+        pic[:8, :8] = 255
+        return Image.fromarray(pic, "RGB")
+
+    def marker_of(rgba: bytes, width: int, height: int) -> dict:
+        """The bounding box [x0, y0, x1, y1] (inclusive) of the pixels whose blue is high, the marker's alone, and its size."""
+        a = np.frombuffer(rgba, np.uint8).reshape(height, width, 4)
+        ys, xs = np.nonzero(a[:, :, 2] > 150)
+        box = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
+        count = int(len(xs))
+        assert count == 64 and (box[2] - box[0], box[3] - box[1]) == (7, 7), f"the marker is not one 8x8 block: {box} {count}"
+        corner = ("t" if box[1] == 0 else "b" if box[3] == height - 1 else "?") + ("l" if box[0] == 0 else "r" if box[2] == width - 1 else "?")
+        assert "?" not in corner, f"the marker is not in a corner: {box}"
+        return {"box": box, "corner": corner}
+
+    cases["exif"] = {}
+    # (orientation, size after, the corner the stored top-left marker is shown in)
+    for orientation, size, corner in ((6, (20, 40), "tr"), (8, (20, 40), "bl"), (2, (40, 20), "tr"), (5, (20, 40), "tl")):
+        exif = Image.Exif()
+        exif[0x0112] = orientation
+        file = f"intake_exif{orientation}.jpg"
+        data = save(exif_picture(), "JPEG", file, quality=95, subsampling=0, exif=exif.tobytes())
+        out = load_upload(data, max_bytes=big, max_pixels=big)
+        assert (out.width, out.height) == size, (orientation, out.width, out.height)
+        rgba = out.image.tobytes()
+        (OUT / f"intake_exif{orientation}.rgba").write_bytes(rgba)
+        marker = marker_of(rgba, out.width, out.height)
+        assert marker["corner"] == corner, (orientation, marker)
+        # and the same picture with no orientation tag is the stored one, so the tags above did something
+        cases["exif"][str(orientation)] = {"file": file, "rgba_file": f"intake_exif{orientation}.rgba", "width": out.width, "height": out.height, **marker}
+    untagged = io.BytesIO()
+    exif_picture().save(untagged, "JPEG", quality=95, subsampling=0)
+    assert marker_of(load_upload(untagged.getvalue(), max_bytes=big, max_pixels=big).image.tobytes(), 40, 20)["corner"] == "tl"
 
     # 16-bit-per-channel PNGs, built by hand (Pillow cannot write 16-bit RGB or grey+alpha),
     # 16x16, opening with the samples where rounding and scaling rules part company: 0x0182

@@ -168,10 +168,59 @@
    "message": "Unsupported image format: TIFF"
   }
  },
- "exif6": {
-  "file": "intake_exif6.jpg",
-  "height": 40,
-  "width": 20
+ "exif": {
+  "2": {
+   "box": [
+    32,
+    0,
+    39,
+    7
+   ],
+   "corner": "tr",
+   "file": "intake_exif2.jpg",
+   "height": 20,
+   "rgba_file": "intake_exif2.rgba",
+   "width": 40
+  },
+  "5": {
+   "box": [
+    0,
+    0,
+    7,
+    7
+   ],
+   "corner": "tl",
+   "file": "intake_exif5.jpg",
+   "height": 40,
+   "rgba_file": "intake_exif5.rgba",
+   "width": 20
+  },
+  "6": {
+   "box": [
+    12,
+    0,
+    19,
+    7
+   ],
+   "corner": "tr",
+   "file": "intake_exif6.jpg",
+   "height": 40,
+   "rgba_file": "intake_exif6.rgba",
+   "width": 20
+  },
+  "8": {
+   "box": [
+    0,
+    32,
+    7,
+    39
+   ],
+   "corner": "bl",
+   "file": "intake_exif8.jpg",
+   "height": 40,
+   "rgba_file": "intake_exif8.rgba",
+   "width": 20
+  }
  },
  "gif": {
   "file": "intake_gif.gif",

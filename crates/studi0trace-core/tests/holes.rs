@@ -221,9 +221,9 @@ fn both_alpha_thresholds_are_where_the_python_has_them() {
 }
 
 /// The worst case the scorecard meets: 640 x 640 at 4x with every sub-pixel a hole, one cluster of
-/// 6.5 million. Slow in a debug build, so it runs on request: `cargo test --release -- --ignored`.
+/// 6.5 million. It holds real assertions (the cluster, its centre, a hundred small holes beside
+/// it) and costs 0.25 s in a release build and about 3 s in a debug one, so it always runs.
 #[test]
-#[ignore = "timing; run with --release -- --ignored"]
 fn a_640_square_at_4x_with_nothing_drawn() {
     let (h, w, scale) = (640usize, 640usize, 4u32);
     let rgba = vec![255u8; h * w * 4];

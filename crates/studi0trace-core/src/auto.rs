@@ -394,6 +394,16 @@ impl std::error::Error for AutoError {}
 /// to make a candidate panic or answer with something that does not render.
 pub type Tracer<'a> = dyn Fn(&Preset, &Image, &VexelParams) -> String + Sync + 'a;
 
+/// What scores a candidate's SVG against the source's [`Reference`]. The real one is
+/// [`scorecard::assess`] at its default hole scale; a test replaces it to make the scoring of
+/// one candidate panic, which the renderer can do on an input the engine never writes.
+#[doc(hidden)]
+pub type Scorer<'a> = dyn Fn(&str, &Reference) -> Result<Map<String, Value>, scorecard::ScoreError> + Sync + 'a;
+
+fn assess_default(svg: &str, reference: &Reference) -> Result<Map<String, Value>, scorecard::ScoreError> {
+    scorecard::assess(svg, reference, None)
+}
+
 /// Vexel's pipeline on an image: the SVG as the engine writes it, before the viewBox is set.
 pub(crate) fn trace_vexel(img: &Image, p: &VexelParams) -> String {
     vexel_rs::engine::trace_rgba(&img.rgba, img.height as usize, img.width as usize, p)
@@ -467,9 +477,9 @@ fn trace_one(img: &Image, preset: &Preset, trace: &Tracer<'_>) -> Candidate {
 
 /// Score a candidate that traced, if there is a reference to score it against. An SVG that will
 /// not render is still a trace, so it stays, unscored.
-fn score_one(mut c: Candidate, reference: Option<&Reference>) -> (Candidate, Option<Scored>) {
+fn score_one(mut c: Candidate, reference: Option<&Reference>, score: &Scorer<'_>) -> (Candidate, Option<Scored>) {
     let card = match (c.svg.as_deref(), reference) {
-        (Some(svg), Some(r)) => match guard(|| scorecard::assess(svg, r, None)) {
+        (Some(svg), Some(r)) => match guard(|| score(svg, r)) {
             Ok(Ok(card)) => card,
             _ => return (c, None),
         },
@@ -521,6 +531,13 @@ fn on_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 /// only without candidates (the route's `auto_unavailable`). The image is taken as it is: one
 /// whose pixels do not make a reference loses the scoring of every candidate, not their traces.
 pub fn run_with(img: &Image, candidates: &[Preset], trace: &Tracer<'_>) -> Result<AutoOutcome, AutoError> {
+    run_with_scorer(img, candidates, trace, &assess_default)
+}
+
+/// [`run_with`] with the scoring given as well: how a panic in the renderer, which the engine's own
+/// SVGs cannot cause, is tested.
+#[doc(hidden)]
+pub fn run_with_scorer(img: &Image, candidates: &[Preset], trace: &Tracer<'_>, score: &Scorer<'_>) -> Result<AutoOutcome, AutoError> {
     if candidates.is_empty() {
         return Err(AutoError { code: "auto_unavailable", message: "Auto has no candidates for the selected engines".into() });
     }
@@ -533,7 +550,7 @@ pub fn run_with(img: &Image, candidates: &[Preset], trace: &Tracer<'_>) -> Resul
         // no reference (a source with no pixels, or a panic making it): no scores, still traces
         let reference = reference.ok().and_then(Result::ok);
         // `into_par_iter().collect()` keeps the order of the list, however the threads finish
-        traced.into_par_iter().map(|c| score_one(c, reference.as_ref())).collect::<Vec<_>>()
+        traced.into_par_iter().map(|c| score_one(c, reference.as_ref(), score)).collect::<Vec<_>>()
     });
     Ok(decide(done))
 }

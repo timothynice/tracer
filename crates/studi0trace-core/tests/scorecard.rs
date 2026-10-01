@@ -362,6 +362,48 @@ fn a_reference_refuses_what_numpy_does_not_hold() {
 }
 
 #[test]
+fn the_opaque_mask_of_the_options_replaces_the_one_computed_from_the_source() {
+    // The cases of the fixture hand `scorecard` the Reference's own mask, which is what it computes
+    // anyway, so they cannot tell a mask that is used from one that is ignored. Here a source that is
+    // opaque everywhere is traced with a window cut out of the middle, and the holes are counted under
+    // three masks: none (computed from the source), one that leaves the window out, one of the window.
+    let (h, w) = (12usize, 12usize);
+    let src = vec![255u8; h * w * 4];
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path fill-rule="evenodd" fill="#fff" d="M0 0h12v12h-12zM4 4h4v4h-4z"/></svg>"##;
+    let hole_subpx = |mask: Option<&[bool]>| {
+        let card = scorecard::scorecard(svg, &src, h, w, &ScoreOptions { opaque: mask, ..ScoreOptions::default() }).unwrap();
+        card["hole_subpx"].as_u64().unwrap()
+    };
+    let window = |x: usize, y: usize| (4..8).contains(&x) && (4..8).contains(&y);
+    let computed = hole_subpx(None);
+    assert_eq!(computed, 4 * 4 * 16, "the window is 4 x 4 pixels at 4x");
+    let beside: Vec<bool> = (0..h * w).map(|i| !window(i % w, i / w) && i % w < 3).collect();
+    assert_eq!(hole_subpx(Some(&beside)), 0, "a mask that does not cover the window sees no hole");
+    let only: Vec<bool> = (0..h * w).map(|i| window(i % w, i / w)).collect();
+    assert_eq!(hole_subpx(Some(&only)), computed, "a mask of the window sees all of it");
+    let half: Vec<bool> = (0..h * w).map(|i| window(i % w, i / w) && i % w < 6).collect();
+    assert_eq!(hole_subpx(Some(&half)), 2 * 4 * 16, "and half a mask, half of it");
+    // `assess` forwards the Reference's mask the same way
+    let r = Reference::new(&src, h, w).unwrap();
+    assert_eq!(scorecard::assess(svg, &r, Some(4)).unwrap()["hole_subpx"].as_u64().unwrap(), computed);
+}
+
+#[test]
+fn a_size_whose_bytes_overflow_is_refused_by_scorecard_and_holes_not_wrapped_into_a_panic() {
+    // 2^31 x 2^31 pixels is 2^64 bytes: `pixels * 4` wrapped to the 0 bytes of the slice that was given
+    if usize::BITS == 64 {
+        let side = 1usize << 31;
+        assert!(matches!(scorecard::scorecard("<svg/>", &[], side, side, &ScoreOptions::default()), Err(ScoreError::Source(_))));
+        assert!(matches!(scorecard::scorecard("<svg/>", &[], side, 1usize << 33, &ScoreOptions::default()), Err(ScoreError::Source(_))));
+        let e = studi0trace_core::holes::holes("<svg/>", &[], side, side, 2, None).unwrap_err();
+        assert!(e.contains("too large"), "{e}");
+    }
+    // a source of no pixels is still the Python's: zeros, whatever the SVG
+    let card = scorecard::scorecard("<svg/>", &[], 0, 0, &ScoreOptions::default());
+    assert!(!matches!(card, Err(ScoreError::Source(ref m)) if m.contains("too large")), "{card:?}");
+}
+
+#[test]
 fn a_trace_that_is_the_source_is_perfect() {
     let data = common::fixture_json("scorecard.json");
     let case = data["cases"].as_array().unwrap().iter().find(|c| c["name"] == "auto_balanced").unwrap();

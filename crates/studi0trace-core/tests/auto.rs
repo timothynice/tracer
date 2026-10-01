@@ -2,11 +2,14 @@
 //! the seven tests of `backend/tests/test_auto.py` first, then the same rule over 300 random
 //! sets of candidates the Python answered (`auto.json`), Python's `round` over a thousand
 //! numbers, `issues` and `summary` over their thresholds, and the whole of `auto=true` on real
-//! images: the SVG of every candidate to the byte, its scores, the pick and the reason, each as
-//! the route sends them. The SVG bytes and the counts read off them are compared where
-//! `common::exact` says the engine's floats are the fixtures' (macOS arm64) and not elsewhere,
-//! or under `STUDI0TRACE_FORCE_TOLERANT`; the pick, the reason and the scores always are. The
-//! failure paths run through [`auto::run_with`], whose tracer a test can replace.
+//! images. That last is two halves. The Python's own SVGs are scored here and held to its cards,
+//! and the rule is applied to its scores, for the pick and the reason: on every platform. The
+//! live trace is held to the structure of the route's response on every platform, and, only
+//! where `common::exact` says the engine's floats are the fixtures' (macOS arm64, with
+//! `STUDI0TRACE_FORCE_TOLERANT` unset), to the byte: SVG, counts, scores, pick, reason. One
+//! different byte from the engine on another libm moves a candidate's scores far more than a
+//! tolerance, so none of those is asked of it there. The failure paths run through
+//! [`auto::run_with`], whose tracer a test can replace.
 mod common;
 
 use serde_json::{json, Map, Value};
@@ -15,6 +18,7 @@ use std::time::{Duration, Instant};
 use studi0trace_core::auto::{self, AutoError, AutoOutcome, Scored, DE_SHARE, DE_SLACK, EDGE_SLACK};
 use studi0trace_core::intake::{self, Image};
 use studi0trace_core::presets::{self, Preset};
+use studi0trace_core::scorecard::{self, Reference};
 use vexel_rs::engine::VexelParams;
 
 // ---------------------------------------------------------------- the unit tests of test_auto.py
@@ -305,6 +309,37 @@ fn a_candidate_that_panics_is_reported_and_the_others_still_score() {
 }
 
 #[test]
+fn a_candidate_whose_scoring_panics_keeps_its_svg_unscored_and_the_others_still_score() {
+    // `score_one` guards `assess`: a panic in the renderer must cost that candidate its scores,
+    // not the request (the route's `try: assess ... except Exception: pass`). The renderer can
+    // panic (resvg's blur overflows on a standard deviation of 1e9 in a debug build) on an SVG
+    // the engine never writes, and no input does it in a release build too, so the scorer is the
+    // test's: it panics on the logo candidate's SVG and scores the rest as `assess` does.
+    let tracer = |p: &Preset, _: &Image, _: &VexelParams| -> String {
+        if p.id == "logo" { GOOD.replacen("<rect", "<desc>poison</desc><rect", 1) } else { GOOD.to_string() }
+    };
+    let scorer = |svg: &str, r: &Reference| {
+        if svg.contains("poison") {
+            panic!("the renderer gave up");
+        }
+        scorecard::assess(svg, r, None)
+    };
+    let o = auto::run_with_scorer(&tiny(), &candidates(), &tracer, &scorer).unwrap();
+    let logo = find(&o, "logo");
+    assert!(logo.svg.as_deref().is_some_and(|s| s.contains("poison")), "the trace is kept: {:?}", logo.svg);
+    assert!(logo.scores.is_none() && logo.card.is_none(), "a candidate whose scoring panicked has no scores");
+    assert!(logo.error.is_none(), "and no error, it traced: {:?}", logo.error);
+    assert!(logo.stats.is_some() && logo.elapsed_ms.is_some() && logo.parameters.is_some());
+    for other in ["balanced", "detailed", "dense"] {
+        let c = find(&o, other);
+        assert!(c.scores.is_some() && c.error.is_none(), "{other}");
+    }
+    // the pick is made among those that scored (the logo, equal to the others, would have been second)
+    assert_eq!(o.pick.as_deref(), Some("balanced"));
+    assert!(o.result_error().is_none());
+}
+
+#[test]
 fn the_pick_is_never_a_candidate_that_failed_however_clean_it_would_have_been() {
     // the dense candidate is the cleanest (by far) when it is the only one scored; then only it can be picked
     let tracer = |p: &Preset, _: &Image, _: &VexelParams| -> String {
@@ -470,26 +505,44 @@ fn the_order_holds_when_the_slowest_to_score_is_the_first_too() {
 
 #[test]
 fn the_candidates_trace_at_once() {
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    // The property: the candidates are traced concurrently, not one after another. It is read off
+    // the pool Auto runs on (`rayon::current_num_threads()` inside a tracer is that pool's size:
+    // the cores, or `RAYON_NUM_THREADS`), not off the machine, and it asserts a count of
+    // overlapping candidates and never a time: this pool is shared with the slow tests of this
+    // binary, which can hold every worker for as long as they like. A tracer waits for `want`
+    // candidates to have arrived, bounded by a deadline so generous that it only ends a
+    // failing run, and records whether it saw them.
+    const DEADLINE: Duration = Duration::from_secs(120);
+    let threads = AtomicUsize::new(0);
     let arrived = AtomicUsize::new(0);
     let met = AtomicUsize::new(0);
+    let started = Instant::now();
     let tracer = |_: &Preset, _: &Image, _: &VexelParams| -> String {
+        let n = rayon::current_num_threads();
+        threads.store(n, Ordering::SeqCst);
+        // as many as the pool can run at once, of the four; a pool of one has nothing to overlap
+        let want = n.min(4);
         arrived.fetch_add(1, Ordering::SeqCst);
-        let until = Instant::now() + Duration::from_secs(5);
-        while arrived.load(Ordering::SeqCst) < 4 && Instant::now() < until {
-            std::thread::yield_now();
-        }
-        if arrived.load(Ordering::SeqCst) == 4 {
-            met.fetch_add(1, Ordering::SeqCst);
+        if want >= 2 {
+            while arrived.load(Ordering::SeqCst) < want && started.elapsed() < DEADLINE {
+                std::thread::yield_now();
+            }
+            if arrived.load(Ordering::SeqCst) >= want {
+                met.fetch_add(1, Ordering::SeqCst);
+            }
         }
         GOOD.to_string()
     };
-    let started = Instant::now();
     auto::run_with(&tiny(), &candidates(), &tracer).unwrap();
-    if cores >= 4 {
-        assert_eq!(met.load(Ordering::SeqCst), 4, "the four candidates did not overlap");
-        assert!(started.elapsed() < Duration::from_secs(4));
+    let n = threads.load(Ordering::SeqCst);
+    if n < 2 {
+        eprintln!("the_candidates_trace_at_once: Auto's pool has {n} thread(s) (RAYON_NUM_THREADS?); nothing can overlap, so nothing is asserted");
+        return;
     }
+    let want = n.min(4);
+    // every candidate that started saw `want` of them there at once: the first `want` waited for each other
+    assert!(met.load(Ordering::SeqCst) >= want, "{want} of the 4 candidates should overlap on a pool of {n}: only {} did", met.load(Ordering::SeqCst));
+    assert_eq!(arrived.load(Ordering::SeqCst), 4);
 }
 
 /// About `frames * 48 KiB` of stack, held while it recurses.
@@ -594,90 +647,132 @@ fn same_card(name: &str, got: &Map<String, Value>, want: &Value) {
     }
 }
 
+/// The numbers the Python's rule chose among: the four a candidate's card gives it.
+fn python_scored(id: &str, card: &Value) -> Scored {
+    Scored { id: id.into(), delta_e: fl(&card["delta_e_mean"]), edge_f1: fl(&card["edge_f1"]), artifact_index: fl(&card["artifact_index"]), elements: card["elements"].as_u64().unwrap() }
+}
+
+/// One image through `auto=true`, in two halves.
+///
+/// What does not depend on the engine's floats runs everywhere: each candidate's stored SVG (the
+/// one the Python scored) is scored here against the source and held to the Python's card, and
+/// the rule is applied to the Python's own scores, for the pick and the reason. Then what the
+/// live trace gave: its structure everywhere (four candidates, in order, with the parameters and
+/// the keys the route sends, scored, none failed), and, where [`common::exact`] says the engine's
+/// floats are the fixtures' (macOS arm64) and not otherwise, its SVG to the byte, its counts, its
+/// scores, its pick and its reason. An engine that writes one different byte on another libm
+/// moves every score of that candidate far more than a tolerance, so none of those is asked of it
+/// there.
 fn check_image(entry: &Value) {
     let name = entry["name"].as_str().unwrap();
     let exact = common::exact();
     let img = image_of(entry);
+    let candidates = entry["candidates"].as_array().unwrap();
+
+    // ---- the Python's own SVGs and numbers, on every platform
+    let reference = Reference::new(&img.rgba, img.height as usize, img.width as usize).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let mut scored = Vec::new();
+    for want in candidates {
+        let id = want["preset"].as_str().unwrap();
+        let at = format!("{name} {id}");
+        let stored = String::from_utf8(common::fixture_bytes(want["svg_file"].as_str().unwrap())).unwrap();
+        let python = &entry["scored"][id];
+        let card = scorecard::assess(&stored, &reference, None).unwrap_or_else(|e| panic!("{at}: {e}"));
+        same_card(&at, &card, &python["card"]);
+        // `summary` of the Python's own card is the Python's summary
+        assert_eq!(auto::summary(python["card"].as_object().unwrap()), python["summary"], "{at}: summary of the stored card");
+        if exact {
+            assert_eq!(auto::summary(&card), python["summary"], "{at}: summary of the card scored here");
+        }
+        scored.push(python_scored(id, &python["card"]));
+    }
+    let (pick, why) = auto::choose(&scored);
+    assert_eq!((pick.map(|i| scored[i].id.as_str()), why), (entry["pick"].as_str(), entry["reason"].as_str().unwrap()), "{name}: the rule over the Python's scores");
+
+    // ---- the live trace
     let started = Instant::now();
     let o = auto::run(&img).unwrap_or_else(|e| panic!("{name}: {e}"));
     eprintln!("{name:<22} {:>4}x{:<4} auto::run {:>9.1?}  -> {} ({})", img.width, img.height, started.elapsed(), o.pick.as_deref().unwrap_or("-"), o.reason);
-
-    assert_eq!((o.pick.as_deref(), o.reason.as_str()), (entry["pick"].as_str(), entry["reason"].as_str().unwrap()), "{name}: the pick");
     assert_eq!(o.candidates.len(), 4, "{name}");
     let v = serde_json::to_value(&o).unwrap();
     assert_eq!(v["engine"], entry["engine"], "{name}");
-    for (c, want) in o.candidates.iter().zip(entry["candidates"].as_array().unwrap()) {
+    if exact {
+        assert_eq!((o.pick.as_deref(), o.reason.as_str()), (entry["pick"].as_str(), entry["reason"].as_str().unwrap()), "{name}: the pick");
+    } else {
+        assert!(o.pick.as_deref().is_some_and(|p| candidates.iter().any(|c| c["preset"] == p)), "{name}: a pick among the candidates, not {:?}", o.pick);
+        assert!(!o.reason.is_empty(), "{name}");
+    }
+    for (c, want) in o.candidates.iter().zip(candidates) {
         let id = c.preset.as_str();
         let at = format!("{name} {id}");
         assert_eq!((id, c.label.as_str()), (want["preset"].as_str().unwrap(), want["label"].as_str().unwrap()), "{name}");
-        // the SVG the Python route sends, to the byte, and the counts read off it: the engine's
-        // floats decide both, so off the fixtures' platform (`common::exact`) they are not compared
-        // (`tests/api.rs` blanks the same two); the scores and the pick below are, on every platform
-        let svg_file = want["svg_file"].as_str().unwrap();
+        assert!(c.error.is_none() && c.elapsed_ms.unwrap() > 0.0, "{at}");
+        assert_eq!(Value::Object(c.parameters.clone().unwrap()), want["parameters"], "{at}: parameters");
+        assert!(c.scores.is_some() && c.card.is_some(), "{at}: the trace was not scored");
+        assert!(c.svg.as_deref().is_some_and(|s| s.starts_with("<svg")), "{at}: no SVG");
         if exact {
+            // the SVG the Python route sends, to the byte, and what is read off it
+            let svg_file = want["svg_file"].as_str().unwrap();
             let stored = String::from_utf8(common::fixture_bytes(svg_file)).unwrap();
             if c.svg.as_deref() != Some(stored.as_str()) {
                 let got = c.svg.as_deref().unwrap_or("");
                 let at_byte = got.bytes().zip(stored.bytes()).position(|(a, b)| a != b).unwrap_or(got.len().min(stored.len()));
                 panic!("{at}: the SVG differs from {svg_file} ({} bytes vs {}) from byte {at_byte}; {}", got.len(), stored.len(), common::REEXPORT);
             }
-        } else {
-            assert!(c.svg.as_deref().is_some_and(|s| s.starts_with("<svg")), "{at}: no SVG");
-        }
-        assert!(c.error.is_none() && c.elapsed_ms.unwrap() > 0.0, "{at}");
-        // everything else of the candidate, as the API writes it
-        if exact {
             assert_eq!(serde_json::to_value(c.stats.unwrap()).unwrap(), want["stats"], "{at}: stats");
-        }
-        assert_eq!(Value::Object(c.parameters.clone().unwrap()), want["parameters"], "{at}: parameters");
-        assert_eq!(c.scores.as_ref().unwrap(), &want["scores"], "{at}: scores");
-        let python = &entry["scored"][id];
-        assert_eq!(c.scores.as_ref().unwrap(), &python["summary"], "{at}: the Python's summary of its own card");
-        same_card(&at, c.card.as_ref().unwrap(), &python["card"]);
-        // `summary` of the Python's own card is the Python's summary
-        let from_python = auto::summary(python["card"].as_object().unwrap());
-        assert_eq!(from_python, python["summary"], "{at}: summary of the stored card");
-    }
-    // the whole response, but for the SVGs and the times (checked above), and off the fixtures'
-    // platform the counts read off the SVG
-    let mut shaped = v.clone();
-    for c in shaped["candidates"].as_array_mut().unwrap() {
-        let c = c.as_object_mut().unwrap();
-        c.remove("svg");
-        c.remove("elapsed_ms");
-        if !exact {
-            c.remove("stats");
+            assert_eq!(c.scores.as_ref().unwrap(), &want["scores"], "{at}: scores");
+            let python = &entry["scored"][id];
+            assert_eq!(c.scores.as_ref().unwrap(), &python["summary"], "{at}: the Python's summary of its own card");
+            same_card(&at, c.card.as_ref().unwrap(), &python["card"]);
         }
     }
+    // the whole response: the keys and their order always, and, but for the SVGs and the times
+    // (checked above), everything else where the live trace is the Python's
     let order = &common::fixture_json("auto.json")["key_order"];
     let keys = |v: &Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
     let want_keys = |n: &str| -> Vec<String> { order[n].as_array().unwrap().iter().map(|k| k.as_str().unwrap().to_string()).collect() };
     assert_eq!(keys(&v), want_keys("AutoResult"), "{name}");
     assert_eq!(keys(&v["candidates"][0]), want_keys("AutoCandidate"), "{name}");
     assert_eq!(keys(&v["candidates"][0]["scores"]), want_keys("CandidateScores"), "{name}");
+    let mut shaped = v.clone();
     let mut want = json!({"engine": entry["engine"], "pick": entry["pick"], "reason": entry["reason"]});
     want["candidates"] = Value::Array(
-        entry["candidates"]
-            .as_array()
-            .unwrap()
+        candidates
             .iter()
             .map(|c| {
                 let mut c = c.as_object().unwrap().clone();
                 c.remove("svg_file");
-                if !exact {
-                    c.remove("stats");
-                }
                 Value::Object(c)
             })
             .collect(),
     );
+    for side in [&mut shaped, &mut want] {
+        if !exact {
+            // what the engine's floats decide: its SVG and counts, the scores read off them, the pick
+            let top = side.as_object_mut().unwrap();
+            top.remove("pick");
+            top.remove("reason");
+        }
+        for c in side["candidates"].as_array_mut().unwrap() {
+            let c = c.as_object_mut().unwrap();
+            c.remove("svg");
+            c.remove("elapsed_ms");
+            if !exact {
+                c.remove("stats");
+                c.remove("scores");
+            }
+        }
+    }
     assert_eq!(shaped, want, "{name}");
     // the pick is also the engine's own result
     let chosen = o.chosen().unwrap();
     if exact {
         assert_eq!(chosen.svg.as_deref(), Some(String::from_utf8(common::fixture_bytes(entry["chosen_svg_file"].as_str().unwrap())).unwrap().as_str()), "{name}");
+        assert_eq!(Value::Object(chosen.parameters.clone().unwrap()), entry["parameters_used"], "{name}");
+    } else {
+        let of_pick = candidates.iter().find(|c| c["preset"] == chosen.preset.as_str()).unwrap();
+        assert_eq!(Value::Object(chosen.parameters.clone().unwrap()), of_pick["parameters"], "{name}");
     }
-    assert_eq!(Value::Object(chosen.parameters.clone().unwrap()), entry["parameters_used"], "{name}");
 }
 
 #[test]

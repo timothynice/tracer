@@ -144,13 +144,18 @@ impl fmt::Debug for Reference {
     }
 }
 
-/// The pixel count of a `h x w` RGBA image, if it has any and fits a `usize` and a `u32` side.
-fn pixels_of(h: usize, w: usize) -> Result<usize, ScoreError> {
+/// The pixel count of a `h x w` RGBA image, which may be none, if its sides fit a `u32` and its
+/// bytes (4 a pixel) a `usize`: the check that comes before any `pixels * 4`.
+fn checked_pixels(h: usize, w: usize) -> Result<usize, ScoreError> {
     let sides = u32::try_from(h).is_ok() && u32::try_from(w).is_ok();
-    match h.checked_mul(w).filter(|p| sides && p.checked_mul(4).is_some()) {
-        Some(0) => Err(ScoreError::Source(format!("a {w}x{h} image has no pixels"))),
-        Some(p) => Ok(p),
-        None => Err(ScoreError::Source(format!("a {w}x{h} image is too large"))),
+    h.checked_mul(w).filter(|p| sides && p.checked_mul(4).is_some()).ok_or_else(|| ScoreError::Source(format!("a {w}x{h} image is too large")))
+}
+
+/// [`checked_pixels`], and at least one: a reference of no pixels cannot be built.
+fn pixels_of(h: usize, w: usize) -> Result<usize, ScoreError> {
+    match checked_pixels(h, w)? {
+        0 => Err(ScoreError::Source(format!("a {w}x{h} image has no pixels"))),
+        p => Ok(p),
     }
 }
 
@@ -230,10 +235,10 @@ fn check_nesting(svg: &str) -> Result<(), ScoreError> {
 }
 
 fn card_of(svg: &str, src_rgba: &[u8], h: usize, w: usize, opts: &ScoreOptions) -> Result<Map<String, Value>, ScoreError> {
-    let size = match (u32::try_from(w), u32::try_from(h)) {
-        (Ok(w), Ok(h)) => (w, h),
-        _ => return Err(ScoreError::Source(format!("a {w}x{h} image is too large"))),
-    };
+    // before `holes` multiplies by 4: a size whose bytes do not fit is refused, not wrapped (a
+    // source of no pixels is not: `holes` answers it with zeros, as the Python's does)
+    checked_pixels(h, w)?;
+    let size = (u32::try_from(w).expect("checked_pixels"), u32::try_from(h).expect("checked_pixels"));
     // the Python's dictionary literal evaluates the holes first
     let holes = holes::holes(svg, src_rgba, h, w, opts.hole_scale, opts.opaque).map_err(ScoreError::Holes)?;
     let mut card = holes.to_map();

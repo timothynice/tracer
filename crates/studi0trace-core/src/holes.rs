@@ -148,7 +148,7 @@ impl Holes {
 ///
 /// If `src_rgba` is not `h * w * 4` bytes. ([`holes`] checks that first and reports it.)
 pub fn opaque(src_rgba: &[u8], h: usize, w: usize) -> Opaque {
-    assert_eq!(src_rgba.len(), h * w * 4, "opaque: {} bytes for a {h}x{w} RGBA image", src_rgba.len());
+    assert_eq!(h.checked_mul(w).and_then(|p| p.checked_mul(4)), Some(src_rgba.len()), "opaque: {} bytes for a {h}x{w} RGBA image", src_rgba.len());
     let solid: Vec<bool> = src_rgba.chunks_exact(4).map(|p| p[3] as f32 / 255.0f32 >= 0.99f32).collect();
     erode_square(&Grid::from_vec(h, w, solid), false).data
 }
@@ -164,7 +164,7 @@ pub fn opaque(src_rgba: &[u8], h: usize, w: usize) -> Opaque {
 /// pixel; the others are answered with zeros first. The port adds what numpy would refuse by its
 /// shapes: a source or a mask of another size than `h x w`.
 pub fn holes(svg: &str, src_rgba: &[u8], h: usize, w: usize, scale: u32, opaque: Option<&[bool]>) -> Result<Holes, String> {
-    let pixels = h.checked_mul(w).ok_or_else(|| format!("holes: a {h}x{w} source is too large"))?;
+    let pixels = h.checked_mul(w).filter(|p| p.checked_mul(4).is_some()).ok_or_else(|| format!("holes: a {h}x{w} source is too large"))?;
     let computed;
     let mask: &[bool] = match opaque {
         Some(m) if m.len() != pixels => return Err(format!("holes: a mask of {} flags for a {h}x{w} source, which has {pixels}", m.len())),
