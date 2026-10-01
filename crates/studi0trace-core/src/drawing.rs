@@ -625,12 +625,23 @@ fn nesting(svg: &str) -> usize {
     deepest + entities
 }
 
-/// `parse`: the painted geometry of `svg` in source pixels, root user units mapped through
-/// the viewBox onto a `size` (w, h) raster when one is given.
-pub fn parse(svg: &str, size: Option<(u32, u32)>) -> Result<Drawing, DrawingError> {
+/// Refuses an SVG whose elements nest more than [`MAX_DEPTH`] deep ([`DrawingError::TooDeep`]),
+/// from its text alone: a linear scan that builds nothing. [`parse`] begins with it. Call it
+/// before handing the SVG to anything else that parses it, because roxmltree recurses a level
+/// at a time (about 0.9 KB of stack a level) in [`parse`] and in resvg, so in
+/// [`crate::render::render`]: 100 000 nested groups overflow the stack of any thread. What is
+/// not XML at all is not this function's to refuse; it answers `Ok`, and the parser says so.
+pub fn check_nesting(svg: &str) -> Result<(), DrawingError> {
     if nesting(svg) > MAX_DEPTH + 1 {
         return Err(DrawingError::TooDeep);
     }
+    Ok(())
+}
+
+/// `parse`: the painted geometry of `svg` in source pixels, root user units mapped through
+/// the viewBox onto a `size` (w, h) raster when one is given.
+pub fn parse(svg: &str, size: Option<(u32, u32)>) -> Result<Drawing, DrawingError> {
+    check_nesting(svg)?;
     let options = ParsingOptions { allow_dtd: true, ..ParsingOptions::default() };
     let doc = Document::parse_with_options(svg, options).map_err(|e| DrawingError::Xml(e.to_string()))?;
     let root = doc.root_element();

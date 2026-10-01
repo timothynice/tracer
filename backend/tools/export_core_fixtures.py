@@ -1691,6 +1691,263 @@ def _geometry() -> None:
     write("geometry", cases)
 
 
+@exporter("scorecard")
+def _scorecard() -> None:
+    import hashlib
+    import io
+    import math
+
+    import numpy as np
+    from PIL import Image
+
+    from studi0trace.engines.presets import auto_candidates
+    from studi0trace.engines.vexel.engine import VexelEngine, VexelParams
+    from studi0trace.imaging import quality as Q
+    from studi0trace.imaging.intake import load_upload
+
+    # quality.Reference, assess, scorecard, artifact_index and is_clean. `scorecard.json` holds
+    # the cases: whole assessments of traces (the wordmark with each Auto candidate, whose SVGs
+    # the Auto tests score again, held-out items, a source with transparency, a non-square one,
+    # a source above 640 x 640 that is scored at 2x), scorecards with their options (detail,
+    # visibility, id and hole scales, a given opaque mask), made SVGs that set off each counter
+    # against a source made from them, the refusals, and cards made by hand for the weights
+    # and thresholds of `artifact_index` and `is_clean`. Each case names its source (a file of
+    # the repo, or a PNG written beside the fixtures) and its SVG (a fixture file, or inline).
+    # The Rust test builds the Reference from the pixels the intake decodes, so a JPEG source is
+    # written out as the PNG of the pixels Pillow decoded: the decoders differ by a level.
+    ns = 'xmlns="http://www.w3.org/2000/svg"'
+    cases: list[dict] = []
+
+    def plain(v):
+        if isinstance(v, (bool, np.bool_)):
+            return bool(v)
+        if isinstance(v, (int, np.integer)):
+            return int(v)
+        if isinstance(v, (float, np.floating)):
+            return float(v)
+        if isinstance(v, (list, tuple)):
+            return [plain(x) for x in v]
+        if isinstance(v, dict):
+            return {k: plain(x) for k, x in v.items()}
+        raise TypeError(type(v))
+
+    def digest(a) -> str:
+        return hashlib.sha256(np.ascontiguousarray(a).tobytes()).hexdigest()
+
+    def decoded(data: bytes) -> np.ndarray:
+        return np.asarray(load_upload(data, max_bytes=1 << 30, max_pixels=1 << 30).image, dtype=np.uint8)
+
+    def trace(rgba: np.ndarray, **params) -> str:
+        img = load_upload(_png(rgba), max_bytes=1 << 30, max_pixels=1 << 30)
+        return VexelEngine().trace(img, VexelParams(**params)).svg
+
+    def _png(rgba: np.ndarray) -> bytes:
+        out = io.BytesIO()
+        Image.fromarray(rgba, "RGBA").save(out, "PNG")
+        return out.getvalue()
+
+    def source_of(repo: str | None, png: str | None, rgba: np.ndarray | None = None, jpeg_as_png: str | None = None):
+        """(entry fields, rgba): a file of the repo (relative to backend/), a PNG written here from `rgba`
+        (named `png`), or the PNG of what Pillow decoded from a file of the repo that is not lossless."""
+        if repo is not None and jpeg_as_png is None:
+            rgba = decoded((ROOT / "backend" / repo).read_bytes())
+            fields = {"source_repo": repo, "source_file": None}
+        else:
+            name = jpeg_as_png or png
+            if rgba is None:
+                rgba = decoded((ROOT / "backend" / repo).read_bytes())
+            (OUT / name).write_bytes(_png(rgba))
+            assert np.array_equal(decoded((OUT / name).read_bytes()), rgba)
+            fields = {"source_repo": None, "source_file": name}
+        h, w = rgba.shape[:2]
+        return {**fields, "width": int(w), "height": int(h), "rgba_sha256": digest(rgba)}, rgba
+
+    def svg_fields(name: str, svg: str, file: bool | str) -> dict:
+        """The SVG inline, in a fixture file of its own (`file` True), or in one an earlier case wrote (`file` its name)."""
+        if isinstance(file, str):
+            assert (OUT / file).read_text(encoding="utf-8") == svg
+            return {"svg_file": file, "svg": None}
+        if file:
+            (OUT / f"scorecard_{name}.svg").write_text(svg, encoding="utf-8")
+            return {"svg_file": f"scorecard_{name}.svg", "svg": None}
+        return {"svg_file": None, "svg": svg}
+
+    def reference_fields(ref: "Q.Reference") -> dict:
+        return {"edges_sha256": digest(ref.edges.astype(np.uint8)), "edges_wide_sha256": digest(ref.edges_wide.astype(np.uint8)),
+                "opaque_sha256": digest(ref.opaque.astype(np.uint8)), "edges": int(ref.edges.sum()), "opaque": int(ref.opaque.sum())}
+
+    def case(name: str, kind: str, src: dict, rgba: np.ndarray, svg: str, file: bool | str = False, **options) -> dict:
+        """One case: `assess` (options: hole_scale) or `scorecard` (detail, visibility, hole_scale, id_scale,
+        opaque = pass the Reference's mask)."""
+        ref = Q.Reference(rgba)
+        entry = {"name": name, "kind": kind, **src, **svg_fields(name, svg, file), "options": options,
+                 "reference": reference_fields(ref), "keys": None, "card": None, "clean": None, "error": None}
+        try:
+            if kind == "assess":
+                got = Q.assess(svg, ref, options.get("hole_scale"))
+            else:
+                kw = {k: v for k, v in options.items() if k not in ("opaque", "hole_scale") or (k == "hole_scale" and v is not None)}
+                kw.pop("opaque", None)
+                got = Q.scorecard(svg, rgba, opaque=ref.opaque if options.get("opaque") else None, **kw)
+            entry["keys"], entry["card"], entry["clean"] = list(got), plain(got), bool(Q.is_clean(got))
+        except Exception as e:  # the Python raises; the port refuses
+            entry["error"] = type(e).__name__
+        cases.append(entry)
+        return entry
+
+    def trace_case(name: str, repo: str, preset: str | None = None, params: dict | None = None, file: bool = True,
+                   jpeg: bool = False, **options) -> dict:
+        src, rgba = source_of(repo, None, jpeg_as_png=f"scorecard_{name}_source.png" if jpeg else None)
+        return case(name, "assess", src, rgba, trace(rgba, **(params or {})), file=file, **options)
+
+    # ---------------------------------------------------------------- traces
+    wordmark = "bench/corpus/real/logo/vexel-wordmark-512.png"
+    for p in auto_candidates():  # Task 13 scores the same SVGs under these names
+        trace_case(f"auto_{p.id}", wordmark, params=p.params)
+    held = "bench/heldout/"
+    trace_case("heldout_wheelchair", held + "fluent-color/man-in-motorized-wheelchair-facing-right-512.png")
+    trace_case("heldout_u1f693", held + "noto/u1f693-512.png")
+    trace_case("heldout_taurus", held + "fluent-flat/taurus-512.png")
+    trace_case("heldout_u2049_jpeg", held + "noto/u2049-512-q75.jpg", jpeg=True)
+    trace_case("transparent_alpha_fade", "bench/corpus/synthetic/gradient/alpha-fade-512.png")
+    trace_case("non_square_logomark", "bench/corpus/real/logo/logomark-512.png")
+    big = trace_case("large_silverpeak_768", "bench/corpus/real/logo/silverpeak-badge-768.png")
+    assert big["width"] * big["height"] > 640 * 640
+
+    # the options of scorecard on a real trace: the id map's scale decides what is on screen
+    src, rgba = source_of(wordmark, None)
+    word_svg = (OUT / "scorecard_auto_balanced.svg").read_text(encoding="utf-8")
+    id_cards = [case(f"wordmark_id_scale_{k}", "scorecard", src, rgba, word_svg, file="scorecard_auto_balanced.svg", detail=False,
+                     visibility=True, hole_scale=4, id_scale=k)["card"] for k in (1, 3)]
+    id_cards.append(next(c for c in cases if c["name"] == "auto_balanced")["card"])
+    assert len({json.dumps({k: v for k, v in c.items() if k in ("hidden_len_px", "outline_len_px", "wobble_deg_100px", "inflections")}) for c in id_cards}) == 3, \
+        "the id scale decides nothing on this trace"
+
+    # ---------------------------------------------------------------- made SVGs
+    def made(body: str, w: int = 64, h: int = 64) -> str:
+        return f'<svg {ns} viewBox="0 0 {w} {h}">{body}</svg>'
+
+    def from_svg(name: str, truth: str, svg: str, w: int, h: int, kind: str = "assess", **options) -> dict:
+        """A source drawn from `truth` (what the trace was meant to reproduce) and `svg`, the trace."""
+        src, rgba = source_of(None, f"scorecard_{name}.png", Q.render(truth, w, h))
+        return case(name, kind, src, rgba, svg, **options)
+
+    flat = made('<rect width="64" height="64" fill="#c33"/>')
+    holes = made('<path fill-rule="evenodd" fill="#c33" d="M0 0 H64 V64 H0 Z M10 10 h0.6 v0.6 h-0.6 Z M20 20 h0.12 v0.12 h-0.12 Z M30 30 h0.6 v0.6 h-0.6 Z"/>')
+    seam = made('<rect width="31.8" height="64" fill="#c33"/><rect x="32.4" width="31.6" height="64" fill="#c33"/>')
+    from_svg("made_pinholes_detail", flat, holes, 64, 64, "scorecard", detail=True, visibility=True, hole_scale=4, id_scale=2)
+    from_svg("made_pinholes", flat, holes, 64, 64)
+    from_svg("made_seam", flat, seam, 64, 64)
+    from_svg("made_seam_scorecard_8x", flat, seam, 64, 64, "scorecard", detail=False, visibility=True, hole_scale=8, id_scale=2, opaque=True)
+
+    # every counter at once: a 2 x 2 sheet of the geometry card's made shapes
+    zig = "M8 32 " + " ".join(f"L{8 + i} {32 + (0.4 if i % 2 else -0.4)}" for i in range(1, 49)) + " L56 40 L8 40 Z"
+    cells = [
+        '<path d="M12 10 H48 A8 8 0 0 1 56 18 V46 A2 2 0 0 1 54 48 H10 A2 2 0 0 1 8 46 V14 A2 2 0 0 1 10 12 Z" fill="#c33"/>',
+        '<path d="M8 10 Q32 6 56 10 L56 50 L8 50 Z" fill="#3c3"/><path d="M4 56 L30 56.3 L60 56 L30 56.6 Z" fill="#000"/>',
+        '<path d="M8 8 L56 10.5 L56 52.5 L8 50 Z" fill="#33c"/><path d="M4 60 L60 63" stroke="#000" stroke-width="0.5" fill="none"/>',
+        f'<path d="{zig}" fill="#3cc"/><path d="M4 8 C20 -10 44 26 60 8 L60 20 L4 20 Z" fill="#c3c"/><path d="M10 10 L40 40 Z" fill="#000"/>',
+    ]
+    sheet = made("".join(f'<g transform="translate({64 * (i % 2)} {64 * (i // 2)})">{c}</g>' for i, c in enumerate(cells)), 128, 128)
+    from_svg("made_every_defect", sheet, sheet, 128, 128)
+    from_svg("made_every_defect_detail", sheet, sheet, 128, 128, "scorecard", detail=True, visibility=True, hole_scale=4, id_scale=2)
+    from_svg("made_every_defect_everything_visible", sheet, sheet, 128, 128, "scorecard", detail=False, visibility=False, hole_scale=4, id_scale=3)
+
+    # a shape under another: scored when it is on screen, and when everything is
+    hidden = made('<rect x="10" y="10" width="30" height="30" fill="#c33"/><rect x="5" y="5" width="50" height="50" fill="#33c"/>')
+    shown = [from_svg(f"made_hidden_shape{tag}", hidden, hidden, 64, 64, "scorecard", detail=True, visibility=vis, hole_scale=4, id_scale=2)["card"]
+             for tag, vis in (("", True), ("_everything_visible", False))]
+    assert shown[0]["hidden_len_px"] > 0 and shown[1]["hidden_len_px"] == 0 and shown[0]["outline_len_px"] < shown[1]["outline_len_px"]
+
+    # a source with nothing opaque: no hole count, and the geometry is scored all the same
+    clear = made("")
+    from_svg("made_transparent_source", clear, sheet, 128, 128, "scorecard", detail=True, visibility=True, hole_scale=4, id_scale=2)
+    # sources too small for an opaque interior or an edge
+    for side in (1, 2, 3):
+        from_svg(f"made_source_{side}px", flat, made('<rect width="64" height="64" fill="#c33"/>'), side, side)
+
+    # 640 x 640 is scored at 4x, 641 x 640 and 640 x 641 at 2x, and so are the 409 600 pixels of 800 x 512 and
+    # 512 x 800 at 4x: the seam's sub-pixels tell which. An explicit hole scale wins over the size.
+    for w, h in ((640, 640), (641, 640), (640, 641), (800, 512), (512, 800)):
+        truth = made('<rect width="640" height="640" fill="#c33"/>', w, h)
+        trace = made('<rect width="299.8" height="640" fill="#c33"/><rect x="300.4" width="339.6" height="640" fill="#c33"/>', w, h)
+        e = from_svg(f"made_{w}x{h}", truth, trace, w, h)
+        rgba = decoded((OUT / e["source_file"]).read_bytes())
+        at = {k: Q.holes(trace, rgba, k)["hole_subpx"] for k in (2, 4)}
+        assert at[2] != at[4] and e["card"]["hole_subpx"] == at[4 if w * h <= 640 * 640 else 2], (w, h, at, e["card"]["hole_subpx"])
+    from_svg("made_641x640_at_4x", made('<rect width="640" height="640" fill="#c33"/>', 641, 640),
+             made('<rect width="299.8" height="640" fill="#c33"/><rect x="300.4" width="339.6" height="640" fill="#c33"/>', 641, 640),
+             641, 640, hole_scale=4)
+    from_svg("made_640x640_at_2x", made('<rect width="640" height="640" fill="#c33"/>', 640, 640),
+             made('<rect width="299.8" height="640" fill="#c33"/><rect x="300.4" width="339.6" height="640" fill="#c33"/>', 640, 640),
+             640, 640, hole_scale=2)
+
+    # ---------------------------------------------------------------- refusals
+    flat_src, flat_rgba = source_of(None, "scorecard_made_refusals.png", Q.render(flat, 64, 64))
+    clear_src, clear_rgba = source_of(None, "scorecard_made_refusals_clear.png", Q.render(clear, 64, 64))
+    case("refused_not_xml_opaque_source", "assess", flat_src, flat_rgba, "<svg")
+    case("refused_not_xml_clear_source", "scorecard", clear_src, clear_rgba, "<svg", detail=False, visibility=True, hole_scale=4, id_scale=2)
+    case("refused_hole_scale_0", "scorecard", flat_src, flat_rgba, flat, detail=False, visibility=True, hole_scale=0, id_scale=2)
+    case("clear_source_hole_scale_0_is_zeros", "scorecard", clear_src, clear_rgba, flat, detail=False, visibility=True, hole_scale=0, id_scale=2)
+
+    ok = [c for c in cases if c["card"] is not None]
+    assert [c["name"] for c in cases if c["error"]] == ["refused_not_xml_opaque_source", "refused_not_xml_clear_source", "refused_hole_scale_0"], [
+        (c["name"], c["error"]) for c in cases if c["error"]]
+
+    # ---------------------------------------------------------------- cards made by hand
+    zero = {k: 0 for k in Q.ARTIFACT_KEYS if k not in ("wobble_deg_100px", "segments_100px", "artifact_index")}
+    zero.update({"wobble_deg_100px": 0.0, "segments_100px": 0.0})
+    hand = []
+
+    def card(name: str, **over) -> None:
+        c = {**zero, **over}
+        entry = {"name": name, "card": c, "index": None, "clean": None}
+        entry["index"], entry["clean"] = Q.artifact_index(c), bool(Q.is_clean(c))
+        hand.append(entry)
+
+    card("nothing")
+    for w in (0.0, 1.0, 24.99, 24.999999, 25.0, 25.000001, 25.01, 100.0, 213.6698):
+        card(f"wobble {w}", wobble_deg_100px=w)
+    card("one pinhole", pinholes=1, hole_clusters=1)
+    card("a cluster that is not a pinhole", hole_clusters=1)
+    card("5 clusters, 2 pinholes", hole_clusters=5, pinholes=2)
+    card("fewer clusters than pinholes", hole_clusters=1, pinholes=3)
+    card("as many clusters as pinholes", hole_clusters=4, pinholes=4)
+    for key in ("slivers", "degenerate", "thin_strokes", "radius_inconsistent", "rect_bowed", "rect_skewed", "inflections"):
+        card(f"one {key}", **{key: 1})
+    card("three of each rect defect", radius_inconsistent=3, rect_bowed=3, rect_skewed=3)
+    card("counts that are not defects", rect_like=40, elements=300, segments=9000, strokes=12, segments_100px=33.3)
+    card("every term different", pinholes=2, hole_clusters=7, slivers=3, degenerate=5, thin_strokes=7, radius_inconsistent=11,
+         rect_bowed=13, rect_skewed=17, wobble_deg_100px=19.5, inflections=23)
+    card("every term different, clean wobble", pinholes=0, hole_clusters=9, slivers=0, degenerate=0, thin_strokes=0, radius_inconsistent=1,
+         rect_bowed=2, rect_skewed=4, wobble_deg_100px=24.4, inflections=29)
+    card("a trace", **{k: v for k, v in ok[0]["card"].items() if k not in ("artifact_index",) and not k.startswith("_")})
+    assert [h["clean"] for h in hand if h["name"].startswith("wobble")] == [True, True, True, True, False, False, False, False, False]
+    # a card with no rect_skewed, as older results hold: is_clean reads it as 0
+    old = {k: v for k, v in zero.items() if k != "rect_skewed"}
+    missing = [{"name": "no rect_skewed", "card": old, "clean": bool(Q.is_clean(old))},
+               {"name": "no rect_skewed, a bowed rect", "card": {**old, "rect_bowed": 1}, "clean": bool(Q.is_clean({**old, "rect_bowed": 1}))}]
+
+    # ---------------------------------------------------------------- the golden must not be vacuous
+    for key in ("pinholes", "hole_clusters", "slivers", "sliver_area_px", "degenerate", "thin_strokes", "wobble_deg_100px", "inflections",
+                "rect_like", "radius_inconsistent", "rect_bowed", "rect_skewed", "strokes", "hidden_len_px", "hole_subpx", "hole_px"):
+        assert any(c["card"][key] for c in ok), f"no case sets off {key}"
+    assert any(c["card"]["edge_f1"] < 1 for c in ok if "edge_f1" in c["card"]), "no case has an edge_f1 under 1"
+    assert any(c["card"]["edge_f1"] == 0.0 for c in ok if "edge_f1" in c["card"]), "no case has an edge_f1 of 0"
+    assert any(c["card"]["_clusters"] for c in ok if "_clusters" in c["card"]), "no detail case lists clusters"
+    for key in ("_wobble_at", "_flips_at", "_slivers_at", "_radius_at"):
+        assert any(c["card"][key] for c in ok if key in c["card"]), f"no detail case lists {key}"
+    assert any(c["clean"] for c in ok) and any(not c["clean"] for c in ok)
+    assert any(c["card"]["pinholes"] and c["card"]["hole_clusters"] > c["card"]["pinholes"] for c in ok), "no case has a cluster that is not a pinhole"
+    assert {h["clean"] for h in hand} == {True, False}
+    assert all(math.isfinite(h["index"]) for h in hand)
+
+    data = {"keys": list(Q.ARTIFACT_KEYS), "cases": cases, "hand": hand, "missing_rect_skewed": missing,
+            "hole_scale": {"hole_scale": Q.HOLE_SCALE, "id_scale": Q.ID_SCALE}}
+    json.dumps(data, allow_nan=False)  # a NaN or an infinity in a card would not read back
+    write("scorecard", data)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
