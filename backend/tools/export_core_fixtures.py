@@ -1948,6 +1948,304 @@ def _scorecard() -> None:
     write("scorecard", data)
 
 
+@exporter("auto")
+def _auto() -> None:
+    import hashlib
+    import math
+    import random
+    import struct
+
+    import numpy as np
+    from fastapi.testclient import TestClient
+
+    from studi0trace import auto as A
+    from studi0trace.api.schemas import AutoCandidate, AutoResult, CandidateScores, ErrorBody
+    from studi0trace.engines.presets import auto_candidates
+    from studi0trace.engines.vexel.engine import VexelEngine, VexelParams
+    from studi0trace.imaging import quality as Q
+    from studi0trace.imaging.intake import load_upload
+    from studi0trace.main import create_app
+    from studi0trace.settings import Settings
+
+    # Auto: the rule (`choose`, `faithful`), the words (`issues`, `summary`), Python's `round` and the whole
+    # of `POST /vectorize auto=true` on real images. Nothing here is written by hand: every expectation is
+    # what the Python answers, the real route included (its candidates run on threads, as they ship).
+    rng = random.Random(20260930)
+
+    def bits(x: float) -> str:
+        return "0x%016x" % struct.unpack("<Q", struct.pack("<d", x))[0]
+
+    def fl(x: float):
+        """A float as JSON holds it, or a word for what it cannot."""
+        if math.isnan(x):
+            return "nan"
+        if math.isinf(x):
+            return "inf" if x > 0 else "-inf"
+        return x
+
+    # ------------------------------------------------------------------ round
+    # `round(x, n)` is the decimal string of the exact binary value, correctly rounded (ties to even), read
+    # back: not `floor(x * 10^n + 0.5)`, and not half-even on the decimal the programmer typed: 0.35 is
+    # 0.34999999999999997 and rounds to 0.3, 0.45 is 0.4500000000000000111 and rounds to 0.5.
+    xs: list[float] = []
+    for _ in range(150):  # decimals as typed: m / 10^d, none exactly representable
+        d = rng.randint(1, 5)
+        xs.append(rng.randint(0, 10 ** (d + rng.randint(0, 2))) / 10 ** d)
+    for _ in range(150):  # exact ties for 0, 1, 2 and 4 digits: k / 2^j and k + 1/2
+        j = rng.randint(1, 6)
+        xs.append(rng.randint(0, 40 * 2 ** j) / 2 ** j)
+    for _ in range(60):
+        xs.append(rng.randint(0, 20000) + 0.5)
+    for x in list(xs[150:360]):  # a tie and the doubles either side of it
+        xs += [math.nextafter(x, math.inf), math.nextafter(x, -math.inf)]
+    for _ in range(100):
+        xs.append(rng.uniform(0, 10 ** rng.randint(0, 4)))
+    for _ in range(40):
+        xs.append(10 ** rng.uniform(-300, -4))
+    for _ in range(40):
+        xs.append(10 ** rng.uniform(15, 300))
+    xs += [0.0, 1.0, 5e-324, 1.7976931348623157e308, 2.5, 3.5, 0.5, 1.5, 0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 2.675, 1.005, 8.345, 0.125, 0.375]
+    xs += [-x for x in rng.sample(xs, 250)] + [-0.0, -5e-324, -0.04, -0.05, -0.0049, float("nan"), float("inf"), float("-inf")]
+    seen_bits: set[str] = set()
+    rounds = []
+    for x in xs:
+        if bits(x) in seen_bits:
+            continue
+        seen_bits.add(bits(x))
+        rounds.append([bits(x)] + [bits(round(x, n)) for n in (0, 1, 2, 4)])
+    # the ones the plan's first guess got wrong, by name
+    named = {name: [bits(x), n, bits(round(x, n))] for name, (x, n) in {
+        "0.25 to 1 is a tie and goes to the even 0.2": (0.25, 1),
+        "0.35 is just under the tie and goes down": (0.35, 1),
+        "0.45 is just over the tie and goes up": (0.45, 1),
+        "0.05 is just over and goes up": (0.05, 1),
+        "0.15 is just under and goes down": (0.15, 1),
+        "2.5 to 0 is a tie and goes to 2": (2.5, 0),
+        "3.5 to 0 is a tie and goes to 4": (3.5, 0),
+        "2.675 to 2": (2.675, 2),
+        "a small negative keeps its sign": (-0.04, 1),
+        "nan stays nan": (float("nan"), 1),
+    }.items()}
+    assert named["0.35 is just under the tie and goes down"][2] == bits(0.3) and named["0.45 is just over the tie and goes up"][2] == bits(0.5)
+    assert named["0.25 to 1 is a tie and goes to the even 0.2"][2] == bits(0.2) and named["a small negative keeps its sign"][2] == bits(-0.0)
+    assert len(rounds) > 800, len(rounds)
+
+    # ------------------------------------------------------------------ choose
+    def S(id, de, f1=0.99, art=0.0, el=10):  # noqa: N802
+        return A.Scored(id, de, f1, art, el)
+
+    def ident(scored, s):
+        return next(i for i, x in enumerate(scored) if x is s)
+
+    def case_of(scored: list) -> dict:
+        entry = {"scored": [[s.id, fl(s.delta_e), fl(s.edge_f1), fl(s.artifact_index), s.elements] for s in scored],
+                 "faithful": None, "pick": None, "reason": None, "raises": None}
+        try:
+            entry["faithful"] = [ident(scored, s) for s in A.faithful(scored)]
+        except ValueError:
+            entry["faithful"] = "raises"
+        try:
+            pick, why = A.choose(scored)
+            entry["pick"], entry["reason"] = (None if pick is None else ident(scored, pick)), why
+        except ValueError as e:
+            entry["raises"], entry["reason"] = type(e).__name__, str(e)
+        return entry
+
+    names = ["balanced", "logo", "detailed", "dense", "flat", "x"]
+    arts = [0.0, 0.04, 0.05, 0.06, 0.1, 0.14, 0.15, 0.16, 0.24, 0.25, 0.26, 0.34, 0.35, 0.36, 0.45, 0.55, 0.65, 0.75, 1.0, 1.05, 2.0, 2.04,
+            2.05, 2.5, 3.0, 12.0, 12.05, 12.049999999999999]
+
+    def random_set() -> list:
+        n = rng.randint(1, 6)
+        best = rng.choice([0.0, 0.01, 0.1, 0.2, 0.4, 0.5, 1.0, 1.5, 2.5, 10.0, rng.uniform(0, 5)])
+        limit = A.de_limit(best)
+        edge0 = rng.choice([1.0, 0.99, 0.95, 0.8, 0.5])
+        edge_edge = edge0 - A.EDGE_SLACK
+
+        def de() -> float:
+            r = rng.random()
+            if r < 0.15:
+                return best
+            if r < 0.30:
+                return limit
+            if r < 0.38:
+                return math.nextafter(limit, math.inf)
+            if r < 0.46:
+                return math.nextafter(limit, -math.inf)
+            if r < 0.70:
+                return round(rng.uniform(best, limit), 2)
+            return best + rng.uniform(0, 3 * (limit - best) + 0.5)
+
+        def f1() -> float:
+            r = rng.random()
+            if r < 0.30:
+                return edge0
+            if r < 0.45:
+                return edge_edge
+            if r < 0.52:
+                return math.nextafter(edge_edge, math.inf)
+            if r < 0.59:
+                return math.nextafter(edge_edge, -math.inf)
+            if r < 0.80:
+                return edge0 - rng.choice([0.01, 0.03, 0.05, 0.2])
+            return rng.uniform(0.3, 1.0)
+
+        des = [de() for _ in range(n)]
+        des[rng.randrange(n)] = best
+        ids = [rng.choice(names) for _ in range(n)] if rng.random() < 0.1 else rng.sample(names, n)
+        return [S(ids[i], des[i], f1(), rng.choice(arts) if rng.random() < 0.8 else round(rng.uniform(0, 30), rng.choice([1, 2, 6])),
+                  rng.choice([1, 2, 3, 5, 5, 12, 12, 20])) for i in range(n)]
+
+    choose_cases = [case_of(random_set()) for _ in range(300)]
+    # the numbers of the unit tests and a few shapes the random sets reach rarely
+    nan = float("nan")
+    for scored in (
+        [], [S("a", 0.40)], [S("a", 0.4), S("a", 0.4)], [S("a", 0.4, art=2.0), S("b", 0.4, art=2.0), S("a", 0.4, art=2.0)],
+        [S("balanced", 0.40, art=12.0), S("logo", 0.50, art=3.0), S("dense", 0.52, art=1.0)],
+        [S("balanced", 0.40, art=12.0), S("dense", 0.56, art=0.0)],
+        [S("a", 1.0, art=9.0), S("b", 1.29, art=1.0)], [S("a", 1.0, art=9.0), S("b", 1.31, art=1.0)],
+        [S("a", 0.40, f1=0.99), S("b", 0.45, f1=0.96), S("c", 0.45, f1=0.975)],
+        # NaN, which no render produces: where the Python picks, the port picks the same; where it raises, the port says no one
+        [S("a", 0.4, art=nan), S("b", 0.45, art=1.0)], [S("b", 0.45, art=1.0), S("a", 0.4, art=nan)],
+        [S("a", 0.4, art=nan), S("b", 0.4, art=nan)], [S("a", 0.4, art=nan, el=3), S("b", 0.4, art=nan, el=1), S("c", 0.4, art=0.0)],
+        [S("a", 0.4, art=1.0), S("b", 0.4, art=nan), S("c", 0.4, art=0.5)],
+        [S("a", nan), S("b", 0.45)], [S("a", 0.4), S("b", nan)], [S("a", 0.4), S("b", nan), S("c", 0.41)],
+        [S("a", 0.4, f1=nan), S("b", 0.45, f1=0.9)], [S("a", 0.4, f1=0.9), S("b", 0.45, f1=nan)],
+        [S("a", float("inf")), S("b", float("inf"))], [S("a", 0.4, art=float("inf")), S("b", 0.45, art=float("inf"))],
+    ):
+        choose_cases.append(case_of(scored))
+    reasons = {}
+    for c in choose_cases:
+        if c["raises"] is None:
+            reasons[c["reason"]] = reasons.get(c["reason"], 0) + 1
+    for r in ("the only candidate that traced", "the only one this faithful to the image", "the most faithful, and the cleanest",
+              "as clean at the same fidelity, with fewer shapes", "the cleanest at the same fidelity",
+              "the most faithful; the cleaner ones lose detail", "the cleanest of the most faithful"):
+        assert reasons.get(r, 0) >= 8, f"the random sets reach {r!r} only {reasons.get(r, 0)} times"
+    assert reasons["no candidate could be scored"] == 1  # the empty set
+    # the band's edges and the edge-F1 slack's are on the table in earnest, as are rounding ties
+    at_limit = at_edge = dup_ids = 0
+    for c in choose_cases:
+        rows = [[float(v) if not isinstance(v, str) else float(v) for v in r[1:4]] for r in c["scored"]]
+        if len(rows) > 1 and all(math.isfinite(v) for r in rows for v in r):
+            lim = A.de_limit(min(r[0] for r in rows))
+            at_limit += any(r[0] == lim for r in rows)
+            ok = [r for r in rows if r[0] <= lim]
+            at_edge += any(r[1] == max(o[1] for o in ok) - A.EDGE_SLACK for r in ok)
+        dup_ids += len({r[0] for r in c["scored"]}) < len(c["scored"])
+    assert at_limit >= 25 and at_edge >= 25 and dup_ids >= 10, (at_limit, at_edge, dup_ids)
+    print("choose:", len(choose_cases), "cases;", sum(c["raises"] is not None for c in choose_cases), "raise; reasons", reasons,
+          "; at the limit", at_limit, "at the edge slack", at_edge, "duplicate ids", dup_ids)
+    assert sum(c["raises"] is not None for c in choose_cases) >= 2
+
+    # ------------------------------------------------------------------ issues, summary
+    def random_card() -> dict:
+        c = {
+            "delta_e_mean": rng.choice([rng.uniform(0, 5), 0.41234, 0.12345, 0.00005, 0.00015, 0.5, 0.0, 12.34565, rng.uniform(0, 1e-3)]),
+            "edge_f1": rng.choice([rng.uniform(0, 1), 1.0, 0.98, 0.98765, 0.00005, 0.0]),
+            "artifact_index": rng.choice([rng.uniform(0, 80), 0.75, 0.125, 0.375, 2.675, 1.005, 0.0, 12.345, 3.0]),
+            "elements": rng.choice([0, 1, 9, 57, 300]),
+            "pinholes": rng.choice([0, 0, 1, 2, 5, 11]),
+            "slivers": rng.choice([0, 0, 1, 3]), "degenerate": rng.choice([0, 0, 1, 2]), "thin_strokes": rng.choice([0, 0, 1, 4]),
+            "wobble_deg_100px": rng.choice([0.0, 3.0, 24.99999999999999, 25.0, 25.000000000000004, 24.95, 24.949999999999996, 0.05, 0.25, 0.35, 40.0, 213.6698,
+                                            rng.uniform(0, 80)]),
+            "radius_inconsistent": rng.choice([0, 0, 1, 3]), "rect_bowed": rng.choice([0, 0, 1, 2]), "rect_skewed": rng.choice([0, 0, 1, 2]),
+            "inflections": rng.choice([0, 1, 2, 3, 4, 10]),
+        }
+        if rng.random() < 0.2:
+            del c["rect_skewed"]  # older results do not have it
+        return c
+
+    cards = [random_card() for _ in range(300)]
+    # every threshold alone, either side
+    zero = {"delta_e_mean": 0.3, "edge_f1": 1.0, "artifact_index": 0.0, "elements": 4, "pinholes": 0, "slivers": 0, "degenerate": 0,
+            "thin_strokes": 0, "wobble_deg_100px": 0.0, "radius_inconsistent": 0, "rect_bowed": 0, "rect_skewed": 0, "inflections": 0}
+    cards.append(dict(zero))
+    for key, vals in (("pinholes", (1, 2)), ("slivers", (1, 2)), ("degenerate", (1, 2)), ("thin_strokes", (1, 2)), ("radius_inconsistent", (1, 2)),
+                      ("rect_bowed", (1, 2)), ("rect_skewed", (1, 2)), ("inflections", (2, 3)),
+                      ("wobble_deg_100px", (24.999999999999996, 25.0, 25.000000000000004))):
+        cards += [dict(zero, **{key: v}) for v in vals]
+    cards.append({k: v for k, v in zero.items() if k != "rect_skewed"})
+    cards.append({**{k: v for k, v in zero.items() if k != "rect_skewed"}, "rect_bowed": 1})
+    issue_cases = []
+    for card in cards:  # the numbers go to the port bit for bit, so a tie rounds the same way in both
+        got = A.summary(card)
+        issue_cases.append({"card": card, "issues": A.issues(card), "summary": got})
+    seen_issues = {w.split(" ", 1)[-1] if w[0].isdigit() else w for c in issue_cases for w in c["issues"]}
+    assert {"pinhole", "pinholes", "sliver", "slivers", "wobbly edges", "uneven rectangle", "uneven rectangles", "wavy curves"} <= seen_issues, seen_issues
+    assert any(c["summary"]["clean"] for c in issue_cases) and any(not c["summary"]["clean"] for c in issue_cases)
+
+    # ------------------------------------------------------------------ the route, on real images
+    client = TestClient(create_app(Settings()), raise_server_exceptions=True)
+    key_order = {m.__name__: list(m.model_fields) for m in (AutoResult, AutoCandidate, CandidateScores, ErrorBody)}
+    images = []
+    wordmark = "bench/corpus/real/logo/vexel-wordmark-512.png"
+    for name, repo in (("wordmark", wordmark),
+                       ("multi_shape_128", "bench/corpus/synthetic/gradient/multi-shape-128.png"),
+                       ("linear_4stop_128", "bench/corpus/synthetic/gradient/linear-4stop-128.png"),
+                       ("venn_128", "bench/corpus/synthetic/logo/venn-128.png"),
+                       ("blobs_128", "bench/corpus/synthetic/flat/blobs-128.png"),
+                       ("wedge_fan_128", "bench/corpus/synthetic/logo/wedge-fan-128.png"),
+                       ("studi0trace_mark_128", "bench/corpus/real/logo/studi0trace-mark-128.png")):
+        data = (ROOT / "backend" / repo).read_bytes()
+        body = client.post("/vectorize", files={"file": ("x.png", data, "application/octet-stream")},
+                           data={"engines": "vexel", "auto": "true"}).json()
+        res = body["auto"]["vexel"]
+        img = load_upload(data, max_bytes=1 << 30, max_pixels=1 << 30)
+        ref = A.reference(img)
+        rgba = np.asarray(img.image.convert("RGBA"), dtype=np.uint8)
+        cands, fixtures = [], {}
+        for c, p in zip(res["candidates"], auto_candidates()):
+            assert c["preset"] == p.id and c["error"] is None and c["scores"] is not None
+            # what the route answers is what the engine and the scorecard give on their own
+            svg = VexelEngine().trace(img, VexelParams(**p.params)).svg
+            assert svg == c["svg"], f"{name} {p.id}: the route's SVG is not the engine's"
+            card = A.assess(svg, ref)
+            assert A.summary(card) == c["scores"], (name, p.id)
+            if name == "wordmark":
+                assert (OUT / f"scorecard_auto_{p.id}.svg").read_text(encoding="utf-8") == svg
+                svg_file = f"scorecard_auto_{p.id}.svg"
+            else:
+                svg_file = f"auto_{name}_{p.id}.svg"
+                (OUT / svg_file).write_text(svg, encoding="utf-8")
+            assert c["elapsed_ms"] > 0
+            cands.append({k: v for k, v in c.items() if k not in ("svg", "elapsed_ms")} | {"svg_file": svg_file})
+            fixtures[p.id] = {"card": {k: (v if not isinstance(v, (np.integer, np.floating, np.bool_)) else v.item()) for k, v in card.items()},
+                              "summary": A.summary(card)}
+            # the rounded numbers are not within a rounding error of their edge
+            for key, n in (("delta_e_mean", 4), ("edge_f1", 4), ("artifact_index", 2), ("wobble_deg_100px", 1)):
+                x = card[key] * 10 ** n
+                assert abs(x - math.floor(x) - 0.5) > 1e-6, (name, p.id, key, card[key])
+        # the response built from the models, to give the shape its order
+        shaped = AutoResult(engine=res["engine"], pick=res["pick"], reason=res["reason"], candidates=[
+            AutoCandidate(**{k: v for k, v in c.items() if k != "svg_file"} | {"scores": CandidateScores(**c["scores"])}) for c in cands]).model_dump()
+        assert [c["preset"] for c in shaped["candidates"]] == [p.id for p in auto_candidates()]
+        assert body["results"]["vexel"]["svg"] == next(c for c in res["candidates"] if c["preset"] == res["pick"])["svg"]
+        assert body["parameters_used"]["vexel"] == next(c for c in res["candidates"] if c["preset"] == res["pick"])["parameters"]
+        # and the rule on its own, over the scores the route kept, agrees with the route
+        scored = [A.Scored(c["preset"], f["card"]["delta_e_mean"], f["card"]["edge_f1"], f["card"]["artifact_index"], int(f["card"]["elements"]))
+                  for c, f in zip(cands, fixtures.values())]
+        pick, why = A.choose(scored)
+        assert (pick.id, why) == (res["pick"], res["reason"])
+        images.append({
+            "name": name, "source_repo": repo, "width": img.width, "height": img.height,
+            "rgba_sha256": hashlib.sha256(np.ascontiguousarray(rgba).tobytes()).hexdigest(),
+            "pick": res["pick"], "reason": res["reason"], "engine": res["engine"], "candidates": cands,
+            "scored": fixtures, "chosen_svg_file": next(c["svg_file"] for c in cands if c["preset"] == res["pick"]),
+            "parameters_used": body["parameters_used"]["vexel"],
+        })
+    assert len({i["pick"] for i in images}) >= 4, "the images pick the same few presets: the end-to-end test would not tell a rule from a constant"
+    assert len({i["reason"] for i in images}) >= 5, {i["reason"] for i in images}
+
+    data = {
+        "constants": {"DE_SLACK": A.DE_SLACK, "DE_SHARE": A.DE_SHARE, "EDGE_SLACK": A.EDGE_SLACK},
+        "round": {"digits": [0, 1, 2, 4], "cases": rounds, "named": named},
+        "choose": choose_cases, "issues": issue_cases, "images": images, "key_order": key_order,
+    }
+    json.dumps(data, allow_nan=False)
+    write("auto", data)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")

@@ -102,3 +102,17 @@ fn the_bounds_are_inclusive_and_a_wrong_type_is_refused() {
     assert_eq!(refused(json!({"detail": null})).field, "detail");
     assert_eq!(refused(json!([1, 2])).code, "validation_error");
 }
+
+#[test]
+fn a_dump_is_pydantics_model_dump_in_the_order_the_fields_are_declared() {
+    // the defaults, and a parse of values whose kinds differ from the field's (an integer for a float)
+    let golden = common::fixture_json("schema.json");
+    assert_eq!(Value::Object(params::dump(&vexel_rs::engine::VexelParams::default())), golden["defaults"]);
+    let parsed = params::parse(&json!({"detail": 10, "min_region": 16.0, "strokes": false})).unwrap();
+    let dumped = params::dump(&parsed);
+    assert_eq!(dumped["detail"], json!(10.0));
+    assert!(dumped["detail"].is_f64() && dumped["min_region"].is_u64());
+    let order: Vec<&str> = golden["order"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(dumped.keys().map(String::as_str).collect::<Vec<_>>(), order);
+    assert_eq!((&dumped["strokes"], &dumped["gradients"]), (&json!(false), &json!(true)));
+}

@@ -206,6 +206,35 @@ pub fn defaults() -> Map<String, Value> {
         .collect()
 }
 
+/// The parameters as Pydantic's `VexelParams.model_dump()` gives them: every field, in the order
+/// they are declared, numbers as the kind the field is (`10.0`, not `10`, for a `float`).
+pub fn dump(p: &VexelParams) -> Map<String, Value> {
+    fields()
+        .into_iter()
+        .map(|f| {
+            let v = match f.name {
+                "upsample" => json!(p.upsample),
+                "detail" => json!(p.detail),
+                "min_region" => json!(p.min_region),
+                "gradients" => json!(p.gradients),
+                "max_stops" => json!(p.max_stops),
+                "layering" => json!(p.layering),
+                "corner_threshold" => json!(p.corner_threshold),
+                "curve_tolerance" => json!(p.curve_tolerance),
+                "shape_fitting" => json!(p.shape_fitting),
+                "refine" => json!(p.refine),
+                "strokes" => json!(p.strokes),
+                "shadows" => json!(p.shadows),
+                "stroke_tolerance" => json!(p.stroke_tolerance),
+                "overlaps" => json!(p.overlaps),
+                "path_precision" => json!(p.path_precision),
+                other => unreachable!("{other}: in the table but not dumped"),
+            };
+            (f.name.to_string(), v)
+        })
+        .collect()
+}
+
 fn err(field: &str, message: String) -> ParamError {
     ParamError { code: "validation_error", field: field.to_string(), message }
 }
