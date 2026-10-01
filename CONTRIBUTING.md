@@ -60,6 +60,12 @@ writes (`api.json`, `auto.json`, `auto_*.svg`), so a change to the engine that
 alters its output breaks the core's tests on macOS arm64, where they compare the
 bytes. Re-export them before you push (the next section).
 
+If you change a dependency of the Rust workspace (`cargo update`, a version in any `Cargo.toml`), the Docker
+image's own lockfile moves with it: `cd backend && .venv/bin/python -m tools.sync_vexel_lock` copies the
+engine's closure out of the root `Cargo.lock` (the pytest `test_vexel_lock_matches_workspace.py` fails with this
+command when it has fallen behind), and the image builds with `--locked`. Likewise `[profile.release]` in the
+root `Cargo.toml` is carried by `CARGO_PROFILE_RELEASE_*` in `backend/Dockerfile`; change both.
+
 New behaviour ships with a test. The concurrency and CORS-on-error tests in
 `backend/tests/test_api.py` are regression guards for real production
 incidents — if one of them fails, something is actually broken.

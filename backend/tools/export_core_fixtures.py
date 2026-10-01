@@ -2,17 +2,36 @@
 
     .venv/bin/python -m tools.export_core_fixtures            # everything
     .venv/bin/python -m tools.export_core_fixtures --only schema,presets
+    .venv/bin/python -m tools.export_core_fixtures --force    # off macOS arm64, or past a changed environment
 
 Each exporter writes one JSON file into the crate's tests/fixtures. The Rust
 tests compare against them, so the Python stays the definition of what the
 core does until the Python server is retired.
+
+The fixtures are exact only for the environment that made them: macOS on arm64
+(Accelerate's BLAS and Apple's libm decide the last bits of the floats the Rust
+tests compare to the bit), the numpy / scipy / scikit-image / Pillow / resvg-py
+of the venv, and the Rust `vexel_rs` engine (the Python engine writes other
+bytes). So the exporter
+
+- refuses to run elsewhere, or with the Python engine, unless `--force`;
+- writes `tests/fixtures/provenance.json` on every run: for each exporter that
+  ran, the versions and platform it ran with, the engine backend, and the git
+  commit of HEAD (and whether the Python and engine sources differ from it);
+- refuses to run when the record of an exporter it did NOT run (`--only` runs
+  only some) was made in another environment, unless `--force`: a set of
+  fixtures made by two numpys is not one set. Re-export everything, or pass
+  `--force` and read the record, which keeps each exporter's own environment.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import platform
+import subprocess
 import sys
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2502,17 +2521,93 @@ def _api() -> None:
     }, sort_keys=False)
 
 
+PROVENANCE = OUT / "provenance.json"
+# distributions whose versions decide the last bits of what the fixtures hold
+DISTRIBUTIONS = ("numpy", "scipy", "scikit-image", "Pillow", "resvg-py")
+
+
+def environment() -> dict:
+    """What this run is made with: the interpreter, the libraries, the machine and the engine's backend."""
+    from studi0trace.engines.vexel.engine import backend
+
+    def installed(name: str) -> str | None:
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return None
+
+    return {
+        "python": platform.python_version(),
+        **{name: installed(name) for name in DISTRIBUTIONS},
+        "machine": platform.machine(),
+        "system": platform.system(),
+        "vexel_backend": backend(),
+    }
+
+
+def git_state() -> dict:
+    """The commit of HEAD, and whether the sources a fixture is made from differ from it (None: no git here)."""
+    def git(*args: str) -> str | None:
+        try:
+            done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        return done.stdout.strip()
+
+    commit = git("rev-parse", "HEAD")
+    changed = git("status", "--porcelain", "--untracked-files=no", "--", "backend/studi0trace", "backend/vexel-rs", "backend/tools", "crates/studi0trace-core/src")
+    return {"commit": commit, "sources_differ_from_commit": None if changed is None else bool(changed)}
+
+
+def refusals(env: dict, record: dict, running: set[str]) -> list[str]:
+    """Why this run should not write fixtures (empty: it may)."""
+    why = []
+    if (env["system"], env["machine"]) != ("Darwin", "arm64"):
+        why.append(
+            f"this is {env['system']} on {env['machine']}, and the fixtures are exact only for macOS on arm64: Accelerate's BLAS and Apple's libm "
+            "decide the last bits of the floats the Rust tests compare to the bit (tests/common/mod.rs, exact())"
+        )
+    if env["vexel_backend"] != "rust":
+        why.append(
+            f"the engine backend is {env['vexel_backend']!r}, not 'rust': the fixtures hold the SVG the Rust engine writes. "
+            "Build it with `maturin develop --release -m vexel-rs/Cargo.toml` from backend/ (and leave VEXEL_BACKEND unset)"
+        )
+    for name, r in sorted(record.get("exporters", {}).items()):
+        if name in running:
+            continue
+        changed = sorted(k for k in env.keys() | r["environment"].keys() if env.get(k) != r["environment"].get(k))
+        if changed:
+            diff = ", ".join(f"{k}: {r['environment'].get(k)} -> {env.get(k)}" for k in changed)
+            why.append(f"the fixtures of `{name}` were made in another environment ({diff}) and this run does not remake them: "
+                       "re-export everything (no --only), or pass --force and read provenance.json afterwards")
+    return why
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")
+    ap.add_argument("--force", action="store_true", help="run off macOS arm64, with the Python engine, or with fixtures of another environment beside")
     args = ap.parse_args()
     only = {s for s in args.only.split(",") if s}
     unknown = sorted(only - EXPORTERS.keys())
     if unknown:
         sys.exit(f"unknown exporter {', '.join(unknown)}; known: {', '.join(sorted(EXPORTERS))}")
+    running = {name for name in EXPORTERS if not only or name in only}
+
+    env = environment()
+    record = json.loads(PROVENANCE.read_text(encoding="utf-8")) if PROVENANCE.exists() else {"exporters": {}}
+    why = refusals(env, record, running)
+    if why and not args.force:
+        sys.exit("refusing to export fixtures:\n  - " + "\n  - ".join(why) + "\n(--force overrides, and provenance.json then records what was true)")
+    for line in why:
+        print("forced past:", line, file=sys.stderr)
+
     for name, fn in EXPORTERS.items():
-        if not only or name in only:
+        if name in running:
             fn()
+            record["exporters"][name] = {"environment": env, **git_state()}
+            # after each one, so that a run that fails halfway has recorded what it did write
+            PROVENANCE.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n", encoding="utf-8")
             print("wrote", name)
 
 

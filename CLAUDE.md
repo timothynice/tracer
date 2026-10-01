@@ -382,7 +382,11 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   The preset bundles are `engines/presets.json`, one file both read, and
   `preset_details.json` is embedded in the core too: `presets_eval --write-details`
   changes what the core answers, so re-export the fixtures after it.
-- Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`.
+- Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`, which builds vexel-rs alone
+  (context `backend/`, no workspace): it reads `backend/vexel-rs/Cargo.lock`, never touched by cargo inside
+  the workspace (`--locked`), and carries the root `[profile.release]` as `CARGO_PROFILE_RELEASE_*`
+  variables. Both are held by `tests/test_vexel_lock_matches_workspace.py`; after the workspace's
+  dependencies move, `cd backend && .venv/bin/python -m tools.sync_vexel_lock` refreshes the lock.
 - Frontend follows the Studi0 design system (semantic HSL tokens, Poppins,
   `.dark` on `<html>`, `h-10 rounded-md` buttons, sticky blurred header). Never
   use a one-sided coloured border as a highlight; use the yellow dot, a

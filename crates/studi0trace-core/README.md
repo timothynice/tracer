@@ -53,9 +53,27 @@ cd backend && .venv/bin/python -m tools.export_core_fixtures                   #
 cd backend && .venv/bin/python -m tools.export_core_fixtures --only presets,api
 ```
 
-Re-export after changing the Python module a fixture is made from, and after
-`bench.presets_eval --write-details` (the core embeds `presets.json` and
-`preset_details.json`). Review the diff of the fixtures as you would of code.
+Re-export after changing the Python module a fixture is made from, after a change to
+the engine that alters what it writes (the `api` and `auto` fixtures embed its SVG; see
+`CONTRIBUTING.md`), and after `bench.presets_eval --write-details` (the core embeds
+`presets.json` and `preset_details.json`). Review the diff of the fixtures as you would
+of code.
+
+**Regenerating, and where the fixtures came from.** The fixtures are exact only for the
+environment that made them: macOS on arm64, the venv's numpy, scipy, scikit-image,
+Pillow and resvg-py, and the Rust `vexel_rs` (built with `maturin develop --release -m
+vexel-rs/Cargo.toml`, `VEXEL_BACKEND` unset). The exporter therefore
+
+- refuses to run off macOS arm64, or with the Python engine, unless `--force`;
+- writes `tests/fixtures/provenance.json` on every run: per exporter, the versions and
+  platform it ran with, the engine backend, the commit of HEAD and whether the Python
+  and engine sources differ from it (`--only` rewrites only the entries it runs);
+- refuses a partial run (`--only`) beside records made in another environment, again
+  unless `--force`: re-export everything (no `--only`) after upgrading a library.
+
+`tests/provenance.rs` prints that file, and the messages of the tests that compare the
+engine's output to a fixture point at it; if an exact comparison fails on a machine that
+is not the one recorded there, that is the first thing to check.
 
 **Platform.** The fixtures were exported on macOS arm64. Results that go through
 libm (`atan2`, `sin`, `cos`: the SVG parser's arcs, the geometry card, the
