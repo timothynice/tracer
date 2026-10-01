@@ -8,6 +8,14 @@ implementation is checked against the other.
 
     .venv/bin/python -m tools.diffcheck                 # every stage, whole corpus
     .venv/bin/python -m tools.diffcheck labels0 --filter 128
+    .venv/bin/python -m tools.diffcheck scorecard       # the Rust core's scorecard against quality.assess
+
+The `scorecard` stage holds `crates/studi0trace-core` (the app's Rust port of
+everything around the engine) to the Python's `imaging/quality.py`; it needs the
+`studi0trace_core` extension, which is built apart from `vexel_rs`:
+
+    cd backend && VIRTUAL_ENV=$PWD/.venv .venv/bin/python -m maturin develop --release \\
+        -m ../crates/studi0trace-core/Cargo.toml --features python
 
 Exact agreement is expected only for the stages that decide the *topology* —
 the partition's labels, and the filters feeding it. Downstream of those the two
@@ -37,6 +45,8 @@ from studi0trace.engines.vexel.engine import VexelParams, trace_rgba  # noqa: E4
 from studi0trace.engines.vexel.strokes import is_thin, medial_axis  # noqa: E402
 from studi0trace.engines.vexel.boundary import thin_coverage  # noqa: E402
 from studi0trace.engines.vexel.engine import _group_thin  # noqa: E402
+from studi0trace.imaging import quality  # noqa: E402
+from studi0trace.imaging.svg import normalize_dimensions  # noqa: E402
 from studi0trace.engines.vexel.strokes import Stroke, is_thin, stroke_fidelity, stroke_geometry  # noqa: E402
 
 CORPUS = pathlib.Path(__file__).resolve().parent.parent / "bench" / "corpus"
@@ -156,6 +166,21 @@ TOLERANCE = {
     # one side and not the other, or whose polylines differ in length, fails
     # outright.
     "strokes": ("max", 1e-6, 0.0),
+    # The artifact scorecard and fidelity (`imaging/quality.py` against
+    # `crates/studi0trace-core/src/scorecard.rs`), both handed one finished SVG
+    # and its source. `rel` is the largest |Δ| / max(|a|, |b|) over the card's
+    # floats. What must match exactly fails outright and is not in the number:
+    # the keys and their order, every key's type (a count that came back as a
+    # float is drift even when the values agree) and every count. The floats
+    # are bit-equal on the machine the core's fixtures were made on (macOS
+    # arm64) except the two ΔE keys: CIEDE2000 runs over CIELAB, which numpy
+    # reaches through BLAS's fused multiply-add in `matmul` and the core through
+    # plain arithmetic, a few ulps of a Lab value that the mean and the 95th
+    # percentile carry (4e-12 and 1e-13 relative over the corpus). Elsewhere the
+    # libm differs in the last bit (`sin`, `atan2`, `sqrt` under the geometry's
+    # sums), so 1e-9 is the bar for every float; the counts do not move with it,
+    # since a decision a ulp could tip would be a threshold the card sits on.
+    "scorecard": ("rel", 1e-9, 0.0),
 }
 
 
@@ -181,7 +206,13 @@ def _report(name: str, path: pathlib.Path, py: np.ndarray, rs: np.ndarray) -> bo
         detail = "exact" if bad == 0 else f"{bad} / {py.size} pixels ({bad / py.size:.4%})"
     else:
         d = np.abs(py.astype(np.float64) - rs.astype(np.float64))
-        err = float(np.sqrt((d * d).mean())) if metric == "rms" else float(d.max())
+        if metric == "rel":
+            scale = np.maximum(np.abs(py), np.abs(rs)).astype(np.float64)
+            err = float(np.divide(d, scale, out=np.zeros_like(d), where=scale > 0).max())
+        elif metric == "rms":
+            err = float(np.sqrt((d * d).mean()))
+        else:
+            err = float(d.max())
         ok = err <= atol
         detail = f"{metric} |Δ| = {err:.3e} (tolerance {atol:.0e}), max {d.max():.3e}"
     print(f"  {'ok  ' if ok else 'FAIL'} {name:9s} {path.name}: {detail}")
@@ -1078,6 +1109,92 @@ def strokes(path):
     rs = np.array([v for row in rs_rows for v in row], dtype=np.float64)
     return py, rs
 
+CORE_MISSING = (
+    "diffcheck scorecard: the studi0trace_core extension is not installed in this environment.\n"
+    "Build it into the backend's venv (it sits beside vexel_rs, a different module):\n"
+    "  cd backend && VIRTUAL_ENV=$PWD/.venv .venv/bin/python -m maturin develop --release \\\n"
+    "      -m ../crates/studi0trace-core/Cargo.toml --features python"
+)
+
+# The largest relative difference each float key of the scorecard showed over the run.
+SCORECARD_MAX: dict[str, float] = {}
+
+
+def _core_assess():
+    """`studi0trace_core.assess`, or an exit that says how to build it."""
+    try:
+        from studi0trace_core import assess
+    except ImportError:
+        raise SystemExit(CORE_MISSING) from None
+    return assess
+
+
+def _native(v):
+    """A numpy scalar as the Python number it is, so that a type is the Python's."""
+    return v.item() if isinstance(v, np.generic) else v
+
+
+@stage
+def scorecard(path):
+    """The Rust core's scorecard (`crates/studi0trace-core`, `scorecard::assess`)
+    against `imaging/quality.assess`, for one finished trace of the item at the
+    defaults. Both are given the same SVG and the same source pixels; the SVG
+    comes from the Rust engine, which is what the server runs. The card must have
+    the same keys in the same order, every key the same type and every count the
+    same value, and then the floats are held to the worst relative difference.
+    """
+    assess_rs = _core_assess()
+    a = load(path)
+    h, w = a.shape[:2]
+    svg = normalize_dimensions(vexel_rs.trace(a.tobytes(), w, h, VexelParams().model_dump()), w, h)
+    py = quality.assess(svg, quality.Reference(a))
+    rs = assess_rs(svg, a.tobytes(), w, h)
+
+    fail = (np.zeros(1), np.full(1, 1e9))
+    if list(py) != list(rs):
+        lacking = [k for k in py if k not in rs]
+        extra = [k for k in rs if k not in py]
+        why = f"missing {lacking} and extra {extra} in Rust" if lacking or extra else f"keys in another order: {list(rs)}"
+        print(f"  FAIL scorecard {path.name}: {why}")
+        return fail
+    py_floats, rs_floats, mismatched = [], [], False
+    for key in py:
+        x, y = _native(py[key]), rs[key]
+        if y is None and isinstance(x, float):  # the core's NaN, which JSON cannot hold
+            y = float("nan")
+        if type(x) is not type(y):
+            print(f"  FAIL scorecard {path.name}: {key} is a {type(x).__name__} ({x!r}) in Python, a {type(y).__name__} ({y!r}) in Rust")
+            mismatched = True
+        elif isinstance(x, float):
+            if np.isnan(x) or np.isnan(y):
+                if not (np.isnan(x) and np.isnan(y)):
+                    print(f"  FAIL scorecard {path.name}: {key} is {x!r} in Python, {y!r} in Rust")
+                    mismatched = True
+                continue
+            py_floats.append(x)
+            rs_floats.append(y)
+            scale = max(abs(x), abs(y))
+            rel = abs(x - y) / scale if scale > 0 else 0.0
+            SCORECARD_MAX[key] = max(SCORECARD_MAX.get(key, 0.0), rel)
+        elif x != y:
+            print(f"  FAIL scorecard {path.name}: {key} is {x!r} in Python, {y!r} in Rust")
+            mismatched = True
+    if mismatched:
+        return fail
+    if not py_floats:
+        return np.zeros(1), np.zeros(1)
+    return np.array(py_floats, dtype=np.float64), np.array(rs_floats, dtype=np.float64)
+
+
+def _scorecard_summary() -> None:
+    worst = {k: v for k, v in SCORECARD_MAX.items() if v > 0}
+    print(f"  {len(SCORECARD_MAX)} float keys, {len(SCORECARD_MAX) - len(worst)} bit-equal over every item; the largest relative differences:")
+    for key, rel in sorted(worst.items(), key=lambda kv: -kv[1]):
+        print(f"    {key:18s} {rel:.3e}")
+
+
+SUMMARIES = {"scorecard": _scorecard_summary}
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -1094,12 +1211,18 @@ def main() -> int:
     failures = 0
     informational = ("trace_labels", "trace_arcs")
     default = list(STAGES) if args.all else [n for n in STAGES if n not in informational]
-    for name in args.stages or default:
+    selected = args.stages or default
+    if "scorecard" in selected:
+        # before any stage runs: a missing extension is an error, not a stage that skips
+        _core_assess()
+    for name in selected:
         print(f"{name}:")
         for p in paths:
             py, rs = STAGES[name](p)
             if not _report(name, p, py, rs):
                 failures += 1
+        if name in SUMMARIES:
+            SUMMARIES[name]()
     print(f"\n{failures} failing (stage, item) pairs over {len(paths)} items")
     return 1 if failures else 0
 

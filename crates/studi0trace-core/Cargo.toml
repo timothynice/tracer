@@ -6,6 +6,9 @@ license = "MIT"
 description = "Studi0Trace: everything around the Vexel engine, for the app and the web build"
 
 [lib]
+# the default (the package name with its dash made an underscore), spelled out because maturin
+# takes the Python module's name from it and refuses a dash
+name = "studi0trace_core"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]

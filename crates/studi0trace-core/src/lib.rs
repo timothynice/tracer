@@ -17,3 +17,6 @@ pub mod render;
 pub mod resample;
 pub mod scorecard;
 pub mod svg;
+
+#[cfg(feature = "python")]
+mod python;
