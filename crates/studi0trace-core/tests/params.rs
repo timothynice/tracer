@@ -116,3 +116,108 @@ fn a_dump_is_pydantics_model_dump_in_the_order_the_fields_are_declared() {
     assert_eq!(dumped.keys().map(String::as_str).collect::<Vec<_>>(), order);
     assert_eq!((&dumped["strokes"], &dumped["gradients"]), (&json!(false), &json!(true)));
 }
+
+// ---------------------------------------------------------------- refusals, described as Pydantic describes them
+
+/// Everything `check` says of `values`, as (type, field, message, input, ctx).
+fn all_refusals(values: Value) -> Vec<(&'static str, String, String, Value, Option<Value>)> {
+    match params::check(&values) {
+        Err(errors) => errors.into_iter().map(|e| (e.kind, e.field, e.message, e.input, e.ctx.map(Value::Object))).collect(),
+        Ok(_) => panic!("check accepted {values}"),
+    }
+}
+
+#[test]
+fn each_kind_of_refusal_is_the_one_pydantic_reports_with_its_words_input_and_context() {
+    let one = |values: Value| {
+        let mut all = all_refusals(values);
+        assert_eq!(all.len(), 1, "{all:?}");
+        all.remove(0)
+    };
+    // (the same cases are answered by the real app in tests/fixtures/api.json and held to it by tests/api.rs)
+    assert_eq!(
+        one(json!({"detail": 0.5})),
+        ("greater_than_equal", "detail".into(), "Input should be greater than or equal to 1".into(), json!(0.5), Some(json!({"ge": 1.0})))
+    );
+    assert_eq!(
+        one(json!({"min_region": 201})),
+        ("less_than_equal", "min_region".into(), "Input should be less than or equal to 200".into(), json!(201), Some(json!({"le": 200})))
+    );
+    assert_eq!(one(json!({"stroke_tolerance": 0.04})).2, "Input should be greater than or equal to 0.05");
+    assert_eq!(one(json!({"corner_threshold": 151})).4, Some(json!({"le": 150.0})));
+    assert_eq!(one(json!({"detail": null})), ("float_type", "detail".into(), "Input should be a valid number".into(), json!(null), None));
+    assert_eq!(one(json!({"min_region": null})).0, "int_type");
+    assert_eq!(
+        one(json!({"min_region": 16.5})),
+        ("int_from_float", "min_region".into(), "Input should be a valid integer, got a number with a fractional part".into(), json!(16.5), None)
+    );
+    assert_eq!(one(json!({"gradients": 1})), ("bool_type", "gradients".into(), "Input should be a valid boolean".into(), json!(1), None));
+    assert_eq!(
+        one(json!({"layering": "sideways"})),
+        (
+            "literal_error",
+            "layering".into(),
+            "Input should be 'stacked' or 'cutout'".into(),
+            json!("sideways"),
+            Some(json!({"expected": "'stacked' or 'cutout'"}))
+        )
+    );
+    assert_eq!(one(json!({"upsample": 3})).2, "Input should be 'auto', 'never' or 'always'");
+    assert_eq!(one(json!({"colour": {"a": 1}})), ("extra_forbidden", "colour".into(), "Extra inputs are not permitted".into(), json!({"a": 1}), None));
+    assert_eq!(
+        one(json!("abc")),
+        (
+            "model_type",
+            "".into(),
+            "Input should be a valid dictionary or instance of VexelParams".into(),
+            json!("abc"),
+            Some(json!({"class_name": "VexelParams"}))
+        )
+    );
+}
+
+#[test]
+fn every_error_is_reported_the_fields_in_the_order_they_are_declared_and_then_the_keys_that_are_not_fields() {
+    // Pydantic's order, not the order the keys arrived in
+    let all = all_refusals(json!({"colour": 1, "path_precision": 9, "layering": "x", "detail": 0, "shine": 2, "max_stops": 9}));
+    let fields: Vec<&str> = all.iter().map(|e| e.1.as_str()).collect();
+    assert_eq!(fields, ["detail", "max_stops", "layering", "path_precision", "colour", "shine"]);
+    assert_eq!(all.iter().map(|e| e.0).collect::<Vec<_>>(), ["greater_than_equal", "less_than_equal", "literal_error", "less_than_equal", "extra_forbidden", "extra_forbidden"]);
+    // `parse` is the first of them
+    let first = refused(json!({"colour": 1, "detail": 0}));
+    assert_eq!((first.field.as_str(), first.kind), ("detail", "greater_than_equal"));
+}
+
+#[test]
+fn a_refusal_reads_as_field_colon_message_and_is_an_error() {
+    let e = refused(json!({"detail": 0.5}));
+    assert_eq!(e.to_string(), "detail: Input should be greater than or equal to 1");
+    let whole = refused(json!(5));
+    assert_eq!(whole.to_string(), "Input should be a valid dictionary or instance of VexelParams");
+    let as_error: &dyn std::error::Error = &e;
+    assert!(as_error.source().is_none());
+    let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(e);
+    assert!(boxed.to_string().starts_with("detail: "));
+}
+
+#[test]
+fn the_schema_is_the_text_get_engines_sends_a_propertys_keys_and_its_hints_sorted() {
+    // Pydantic writes the keys of every property (and of the `ui` hints inside) alphabetically,
+    // and keeps the properties in the order they are declared
+    let schema = params::schema();
+    for (name, property) in schema["properties"].as_object().unwrap() {
+        let keys: Vec<&str> = property.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(keys, sorted, "{name}");
+        let hints: Vec<&str> = property["ui"].as_object().unwrap().keys().map(String::as_str).collect();
+        let mut sorted = hints.clone();
+        sorted.sort_unstable();
+        assert_eq!(hints, sorted, "{name}.ui");
+    }
+    let top: Vec<&str> = schema.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(top, ["additionalProperties", "properties", "title", "type"]);
+    let declared: Vec<&str> = params::fields().iter().map(|f| f.name).collect();
+    let listed: Vec<&str> = schema["properties"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(listed, declared);
+}

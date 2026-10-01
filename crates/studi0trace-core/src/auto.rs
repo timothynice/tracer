@@ -277,14 +277,20 @@ pub struct ErrorBody {
 }
 
 impl ErrorBody {
-    fn new(code: &str, message: impl Into<String>) -> ErrorBody {
+    pub fn new(code: &str, message: impl Into<String>) -> ErrorBody {
         ErrorBody { code: code.into(), message: message.into() }
     }
 
     /// What the route reports of an exception that is not an `EngineError`: a candidate that
     /// crashed (here: panicked) or whose parameters would not validate.
-    fn crashed(message: impl Into<String>) -> ErrorBody {
+    pub(crate) fn crashed(message: impl Into<String>) -> ErrorBody {
         ErrorBody::new("engine_crashed", message)
+    }
+}
+
+impl std::fmt::Display for ErrorBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
     }
 }
 
@@ -388,8 +394,13 @@ impl std::error::Error for AutoError {}
 /// to make a candidate panic or answer with something that does not render.
 pub type Tracer<'a> = dyn Fn(&Preset, &Image, &VexelParams) -> String + Sync + 'a;
 
-fn vexel(_: &Preset, img: &Image, p: &VexelParams) -> String {
+/// Vexel's pipeline on an image: the SVG as the engine writes it, before the viewBox is set.
+pub(crate) fn trace_vexel(img: &Image, p: &VexelParams) -> String {
     vexel_rs::engine::trace_rgba(&img.rgba, img.height as usize, img.width as usize, p)
+}
+
+fn vexel(_: &Preset, img: &Image, p: &VexelParams) -> String {
+    trace_vexel(img, p)
 }
 
 /// A panic's message.
@@ -406,6 +417,26 @@ fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     catch_unwind(AssertUnwindSafe(f)).map_err(message_of)
 }
 
+/// `Engine.trace` as the route calls it: trace, give the SVG the image's viewBox and count it
+/// (`engines.base.finish`; timed together, in milliseconds, unrounded). A trace that panics is the
+/// engine's `engine_crashed`, never the caller's: the route's `_failure` for an exception that is
+/// not an `EngineError`, which Vexel never raises. [`run`] traces each candidate with it, and so
+/// does `api::Core` a plain trace.
+pub(crate) fn trace_finished(
+    img: &Image,
+    params: &VexelParams,
+    trace: impl FnOnce(&Image, &VexelParams) -> String,
+) -> Result<(String, Stats, f64), ErrorBody> {
+    guard(|| {
+        let started = Instant::now();
+        let raw = trace(img, params);
+        let svg = svg::normalize_dimensions(&raw, img.width, img.height);
+        let stats = svg::stats(&svg);
+        (svg, stats, started.elapsed().as_secs_f64() * 1000.0)
+    })
+    .map_err(|m| ErrorBody::crashed(format!("panic: {m}")))
+}
+
 /// Trace, finish (`Engine.trace`: the trace, the viewBox, the stats; timed together) and, if it
 /// traced, leave the scoring for later. `routes._run_auto`'s `run`, up to `ref_ready.wait()`.
 fn trace_one(img: &Image, preset: &Preset, trace: &Tracer<'_>) -> Candidate {
@@ -418,16 +449,9 @@ fn trace_one(img: &Image, preset: &Preset, trace: &Tracer<'_>) -> Candidate {
         }
     };
     c.parameters = Some(params::dump(&params));
-    let traced = guard(|| {
-        let started = Instant::now();
-        let raw = trace(preset, img, &params);
-        let svg = svg::normalize_dimensions(&raw, img.width, img.height);
-        let stats = svg::stats(&svg);
-        (svg, stats, started.elapsed().as_secs_f64() * 1000.0)
-    });
-    match traced {
+    match trace_finished(img, &params, |i, p| trace(preset, i, p)) {
         Ok((svg, stats, ms)) => (c.svg, c.stats, c.elapsed_ms) = (Some(svg), Some(stats), Some(ms)),
-        Err(m) => c.error = Some(ErrorBody::crashed(format!("panic: {m}"))),
+        Err(e) => c.error = Some(e),
     }
     c
 }

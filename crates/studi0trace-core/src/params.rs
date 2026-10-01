@@ -6,7 +6,22 @@
 //!
 //! The fields are in the order Pydantic declares them. The UI lays its controls
 //! out in that order (`Object.entries(schema.properties)`), so `schema()` keeps
-//! it: serde_json's `preserve_order` feature is on for this crate.
+//! it: serde_json's `preserve_order` feature is on for this crate. Inside a
+//! property the keys are sorted, as Pydantic writes them, so the schema is the
+//! same text as `GET /engines` sends and not only the same value.
+//!
+//! # What `parse` refuses, and how it says so
+//!
+//! [`check`] reads the values as Pydantic's *strict* mode would, which is stricter than the
+//! lax mode the route validates with: a number must be a JSON number (not `"6"` or `true`),
+//! a boolean a JSON boolean (not `"yes"` or `1`), and an integer a whole number (`16.0` is
+//! 16, `16.5` is refused). Everything it refuses it describes as Pydantic describes the
+//! same refusal ([`ParamError::kind`] is the error's `type`, [`ParamError::message`] its
+//! `msg`, with `input` and `ctx`), and in Pydantic's order (the fields in the order they are
+//! declared, then the keys that are not fields), so the route's 422 can be written from it
+//! to the letter. Where the lax mode would have accepted the value the refusal is the
+//! strict one (`float_type`, not a conversion), and the UI, which sends numbers, booleans
+//! and the options of a select, never meets it.
 use serde_json::{json, Map, Value};
 use vexel_rs::engine::VexelParams;
 
@@ -29,14 +44,36 @@ pub struct Field {
     pub ui: Value,
 }
 
-/// A parameter the engine will not take. `field` is the offending key (empty
-/// when the whole value was the wrong shape).
+/// A parameter the engine will not take, described as Pydantic describes the same refusal.
+/// `field` is the offending key (empty when the whole value was the wrong shape).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamError {
+    /// Always `"validation_error"`: the code a client keys on.
     pub code: &'static str,
     pub field: String,
+    /// Pydantic's `msg`: "Input should be greater than or equal to 1".
     pub message: String,
+    /// Pydantic's error `type`: `greater_than_equal`, `less_than_equal`, `float_type`, `int_type`,
+    /// `int_from_float`, `bool_type`, `literal_error`, `extra_forbidden` or `model_type`.
+    pub kind: &'static str,
+    /// The value that was refused, as it arrived.
+    pub input: Value,
+    /// Pydantic's `ctx` (`{"ge": 1.0}`, `{"expected": "'a' or 'b'"}`) for the errors that have one.
+    pub ctx: Option<Map<String, Value>>,
 }
+
+impl std::fmt::Display for ParamError {
+    /// `field: message`, as the frontend shows it; a refusal of the whole value is its message.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.field.is_empty() {
+            f.write_str(&self.message)
+        } else {
+            write!(f, "{}: {}", self.field, self.message)
+        }
+    }
+}
+
+impl std::error::Error for ParamError {}
 
 /// The parameter table, in declaration order.
 ///
@@ -161,7 +198,11 @@ pub fn schema() -> Value {
         let mut p = Map::new();
         p.insert("title".into(), json!(title(f.name)));
         p.insert("description".into(), json!(f.description));
-        p.insert("ui".into(), f.ui);
+        let mut ui = f.ui;
+        if let Value::Object(hints) = &mut ui {
+            hints.sort_keys();
+        }
+        p.insert("ui".into(), ui);
         match f.kind {
             Kind::Number { default, min, max } => {
                 p.insert("type".into(), json!("number"));
@@ -185,6 +226,7 @@ pub fn schema() -> Value {
                 p.insert("enum".into(), json!(options));
             }
         }
+        p.sort_keys(); // Pydantic writes a property's keys in alphabetical order
         props.insert(f.name.into(), Value::Object(p));
     }
     json!({"additionalProperties": false, "properties": props, "title": "VexelParams", "type": "object"})
@@ -235,58 +277,94 @@ pub fn dump(p: &VexelParams) -> Map<String, Value> {
         .collect()
 }
 
-fn err(field: &str, message: String) -> ParamError {
-    ParamError { code: "validation_error", field: field.to_string(), message }
+fn refuse(field: &str, kind: &'static str, message: String, input: &Value, ctx: Option<Value>) -> ParamError {
+    ParamError {
+        code: "validation_error",
+        field: field.to_string(),
+        message,
+        kind,
+        input: input.clone(),
+        ctx: ctx.and_then(|c| c.as_object().cloned()),
+    }
+}
+
+/// Pydantic's `expected` of a `Literal`: `'a'`, `'a' or 'b'`, `'a', 'b' or 'c'`.
+fn expected(options: &[&str]) -> String {
+    let quoted: Vec<String> = options.iter().map(|o| format!("'{o}'")).collect();
+    match quoted.as_slice() {
+        [] => String::new(),
+        [only] => only.clone(),
+        [init @ .., last] => format!("{} or {}", init.join(", "), last),
+    }
 }
 
 /// Validate `values` (a JSON object; a missing key takes its default) into the
-/// engine's parameters. Refuses an unknown key, a value of the wrong type, a
-/// number outside its bounds and a choice that is not one of the options, and
-/// names the field. An integer may arrive as a whole float (`16.0`), as
-/// Pydantic allows; `16.5` is refused.
-pub fn parse(values: &Value) -> Result<VexelParams, ParamError> {
-    let obj = values.as_object().ok_or_else(|| err("", "parameters must be an object".into()))?;
+/// engine's parameters, or say everything that is wrong with it, in Pydantic's order.
+/// See the module documentation for what is refused and how it is described.
+pub fn check(values: &Value) -> Result<VexelParams, Vec<ParamError>> {
+    let Some(obj) = values.as_object() else {
+        return Err(vec![refuse(
+            "",
+            "model_type",
+            "Input should be a valid dictionary or instance of VexelParams".into(),
+            values,
+            Some(json!({"class_name": "VexelParams"})),
+        )]);
+    };
     let table = fields();
-    for key in obj.keys() {
-        if !table.iter().any(|f| f.name == key) {
-            return Err(err(key, "Extra inputs are not permitted".into()));
-        }
-    }
     let mut out = VexelParams::default();
+    let mut errors = Vec::new();
     for f in &table {
         let Some(v) = obj.get(f.name) else { continue };
         let not_in_table = || unreachable!("{}: in the table but not set in parse", f.name);
         match f.kind {
             Kind::Number { min, max, .. } => {
-                let x = v.as_f64().ok_or_else(|| err(f.name, "Input should be a valid number".into()))?;
-                if x < min || x > max {
-                    return Err(err(f.name, format!("Input should be between {min} and {max}")));
-                }
-                match f.name {
-                    "detail" => out.detail = x,
-                    "corner_threshold" => out.corner_threshold = x,
-                    "curve_tolerance" => out.curve_tolerance = x,
-                    "stroke_tolerance" => out.stroke_tolerance = x,
-                    _ => not_in_table(),
+                let Some(x) = v.as_f64() else {
+                    errors.push(refuse(f.name, "float_type", "Input should be a valid number".into(), v, None));
+                    continue;
+                };
+                if x < min {
+                    errors.push(refuse(f.name, "greater_than_equal", format!("Input should be greater than or equal to {min}"), v, Some(json!({"ge": min}))));
+                } else if x > max {
+                    errors.push(refuse(f.name, "less_than_equal", format!("Input should be less than or equal to {max}"), v, Some(json!({"le": max}))));
+                } else {
+                    match f.name {
+                        "detail" => out.detail = x,
+                        "corner_threshold" => out.corner_threshold = x,
+                        "curve_tolerance" => out.curve_tolerance = x,
+                        "stroke_tolerance" => out.stroke_tolerance = x,
+                        _ => not_in_table(),
+                    }
                 }
             }
             Kind::Integer { min, max, .. } => {
-                let x = v
-                    .as_f64()
-                    .filter(|x| x.fract() == 0.0)
-                    .ok_or_else(|| err(f.name, "Input should be a valid integer".into()))? as i64;
-                if x < min || x > max {
-                    return Err(err(f.name, format!("Input should be between {min} and {max}")));
+                let Some(x) = v.as_f64() else {
+                    errors.push(refuse(f.name, "int_type", "Input should be a valid integer".into(), v, None));
+                    continue;
+                };
+                if x.fract() != 0.0 {
+                    errors.push(refuse(f.name, "int_from_float", "Input should be a valid integer, got a number with a fractional part".into(), v, None));
+                    continue;
                 }
-                match f.name {
-                    "min_region" => out.min_region = x as usize,
-                    "max_stops" => out.max_stops = x as usize,
-                    "path_precision" => out.path_precision = x as usize,
-                    _ => not_in_table(),
+                let x = x as i64;
+                if x < min {
+                    errors.push(refuse(f.name, "greater_than_equal", format!("Input should be greater than or equal to {min}"), v, Some(json!({"ge": min}))));
+                } else if x > max {
+                    errors.push(refuse(f.name, "less_than_equal", format!("Input should be less than or equal to {max}"), v, Some(json!({"le": max}))));
+                } else {
+                    match f.name {
+                        "min_region" => out.min_region = x as usize,
+                        "max_stops" => out.max_stops = x as usize,
+                        "path_precision" => out.path_precision = x as usize,
+                        _ => not_in_table(),
+                    }
                 }
             }
             Kind::Bool { .. } => {
-                let x = v.as_bool().ok_or_else(|| err(f.name, "Input should be a valid boolean".into()))?;
+                let Some(x) = v.as_bool() else {
+                    errors.push(refuse(f.name, "bool_type", "Input should be a valid boolean".into(), v, None));
+                    continue;
+                };
                 match f.name {
                     "gradients" => out.gradients = x,
                     "shape_fitting" => out.shape_fitting = x,
@@ -298,10 +376,11 @@ pub fn parse(values: &Value) -> Result<VexelParams, ParamError> {
                 }
             }
             Kind::Choice { options, .. } => {
-                let x = v
-                    .as_str()
-                    .filter(|s| options.contains(s))
-                    .ok_or_else(|| err(f.name, format!("Input should be {}", options.join(" or "))))?;
+                let Some(x) = v.as_str().filter(|s| options.contains(s)) else {
+                    let want = expected(options);
+                    errors.push(refuse(f.name, "literal_error", format!("Input should be {want}"), v, Some(json!({"expected": want}))));
+                    continue;
+                };
                 match f.name {
                     "upsample" => out.upsample = x.to_string(),
                     "layering" => out.layering = x.to_string(),
@@ -310,5 +389,23 @@ pub fn parse(values: &Value) -> Result<VexelParams, ParamError> {
             }
         }
     }
-    Ok(out)
+    // the keys that are not fields come after the fields' own errors, in the order they arrived
+    for (key, v) in obj {
+        if !table.iter().any(|f| f.name == key) {
+            errors.push(refuse(key, "extra_forbidden", "Extra inputs are not permitted".into(), v, None));
+        }
+    }
+    if errors.is_empty() {
+        Ok(out)
+    } else {
+        Err(errors)
+    }
+}
+
+/// [`check`], reporting the first thing wrong with `values` only. Refuses an unknown key, a
+/// value of the wrong type, a number outside its bounds and a choice that is not one of the
+/// options, and names the field. An integer may arrive as a whole float (`16.0`), as
+/// Pydantic allows; `16.5` is refused.
+pub fn parse(values: &Value) -> Result<VexelParams, ParamError> {
+    check(values).map_err(|mut all| all.remove(0))
 }

@@ -27,9 +27,11 @@ def exporter(name: str):
     return wrap
 
 
-def write(name: str, data) -> None:
+def write(name: str, data, *, sort_keys: bool = True) -> None:
+    """One fixture. Keys are sorted so a re-export diffs cleanly; a fixture that holds the ORDER of a
+    response's keys (`api`) says `sort_keys=False` and carries it as written."""
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / f"{name}.json").write_text(json.dumps(data, indent=1, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    (OUT / f"{name}.json").write_text(json.dumps(data, indent=1, ensure_ascii=False, sort_keys=sort_keys) + "\n", encoding="utf-8")
 
 
 @exporter("schema")
@@ -2244,6 +2246,223 @@ def _auto() -> None:
     }
     json.dumps(data, allow_nan=False)
     write("auto", data)
+
+
+@exporter("api")
+def _api() -> None:
+    import base64
+    import hashlib
+    import io
+    import re
+
+    from fastapi.testclient import TestClient
+    from PIL import Image
+
+    from studi0trace.main import create_app
+    from studi0trace.settings import Settings
+
+    # The five calls the frontend makes (`getHealth`, `getEngines`, `getPresets`, `uploadImage`, `vectorize`) and
+    # the failures the routes raise, as the FastAPI app answers them: status and body, the real route included.
+    # Nothing is written by hand. The Rust `Core` answers the same calls and its JSON is compared as a STRING (so a
+    # key out of its place fails), after both sides are normalised the same way:
+    #   svg         -> its SHA-256 (the traces are byte-identical; a hash keeps the fixture small)
+    #   elapsed_ms  -> null (a wall time)
+    #   image_id    -> "<image_id>" (the Python's is uuid4().hex, random; the Rust one is a content hash; both are
+    #                  32 lowercase hex digits, which the test checks apart)
+    #   version     -> "<version>" (the crate's own)
+    # The Python app serves three engines; the core describes one, so `engines` keeps only Vexel.
+    ID_FORMAT = r"^[0-9a-f]{32}$"
+    wordmark = "bench/corpus/real/logo/vexel-wordmark-512.png"  # relative to backend/, as the other fixtures name a corpus image
+    mark = "bench/corpus/real/logo/studi0trace-mark-128.png"
+    sources: dict[str, dict] = {"wordmark": {"file": wordmark}, "mark128": {"file": mark}}
+    data_of = {"wordmark": (ROOT / "backend" / wordmark).read_bytes(), "mark128": (ROOT / "backend" / mark).read_bytes()}
+    # images Auto picks the 2nd, 3rd and 4th candidate for (auto.json): a route that promoted the first would not show on the others
+    picky = {"multi_shape128": "bench/corpus/synthetic/gradient/multi-shape-128.png",
+             "linear_4stop128": "bench/corpus/synthetic/gradient/linear-4stop-128.png",
+             "venn128": "bench/corpus/synthetic/logo/venn-128.png"}
+    for key, file in picky.items():
+        sources[key] = {"file": file}
+        data_of[key] = (ROOT / "backend" / file).read_bytes()
+
+    def inline(name: str, data: bytes) -> None:
+        sources[name] = {"b64": base64.b64encode(data).decode("ascii")}
+        data_of[name] = data
+
+    inline("garbage", b"definitely not an image")
+    inline("empty", b"")
+    inline("corrupt_png", data_of["mark128"][: len(data_of["mark128"]) * 6 // 10])
+    tiff = io.BytesIO()
+    Image.new("RGB", (8, 8), (200, 30, 30)).save(tiff, "TIFF")
+    inline("tiff", tiff.getvalue())
+
+    def normal(node, *, svg: bool = True):
+        if isinstance(node, dict):
+            out = {}
+            for k, v in node.items():
+                if k == "svg" and isinstance(v, str):
+                    out[k] = hashlib.sha256(v.encode("utf-8")).hexdigest()
+                elif k == "elapsed_ms":
+                    out[k] = None
+                elif k == "image_id" and isinstance(v, str):
+                    assert re.fullmatch(ID_FORMAT, v), v
+                    out[k] = "<image_id>"
+                else:
+                    out[k] = normal(v)
+            return out
+        if isinstance(node, list):
+            return [normal(v) for v in node]
+        return node
+
+    def seen_times(node) -> list[float]:
+        found = []
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "elapsed_ms" and v is not None:
+                    found.append(v)
+                else:
+                    found += seen_times(v)
+        elif isinstance(node, list):
+            for v in node:
+                found += seen_times(v)
+        return found
+
+    def make_client(limits: dict | None):
+        return TestClient(create_app(Settings(**(limits or {}))), raise_server_exceptions=True)
+
+    default_client = make_client(None)
+    cases: list[dict] = []
+
+    def record(name: str, call: str, response, **args) -> dict:
+        body = response.json()
+        times = seen_times(body)
+        assert all(t > 0 for t in times), (name, times)
+        case = {"name": name, "call": call, **args, "status": response.status_code, "body": normal(body)}
+        cases.append(case)
+        return case
+
+    # ------------------------------------------------------------------ health, engines, presets
+    r = default_client.get("/health")
+    body = r.json()
+    assert body["engines"][0] == "vexel" and body["vexel"] in ("rust", "python") and list(body) == ["status", "version", "engines", "vexel"]
+    python_engines = list(body["engines"])
+    body["engines"] = ["vexel"]
+    body["version"] = "<version>"
+    body["vexel"] = "rust"  # the core is the Rust pipeline; `VEXEL_BACKEND=python` would say otherwise of the server
+    cases.append({"name": "health", "call": "health", "status": r.status_code, "body": body})
+
+    r = default_client.get("/engines")
+    engines = [e for e in r.json() if e["id"] == "vexel"]
+    assert len(engines) == 1
+    cases.append({"name": "engines", "call": "engines", "status": r.status_code, "body": engines})
+
+    r = default_client.get("/presets")
+    cases.append({"name": "presets", "call": "presets", "status": r.status_code, "body": r.json()})
+
+    # ------------------------------------------------------------------ uploads
+    def post_upload(client, key: str):
+        return client.post("/uploads", files={"file": ("x.png", data_of[key], "application/octet-stream")})
+
+    for key in ("wordmark", "mark128", "garbage", "empty", "corrupt_png", "tiff"):
+        record(f"upload_{key}", "upload", post_upload(default_client, key), source=key)
+    small_bytes = {"max_bytes": 1000, "max_pixels": 40_000_000}
+    small_pixels = {"max_bytes": 20 * 1024 * 1024, "max_pixels": 100_000}
+    record("upload_too_large", "upload", post_upload(make_client({"max_upload_bytes": 1000}), "wordmark"), source="wordmark", limits=small_bytes)
+    record("upload_too_many_pixels", "upload", post_upload(make_client({"max_image_pixels": 100_000}), "wordmark"), source="wordmark", limits=small_pixels)
+
+    # ------------------------------------------------------------------ vectorize
+    ids: dict[str, str] = {}
+    for key in ("wordmark", "mark128", *picky):
+        ids[key] = post_upload(default_client, key).json()["image_id"]
+
+    def post_vectorize(image_id: str, parameters, auto: bool):
+        form = {"image_id": image_id, "engines": "vexel", "parameters": json.dumps({"vexel": parameters})}
+        if auto:
+            form["auto"] = "true"
+        return default_client.post("/vectorize", data=form)
+
+    def vec(name: str, source: str | None, parameters, auto: bool = False, image_id: str | None = None) -> dict:
+        response = post_vectorize(ids[source] if source else image_id, parameters, auto)
+        args = {"image": source} if source else {"image_id": image_id}
+        return record(name, "vectorize", response, **args, parameters=parameters, auto=auto)
+
+    changed_wordmark = {"detail": 12.5, "min_region": 20, "gradients": False, "layering": "cutout", "curve_tolerance": 0.8,
+                        "path_precision": 3, "shape_fitting": False, "strokes": False, "shadows": False}
+    changed_mark = {"upsample": "always", "detail": 10, "min_region": 16.0, "max_stops": 6, "corner_threshold": 90,
+                    "overlaps": False, "stroke_tolerance": 0.2, "curve_tolerance": 0.25}
+    ok = [
+        vec("default_wordmark", "wordmark", {}),
+        vec("default_mark128", "mark128", {}),
+        vec("changed_wordmark", "wordmark", changed_wordmark),
+        vec("changed_mark128", "mark128", changed_mark),
+        vec("refined_wordmark", "wordmark", {"refine": True}),
+        vec("auto_wordmark", "wordmark", {}, auto=True),
+        vec("auto_mark128", "mark128", {}, auto=True),
+        # Auto validates the parameters it then ignores, and `parameters_used` is the pick's own
+        vec("auto_with_parameters_mark128", "mark128", {"detail": 12.5}, auto=True),
+    ]
+    picks = {}
+    for key in picky:
+        case = vec(f"auto_{key}", key, {}, auto=True)
+        ok.append(case)
+        picks[key] = case["body"]["auto"]["vexel"]["pick"]
+    assert picks == {"multi_shape128": "logo", "linear_4stop128": "detailed", "venn128": "dense"}, picks
+    for case in ok[-3:]:  # the pick is what `results` and `parameters_used` carry, not the first candidate
+        a = case["body"]["auto"]["vexel"]
+        chosen = next(c for c in a["candidates"] if c["preset"] == a["pick"])
+        assert case["body"]["results"]["vexel"]["svg"] == chosen["svg"] and case["body"]["parameters_used"]["vexel"] == chosen["parameters"]
+        assert chosen is not a["candidates"][0]
+    # `parameters or {}`: whatever is falsy is the defaults, and whatever else is not a dict is refused
+    for label, value in (("null", None), ("zero", 0), ("zero_float", 0.0), ("false", False), ("empty_string", ""), ("empty_list", [])):
+        ok.append(vec(f"falsy_{label}_mark128", "mark128", value))
+    for case in ok:
+        assert case["status"] == 200 and case["body"]["success"] is True, case["name"]
+    assert all(c["body"] == ok[1]["body"] for c in ok[-6:]), "a falsy value is the defaults"
+    assert ok[2]["body"]["parameters_used"]["vexel"]["detail"] == 12.5 and ok[3]["body"]["parameters_used"]["vexel"]["detail"] == 10.0
+    # refinement moves the wordmark's curves (on the 128 px mark it nudges nothing): the flag reached the engine
+    assert ok[4]["body"]["results"]["vexel"]["svg"] != ok[0]["body"]["results"]["vexel"]["svg"]
+    assert ok[5]["body"]["auto"]["vexel"]["pick"] and ok[5]["body"]["results"]["vexel"]["svg"] == next(
+        c["svg"] for c in ok[5]["body"]["auto"]["vexel"]["candidates"] if c["preset"] == ok[5]["body"]["auto"]["vexel"]["pick"])
+
+    refused = [
+        ("range_low", {"detail": 0.5}),
+        ("range_high", {"min_region": 201}),
+        ("range_float_bound", {"stroke_tolerance": 0.04}),
+        ("range_corner", {"corner_threshold": 151}),
+        ("float_null", {"detail": None}),
+        ("float_list", {"detail": [1]}),
+        ("bool_null", {"gradients": None}),
+        ("int_fraction", {"min_region": 16.5}),
+        ("int_null", {"path_precision": None}),
+        ("choice_wrong", {"layering": "sideways"}),
+        ("choice_number", {"upsample": 3}),
+        ("unknown_field", {"colour": 3}),
+        ("several", {"colour": {"a": 1}, "detail": 0, "layering": "x", "max_stops": 9}),
+        ("not_an_object_string", "abc"),
+        ("not_an_object_number", 5),
+        ("not_an_object_list", [1]),
+        ("not_an_object_true", True),
+    ]
+    for name, value in refused:
+        case = vec(f"refused_{name}", "mark128", value)
+        assert case["status"] == 422 and isinstance(case["body"]["detail"], list), (name, case["status"])
+    case = vec("refused_with_auto", "mark128", {"detail": 0.5}, auto=True)
+    assert case["status"] == 422
+    # the parameters are checked before the upload is looked up
+    case = vec("refused_before_expired", None, {"detail": 0.5}, image_id="0" * 32)
+    assert case["status"] == 422
+
+    vec("expired", None, {}, image_id="0" * 32)
+    vec("expired_auto", None, {}, auto=True, image_id="0" * 32)
+    vec("expired_garbage_id", None, {}, image_id="not-an-id")
+    vec("no_image", None, {}, image_id="")
+    assert [c["status"] for c in cases if c["name"] in ("expired", "expired_auto", "expired_garbage_id", "no_image")] == [404, 404, 404, 400]
+
+    write("api", {
+        "image_id_format": ID_FORMAT,
+        "python_engines": python_engines,
+        "sources": sources,
+        "cases": cases,
+    }, sort_keys=False)
 
 
 def main() -> None:
