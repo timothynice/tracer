@@ -1277,6 +1277,359 @@ def _holes() -> None:
     write("holes", {"traced": traced, "sources": source_cards, "synthetic": synthetic, "erosion": erosion, "labels": labels})
 
 
+@exporter("geometry")
+def _geometry() -> None:
+    import hashlib
+    import math
+
+    import numpy as np
+
+    from studi0trace.engines.presets import fixed_presets
+    from studi0trace.engines.vexel.engine import VexelEngine, VexelParams
+    from studi0trace.imaging import quality as Q
+    from studi0trace.imaging.intake import load_upload
+
+    # quality.geometry_card and every helper it calls. Two files: `geometry_helpers.json` holds
+    # each helper's answer on made outlines and on outlines of a trace, so that a failure names
+    # the helper; `geometry.json` holds whole cards, on traces (every fixed preset), vector
+    # truths, the synthetic corpus and made SVGs that set off each counter. Arrays of floats are
+    # kept whole when short and as a SHA-256 of their float64 bytes plus every 16th value when
+    # long; an outline's points are flattened (x0, y0, x1, ...).
+    ns = 'xmlns="http://www.w3.org/2000/svg"'
+
+    def f64(a) -> dict:
+        a = np.ascontiguousarray(np.asarray(a, dtype="<f8"))
+        out = {"n": int(a.size), "sha256": hashlib.sha256(a.tobytes()).hexdigest()}
+        flat = a.ravel().tolist()
+        if len(flat) <= 160:
+            out["values"] = flat
+        else:
+            out["every"], out["sample"] = 16, flat[::16]
+        return out
+
+    def bits(mask) -> str:
+        return "".join("1" if v else "0" for v in np.asarray(mask, bool).ravel())
+
+    def trace(rel: str, **params) -> tuple[str, int, int]:
+        img = load_upload((ROOT / "backend/bench" / rel).read_bytes(), max_bytes=1 << 30, max_pixels=1 << 30)
+        return VexelEngine().trace(img, VexelParams(**params)).svg, img.width, img.height
+
+    # ---------------------------------------------------------------- helpers
+    def circle(cx, cy, r, n, wobble=0.0):
+        t = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
+        rr = r + wobble * np.where(np.arange(n) % 2 == 0, 1.0, -1.0)
+        return np.column_stack([cx + rr * np.cos(t), cy + rr * np.sin(t)])
+
+    def path(d: str) -> np.ndarray:
+        return Q.path_polylines(d)[0][0]
+
+    def walk(pieces, step=0.25) -> np.ndarray:
+        """An outline drawn by turning: (length px, curvature 1/px) pieces from (10, 10), heading +x."""
+        x, y, a = 10.0, 10.0, 0.0
+        out = [(x, y)]
+        for length, k in pieces:
+            m = max(1, round(length / step))
+            ds = length / m
+            for _ in range(m):
+                a += k * ds / 2
+                x, y = x + ds * math.cos(a), y + ds * math.sin(a)
+                a += k * ds / 2
+                out.append((x, y))
+        return np.array(out[:-1])
+
+    wordmark, _, _ = trace("corpus/real/logo/vexel-wordmark-512.png")
+    word = Q.parse(wordmark, (512, 512)).contours
+    longest = sorted(range(len(word)), key=lambda i: -len(word[i].pts))
+    t = np.linspace(0.0, 2 * np.pi, 400, endpoint=False)
+    lem = np.column_stack([30 + 25 * np.cos(t) / (1 + np.sin(t) ** 2), 30 + 25 * np.sin(t) * np.cos(t) / (1 + np.sin(t) ** 2)])
+    bean_r = 20 + 5 * np.cos(2 * t)
+    star = np.array([[30 + (18 if i % 2 == 0 else 7) * math.cos(math.pi / 2 + i * math.pi / 5),
+                      30 + (18 if i % 2 == 0 else 7) * math.sin(math.pi / 2 + i * math.pi / 5)] for i in range(10)])
+    xs = np.linspace(0.0, 60.0, 121)
+    outlines = [
+        ("circle", circle(30, 30, 12, 96), True),
+        ("circle, first point repeated", np.vstack([circle(30, 30, 12, 96), circle(30, 30, 12, 96)[:1]]), True),
+        ("circle, open", circle(30, 30, 12, 96), False),
+        ("large circle", circle(150, 150, 110, 720), True),
+        ("rounded rect", Q._rect(5, 5, 40, 24, 5, 5), True),
+        ("rounded rect, radii 2 2 2 6", path("M7 5 H39 A6 6 0 0 1 45 11 V27 A2 2 0 0 1 43 29 H7 A2 2 0 0 1 5 27 V7 A2 2 0 0 1 7 5 Z"), True),
+        ("rect, top side bowed", path("M5 5 Q25 3.8 45 5 L45 29 L5 29 Z"), True),
+        ("parallelogram, 3 degrees", path("M5 5 L45 7.1 L45 31.1 L5 29 Z"), True),
+        ("trapezoid", path("M5 5 L45 5 L40 29 L10 29 Z"), True),
+        ("chamfered rect", path("M8 5 H42 L45 8 V26 L42 29 H8 L5 26 V8 Z"), True),
+        ("square, anticlockwise", np.array([[5.0, 5.0], [5.0, 35.0], [35.0, 35.0], [35.0, 5.0]]), True),
+        ("bean", np.column_stack([30 + bean_r * np.cos(t), 30 + bean_r * np.sin(t)]), True),
+        ("s-curve, open", np.column_stack([xs, 10 + 3 * np.sin(2 * np.pi * xs / 60.0)]), False),
+        ("zigzag circle", circle(40, 40, 20, 250, 0.3), True),
+        ("pinched sliver", np.array([[0.0, 0.0], [30.0, 0.25], [60.0, 0.0], [30.0, 0.5]]), True),
+        ("long straight line", np.array([[0.0, 0.0], [80.0, 0.2]]), False),
+        ("figure eight", lem, True),
+        ("arc of 120 degrees, open", circle(20, 20, 15, 360)[:120], False),
+        ("star", star, True),
+        ("two points, open", np.array([[0.0, 0.0], [3.0, 4.0]]), False),
+        ("two points, closed", np.array([[0.0, 0.0], [3.0, 4.0]]), True),
+        ("tiny triangle", np.array([[0.0, 0.0], [0.05, 0.0], [0.0, 0.05]]), True),
+        ("repeated and near-repeated points, open",
+         np.array([[0, 0], [0, 0], [1e-10, 0], [5, 0], [5, 0], [5, 5 + 1e-12], [5, 5], [2, 7], [2, 7], [0, 0]], float), False),
+        # kept, at 3e-8 px: the drop is at 1e-9
+        ("a step of 3e-8 px, open", np.array([[0.0, 0.0], [0.0, 3e-8], [5.0, 0.0], [5.0, 5.0]]), False),
+        # 40.5 steps long: round() ties to even
+        ("a line of 10.125 px", np.array([[0.0, 0.0], [10.125, 0.0]]), False),
+        ("a line of 10.375 px", np.array([[0.0, 0.0], [10.375, 0.0]]), False),
+        # the last point 5e-6 and 1e-4 px from the first: np.allclose (1e-8 + 1e-5 * 42) takes them for one, so
+        # nothing is appended; 5e-4 px is not close
+        ("circle, last point 5e-6 px from the first", np.vstack([circle(30, 30, 12, 96), circle(30, 30, 12, 96)[:1] + [5e-6, 0.0]]), True),
+        ("circle, last point 1e-4 px from the first", np.vstack([circle(30, 30, 12, 96), circle(30, 30, 12, 96)[:1] + [1e-4, 0.0]]), True),
+        ("circle, last point 5e-4 px from the first", np.vstack([circle(30, 30, 12, 96), circle(30, 30, 12, 96)[:1] + [5e-4, 0.0]]), True),
+        # small rectangles, whose corners' seeds tie: the stable argsort decides which is grown first
+        ("small rect 4 x 10", np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 10.0], [0.0, 10.0]]), True),
+        ("small rect 5 x 10, anticlockwise", np.array([[0.0, 0.0], [5.0, 0.0], [5.0, 10.0], [0.0, 10.0]])[::-1], True),
+        # corners grown over flanks that turn just over CURVED a sample (r = 24.9 px: 0.01004 rad),
+        # and corners whose curve is longer than GROW_MAX
+        ("rect, corners of 10 deg at r=24.9, 70 at r=10, 10 at r=24.9",
+         walk([(30.0, 0.0)] + [(4.346, 1 / 24.9), (12.217, 0.1), (4.346, 1 / 24.9), (20.0, 0.0), (4.346, 1 / 24.9), (12.217, 0.1),
+                               (4.346, 1 / 24.9), (30.0, 0.0)] + [(4.346, 1 / 24.9), (12.217, 0.1), (4.346, 1 / 24.9), (20.0, 0.0),
+                                                                  (4.346, 1 / 24.9), (12.217, 0.1), (4.346, 1 / 24.9)]), True),
+        ("triangle, corners longer than GROW_MAX",
+         walk([(30.0, 0.0), (19.54, 1 / 24.875), (2.618, 0.2), (19.54, 1 / 24.875)] * 3), True),
+        ("one point, closed", np.array([[5.0, 5.0]]), True),
+        ("one point, open", np.array([[5.0, 5.0]]), False),
+        ("wordmark contour a", word[longest[0]].pts, word[longest[0]].closed),
+        ("wordmark contour b", word[longest[1]].pts, word[longest[1]].closed),
+        ("wordmark contour c", word[longest[len(longest) // 2]].pts, word[longest[len(longest) // 2]].closed),
+    ]
+    helpers = []
+    for name, pts, closed in outlines:
+        q = Q._resample(pts, closed)
+        entry = {"name": name, "closed": bool(closed), "pts": np.asarray(pts, float).ravel().tolist(), "q": f64(q)}
+        if len(q) >= 3:
+            entry["turns"] = {str(k): f64(Q._turns(q, closed, k)) for k in (1, 2, 16, 24)}
+            entry["cancelled"] = f64(Q._cancelled(q, closed, 16))
+            t24 = Q._turns(q, closed, 24)
+            entry["flips"] = [list(map(int, Q._flips(t24, closed, math.radians(Q.INFLECT_HYST))[1])),
+                              list(map(int, Q._flips(Q._turns(q, closed, 1), closed, 0.02)[1]))]
+            entry["inflections"] = [int(j) for j in Q._inflections(q, closed, 24)]
+            entry["area"] = Q._area(q)
+            if closed:
+                net = float(Q._turns(q, True, 1).sum())
+                sign = 1.0 if net >= 0 else -1.0
+                corners = Q._corners(q, sign)
+                entry["net_sign"] = sign
+                entry["corners"] = [{"at": list(c.at), "index": int(c.index), "lo": int(c.lo), "hi": int(c.hi),
+                                     "turn_deg": float(c.turn_deg), "radius": float(c.radius)} for c in corners]
+                vis = (np.arange(len(q)) // 7) % 3 != 0  # a stretch of every 21 samples off screen
+                entry["rect_visible"] = bits(vis)
+                entry["rect_like"] = [Q._rect_like(q, corners), Q._rect_like(q, corners, vis)]
+        helpers.append(entry)
+    assert any(e.get("rect_like", [None])[0] is not None for e in helpers)
+    assert any(e.get("rect_like", [None])[0] is None and len(e.get("corners", [])) == 4 for e in helpers)
+    assert any(e.get("inflections") for e in helpers) and any(e.get("flips", [[]])[0] for e in helpers)
+
+    # _flips on made turnings of dyadic steps, so that the turning reaches the hysteresis exactly
+    flip_cases = []
+    for turn in ([0.25, 0.25, -0.5, 0.5, -0.25, -0.25, 0.5, 0.125, -0.625],
+                 [0.5, -0.5, 0.5, -0.5, 0.5, -0.5],
+                 [0.125] * 4 + [-0.125] * 8 + [0.125] * 4,
+                 [0.0, 0.0, 0.0],
+                 [-0.5, 0.25, 0.25, 0.25, -1.0, 1.5, -0.5]):
+        for closed in (False, True):
+            for hyst in (0.5, 0.25, 0.375):
+                flip_cases.append({"turn": turn, "closed": closed, "hyst": hyst,
+                                   "out": [int(j) for j in Q._flips(np.array(turn), closed, hyst)[1]]})
+    assert any(c["out"] for c in flip_cases)
+
+    rng = np.random.default_rng(11)
+    dilate = []
+    for i in range(40):
+        n = int(rng.integers(25, 160))
+        mask = rng.random(n) < [0.0, 0.02, 0.05, 0.2][i % 4]
+        if i % 5 == 0:
+            mask[0] = mask[-1] = True
+        r = [0, 1, 3, 12][(i // 4) % 4]
+        closed = i % 2 == 0
+        dilate.append({"mask": bits(mask), "r": r, "closed": closed, "out": bits(Q._dilate(mask, r, closed))})
+    wrap_in = np.concatenate([[0.0, -0.0, np.pi, -np.pi, 2 * np.pi, -2 * np.pi, 3 * np.pi, -3 * np.pi, 1e-17, -1e-17,
+                               np.pi - 1e-16, -np.pi + 1e-16, 7.5, -7.5, 1e10, -1e10, 1e300, 5e-324],
+                              rng.standard_normal(200) * 4])
+    wrap = {"in": wrap_in.tolist(), "out": Q._wrap(wrap_in).tolist()}
+
+    # visibility: made shapes on a 40 x 30 canvas, some off it, a stroke, a translucent cover
+    vis_svg = (f'<svg {ns} viewBox="0 0 40 30"><rect x="-4" y="2" width="30" height="20" fill="#123"/>'
+               '<circle cx="24" cy="16" r="9" fill="#456"/><path d="M2 26 L38 3" stroke="#789" stroke-width="3" fill="none"/>'
+               '<rect x="30" y="-5" width="16" height="14" rx="3" fill="#abc" fill-opacity="0.4"/>'
+               '<path d="M12 8 L30 8 L30 26 L12 26 Z M16 12 L26 12 L26 22 L16 22 Z" fill-rule="evenodd" fill="#def"/>'
+               '<polyline points="1,1 8,5 3,12" stroke="#135" stroke-width="0.6" fill="none"/>'
+               '<circle cx="50" cy="40" r="6" fill="#246"/>'
+               # dyadic coordinates: x * 1000 is a tie, which np.round takes to even
+               '<polyline points="3.0625,2.5625 10.0625,6.5625 14.4375,2.0625" stroke="#357" stroke-width="1.5" fill="none"/></svg>')
+    drawing = Q.parse(vis_svg, (40, 30))
+    visibility = {"svg": vis_svg, "size": [40, 30], "id_svg": Q.id_svg(drawing, (40, 30)), "scales": []}
+    lookup_pts = np.array([[0.0, 0.0], [-0.1, 5.0], [5.0, -1e-9], [39.99, 29.99], [40.0, 3.0], [3.0, 30.0], [19.75, 14.25],
+                           [1e300, 5.0], [-1e300, 5.0], [5.0, 1e18], [12.4999, 8.0], [12.5, 8.0], [24.0, 16.0], [-0.0, 7.0]])
+    for scale in (1, 2, 3):
+        ids = Q.id_map(drawing, (40, 30), scale)
+        contours = []
+        for c in drawing.contours:
+            q = Q._resample(c.pts, c.closed)
+            contours.append({"element": int(c.element), "closed": bool(c.closed), "stroke": c.stroke, "q": f64(q),
+                             "visible": bits(Q.visible_samples(q, c.closed, c.element, c.stroke, ids, scale))})
+        visibility["scales"].append({"scale": scale, "h": int(ids.shape[0]), "w": int(ids.shape[1]),
+                                     "ids_sha256": hashlib.sha256(ids.astype("<i4").tobytes()).hexdigest(),
+                                     "ids_counts": {str(k): int(v) for k, v in zip(*np.unique(ids, return_counts=True))},
+                                     "lookup": Q._lookup(ids, lookup_pts * 1.0, scale).tolist(), "contours": contours})
+    visibility["lookup_pts"] = lookup_pts.tolist()
+    assert any("0" in c["visible"] and "1" in c["visible"] for s in visibility["scales"] for c in s["contours"])
+
+    # np.dot as Accelerate computes it: `_area` dots a strided column with a rolled copy, and
+    # `np.convolve` dots slices of a contiguous array with a copy of the kernel, which starts
+    # 16-byte aligned (malloc) and is sliced at every offset. Random float64s, so that the order of
+    # the additions and the fused multiply-adds show.
+    dots = []
+    for n in list(range(1, 41)) + [63, 64, 65, 100, 257]:
+        x, y = rng.standard_normal(n) * 50, rng.standard_normal(n + 1) * 50
+        y_aligned, y_shifted = np.array(y[:n]), np.array(y)[1:]  # a fresh array, and one 8 bytes into one
+        assert y_aligned.ctypes.data % 16 == 0 and y_shifted.ctypes.data % 16 == 8
+        q = rng.standard_normal((n, 2)) * 50
+        dots.append({"x": x.tolist(), "y": y.tolist(), "aligned": float(np.dot(x, y_aligned)),
+                     "shifted": float(np.dot(x, y_shifted)), "q": q.ravel().tolist(),
+                     "strided": float(np.dot(q[:, 0], np.roll(q[:, 1], -1)))})
+    convolve = []
+    for n in (32, 33, 40, 77):
+        a = rng.standard_normal(n)
+        convolve.append({"a": a.tolist(), "out": np.convolve(a, np.ones(32), "same").tolist()})
+    write("geometry_helpers", {"outlines": helpers, "flips": flip_cases, "dilate": dilate, "wrap": wrap,
+                               "visibility": visibility, "dot": dots, "convolve": convolve})
+
+    # ---------------------------------------------------------------- cards
+    def plain(v):
+        if isinstance(v, (bool, np.bool_)):
+            return bool(v)
+        if isinstance(v, (int, np.integer)):
+            return int(v)
+        if isinstance(v, (float, np.floating)):
+            return float(v)
+        if isinstance(v, (list, tuple)):
+            return [plain(x) for x in v]
+        if isinstance(v, dict):
+            return {k: plain(x) for k, x in v.items()}
+        raise TypeError(type(v))
+
+    cases = []
+
+    def card(name: str, svg: str | None, size, vis: bool = True, id_scale: int = Q.ID_SCALE, file: str | None = None,
+             repo: str | None = None):
+        """One card. The SVG is a fixture file (`file`), a file in the repo (`repo`, relative to backend/)
+        or inline."""
+        if file is not None:
+            (OUT / file).write_text(svg, encoding="utf-8")
+        if repo is not None:
+            svg = (ROOT / "backend" / repo).read_text(encoding="utf-8")
+        entry = {"name": name, "file": file, "repo": repo, "svg": None if (file or repo) else svg,
+                 "size": list(size) if size else None, "visibility": vis, "id_scale": id_scale,
+                 "keys": None, "card": None, "error": None}
+        try:
+            got = Q.geometry_card(svg, tuple(size) if size else None, vis, id_scale)
+            entry["keys"], entry["card"] = list(got), plain(got)
+        except Exception as e:  # the Python raises; the port refuses
+            entry["error"] = type(e).__name__
+        cases.append(entry)
+
+    for p in fixed_presets():
+        svg, w, h = trace("corpus/real/logo/vexel-wordmark-512.png", **p.params)
+        for vis in ((True, False) if p.id in ("balanced", "flat") else (True,)):
+            card(f"wordmark {p.id}" + ("" if vis else ", everything visible"), svg, (w, h), vis, file=f"geometry_wordmark-{p.id}.svg")
+    svg = (OUT / "geometry_wordmark-balanced.svg").read_text(encoding="utf-8")
+    card("wordmark balanced, id map at 1x", svg, (512, 512), id_scale=1, file="geometry_wordmark-balanced.svg")
+    card("wordmark balanced, id map at 3x", svg, (512, 512), id_scale=3, file="geometry_wordmark-balanced.svg")
+    for rel in ("corpus/synthetic/shadow/card-512.png", "corpus/real/logo/logomark-128.png",
+                "corpus/synthetic/logo/thin-mark-128.png", "corpus/real/logo/silverpeak-badge-768.png",
+                "corpus/synthetic/flat/mosaic-512.png"):
+        svg, w, h = trace(rel)
+        card(f"trace of {rel}", svg, (w, h), file=f"geometry_{Path(rel).stem}.svg")
+    card("trace of overlap-128, upsampled", (OUT / "drawing_overlap-128.svg").read_text(encoding="utf-8"), (128, 128))
+    card("trace of overlap-128, no size", (OUT / "drawing_overlap-128.svg").read_text(encoding="utf-8"), None)
+    for rel in ("noto/u1f4a0.svg", "noto/u2600.svg", "noto/u0030.svg", "fluent-flat/taurus.svg", "fluent-flat/mobile-phone.svg",
+                "fluent-flat/fleur-de-lis.svg", "fluent-color/cherries.svg", "fluent-color/black-medium-small-square.svg",
+                "fluent-color/spiral-notepad.svg"):
+        card(f"held-out {rel}", None, (512, 512), repo=f"bench/heldout/{rel}")
+    card("held-out fluent-flat/taurus.svg, no size", None, None, repo="bench/heldout/fluent-flat/taurus.svg")
+    for rel in ("logo/ring.svg", "logo/tilted-squares.svg", "logo/thin-mark.svg", "logo/wedge-fan.svg", "shadow/radii.svg",
+                "shadow/card.svg", "flat/stripes.svg", "flat/blobs.svg"):
+        card(f"synthetic {rel}", None, (512, 512), repo=f"bench/corpus/synthetic/{rel}")
+
+    def made(body: str, w: int = 64, h: int = 64) -> str:
+        return f'<svg {ns} viewBox="0 0 {w} {h}">{body}</svg>'
+
+    zig = "M8 32 " + " ".join(f"L{8 + i} {32 + (0.4 if i % 2 else -0.4)}" for i in range(1, 49)) + " L56 40 L8 40 Z"
+    made_cases = {
+        "made: rect with unequal radii": '<path d="M12 10 H48 A8 8 0 0 1 56 18 V46 A2 2 0 0 1 54 48 H10 A2 2 0 0 1 8 46 V14 A2 2 0 0 1 10 12 Z" fill="#c33"/>',
+        "made: rect, one sharp corner and three round": '<path d="M8 8 H50 A6 6 0 0 1 56 14 V50 A6 6 0 0 1 50 56 H14 A6 6 0 0 1 8 50 Z" fill="#c33"/>',
+        "made: bowed rect": '<path d="M8 10 Q32 6 56 10 L56 50 L8 50 Z" fill="#3c3"/>',
+        "made: skewed rect": '<path d="M8 8 L56 10.5 L56 52.5 L8 50 Z" fill="#33c"/>',
+        "made: pinched sliver": '<path d="M4 20 L30 20.3 L60 20 L30 20.6 Z" fill="#000"/>',
+        "made: small shape": '<rect x="10" y="10" width="1.5" height="1.5" fill="#000"/>',
+        "made: thin stroked line": '<path d="M4 30 L60 34" stroke="#000" stroke-width="0.5" fill="none"/>',
+        "made: short thin stroke": '<path d="M4 30 L4.2 30.1" stroke="#000" stroke-width="0.5" fill="none"/>',
+        "made: degenerate path": '<path d="M10 10 L40 40 Z" fill="#000"/><path d="M5 5 L5 5" fill="#111"/>',
+        "made: hidden shape": '<rect x="10" y="10" width="30" height="30" fill="#c33"/><rect x="5" y="5" width="50" height="50" fill="#33c"/>',
+        "made: translucent cover": '<rect x="10" y="10" width="30" height="30" fill="#c33"/><rect x="5" y="5" width="50" height="50" fill="#33c" opacity="0.3"/>',
+        "made: s-curve": '<path d="M4 32 C20 8 44 56 60 32 L60 60 L4 60 Z" fill="#c3c"/>',
+        "made: wobble": f'<path d="{zig}" fill="#3cc"/>',
+        "made: strokes and fills": '<circle cx="32" cy="32" r="20" fill="none" stroke="#000" stroke-width="2"/><polyline points="4,4 20,8 12,30" stroke="#000" stroke-width="0.8" fill="none"/><line x1="0" y1="60" x2="64" y2="62" stroke="#000"/>',
+        "made: shapes off the canvas": '<circle cx="-40" cy="-40" r="10" fill="#000"/><rect x="70" y="10" width="20" height="20" fill="#000"/><circle cx="64" cy="64" r="12" fill="#333"/>',
+        "made: nothing": "",
+        "made: a star and a use": '<defs><path id="s" d="M32 6 L39 25 L59 25 L43 37 L49 57 L32 45 L15 57 L21 37 L5 25 L25 25 Z" fill="#fc3"/></defs><use href="#s"/><use href="#s" x="3" y="2" fill-opacity="0.2"/>',
+        "made: one-point polyline": '<polyline points="5,5" stroke="#000" stroke-width="0.3" fill="none"/>',
+        "made: far away coordinates": '<path d="M1e9 1e9 L1000000010 1e9 L1000000010 1000000010 Z" fill="#000"/><circle cx="32" cy="32" r="9"/>',
+        # NaN and infinite points, which numpy carries through (a NaN step is dropped, and so is the next)
+        "made: an infinite scale": '<rect width="10" height="10" transform="matrix(1e999 0 0 1 0 0)"/>',
+        "made: an infinite translation": '<rect width="10" height="10" transform="translate(1e999 0)"/><circle cx="30" cy="30" r="9"/>',
+        "made: a stroke under an infinite scale": '<path d="M0 0 L10 0 L10 10 Z" transform="matrix(1e999 0 0 1e999 0 0)" stroke="#000" stroke-width="0.5"/>',
+        "made: a stroke to infinity": '<path d="M5 5 L1e999 5" stroke="#000" stroke-width="0.5" fill="none"/>',
+        "made: a scale of 1e-300": '<g transform="scale(1e-300)"><rect width="10" height="10"/></g>',
+        "made: a sliver of area 0.045, just degenerate": '<path d="M10 10 L19 10 L10 10.01 Z" fill="#000"/>',
+        "made: a sliver of area 0.055": '<path d="M10 10 L21 10 L10 10.01 Z" fill="#000"/>',
+        # an open stroke that wobbles at both ends, its start painted over: what lies past its ends counts as its end does
+        "made: a wobbly stroke, one end covered": '<path d="' + zig.split(" L56")[0] + '" stroke="#000" stroke-width="2" fill="none"/>'
+                                                  '<rect x="0" y="20" width="14" height="24" fill="#c33"/>',
+    }
+    for name, body in made_cases.items():
+        card(name, made(body), (64, 64))
+    card("made: hidden shape, everything visible", made(made_cases["made: hidden shape"]), (64, 64), vis=False)
+    card("made: no size", made(made_cases["made: hidden shape"]), None)
+    card("made: an infinite stroke width", made('<path d="M4 4 L60 60" stroke="#000" stroke-width="1e999" fill="none"/>'
+                                                '<rect x="20" y="4" width="30" height="20" fill="#c33"/>'), (64, 64))
+    # a square of 62 500 px a side drawn with a million points, 0.25 px apart (1e6 samples, mostly off
+    # the canvas): the Rust test builds the same text from `square`
+    side = 250_000
+
+    def quarter(v: int) -> str:
+        return f"{v // 4}.{(v % 4) * 25:02d}"
+
+    ring = ([(i, 0) for i in range(side)] + [(side, i) for i in range(side)] + [(side - i, side) for i in range(side)]
+            + [(0, side - i) for i in range(side)])
+    big = made('<path d="M' + " ".join(f"{quarter(x)} {quarter(y)}" for x, y in ring) + ' Z" fill="#c33"/>'
+               '<circle cx="32" cy="32" r="10" fill="#33c"/>')
+    card("made: a square of a million points", big, (64, 64))
+    cases[-1]["svg"], cases[-1]["square"] = None, side
+    # what the Python raises on, which the port refuses
+    card("made: a polygon of no points", made('<polygon points="" fill="#000"/>'), (64, 64))
+    card("made: a length that overflows", made('<path d="M0 0 L1e308 0 L-1e308 0 Z" fill="#000"/>'), (64, 64))
+    card("made: an infinite radius", made('<circle cx="10" cy="10" r="1e999" fill="#000"/>'), (64, 64))
+    card("made: an infinite rect", made('<rect x="0" y="0" width="1e999" height="10" fill="#000"/>'), (64, 64))
+    card("made: not xml", "<svg", (64, 64))
+
+    ok = [c["card"] for c in cases if c["card"] is not None]
+    # The golden must not be vacuous: every counter and every location list is set off somewhere.
+    for key in ("strokes", "outline_len_px", "hidden_len_px", "slivers", "sliver_area_px", "degenerate", "thin_strokes",
+                "wobble_deg_100px", "inflections", "rect_like", "radius_inconsistent", "rect_bowed", "rect_skewed",
+                "_wobble_at", "_flips_at", "_slivers_at", "_radius_at"):
+        assert any(c[key] for c in ok), f"no case sets off {key}"
+    assert any(c["_slivers_at"] and any(s[2] == 0.0 for s in c["_slivers_at"]) for c in ok), "no thin stroke located"
+    assert [c["error"] for c in cases if c["error"]] == ["IndexError", "OverflowError", "OverflowError", "ParseError"]
+    write("geometry", cases)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="")

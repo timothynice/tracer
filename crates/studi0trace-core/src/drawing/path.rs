@@ -95,7 +95,7 @@ pub(super) fn py_ceil(x: f64) -> Result<f64, DrawingError> {
 /// (`__sincos_stret` on Apple), whose `sin` rounds differently from libm's for about one
 /// argument in 500, and only in an optimised build. Hiding the argument from the optimiser for
 /// each call keeps them apart. Never `f64::sin_cos`, which is that fused call.
-pub(super) fn cos_sin(a: f64) -> (f64, f64) {
+pub(crate) fn cos_sin(a: f64) -> (f64, f64) {
     (std::hint::black_box(a).cos(), std::hint::black_box(a).sin())
 }
 
