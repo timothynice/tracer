@@ -392,6 +392,7 @@ impl std::error::Error for AutoError {}
 
 /// What traces an image with one preset's parameters. The real one is Vexel's; a test replaces it
 /// to make a candidate panic or answer with something that does not render.
+#[doc(hidden)]
 pub type Tracer<'a> = dyn Fn(&Preset, &Image, &VexelParams) -> String + Sync + 'a;
 
 /// What scores a candidate's SVG against the source's [`Reference`]. The real one is
@@ -530,11 +531,12 @@ fn on_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 /// [`run`] with the candidates and the tracer given: how the failure paths are tested. Errors
 /// only without candidates (the route's `auto_unavailable`). The image is taken as it is: one
 /// whose pixels do not make a reference loses the scoring of every candidate, not their traces.
+#[doc(hidden)]
 pub fn run_with(img: &Image, candidates: &[Preset], trace: &Tracer<'_>) -> Result<AutoOutcome, AutoError> {
     run_with_scorer(img, candidates, trace, &assess_default)
 }
 
-/// [`run_with`] with the scoring given as well: how a panic in the renderer, which the engine's own
+/// `run_with` with the scoring given as well: how a panic in the renderer, which the engine's own
 /// SVGs cannot cause, is tested.
 #[doc(hidden)]
 pub fn run_with_scorer(img: &Image, candidates: &[Preset], trace: &Tracer<'_>, score: &Scorer<'_>) -> Result<AutoOutcome, AutoError> {
@@ -567,7 +569,7 @@ pub fn run_with_scorer(img: &Image, candidates: &[Preset], trace: &Tracer<'_>, s
 /// one: [`scorecard::assess`] renders with resvg, whose parser recurses with the depth of the SVG,
 /// and a deep one aborts the process on the 2 MiB stack of a global worker (see [`scorecard`]).
 /// The SVGs scored here are the engine's own, which nest a few levels, so no input can reach that
-/// depth through `run`; the room is for the day a caller of [`run_with`] scores something else.
+/// depth through `run`; the room is for the day a caller of `run_with` scores something else.
 /// The pool costs nothing measurable: the 512 px wordmark takes 1.17 s on average on it and 1.20 s
 /// on the global pool (release, 7 runs each, twice). The engine parallelises inside a trace, too;
 /// a worker that calls `par_iter` uses the pool it belongs to, so the candidates and the engine's

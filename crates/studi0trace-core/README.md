@@ -132,10 +132,11 @@ without the module.
   root `Cargo.toml`, the workspace's. `backend/Dockerfile` builds the engine alone from
   the `backend/` context, which has no root manifest, so it carries the same profile in
   `CARGO_PROFILE_RELEASE_*` environment variables; change one, change the other.
-- **Test seams** are public but not part of the API: `Core::with_tracer` and
-  `auto::run_with` (with the `auto::Tracer` type) let a test replace the engine so that a
-  panic, a slow trace or an unrenderable SVG can be tried; `Core::cached_images` and
-  `Core::cached_bytes` read the upload store. They are `#[doc(hidden)]`.
+- **Test seams** are public (the integration tests are another crate) but not part of the
+  API, and `#[doc(hidden)]`: `Core::with_tracer`, `auto::run_with` and `auto::run_with_scorer`
+  (with the `auto::Tracer` and `auto::Scorer` types) let a test replace the engine, and the
+  scoring, so that a panic, a slow trace or an unrenderable SVG can be tried;
+  `Core::cached_images` and `Core::cached_bytes` read the upload store.
 
 ## Known, intentional differences from the Python server
 
@@ -216,9 +217,12 @@ HTTP half:
   with neither is `no_image` (the core answers an empty `image_id` with it).
 - Expire uploads. The core keeps a byte cap and no clock; "the user has gone away"
   is the shell's to decide, by dropping the `Core` or building a smaller one.
-- Parse JSON number text correctly rounded (`serde_json`'s `float_roundtrip`, or
-  a browser's `JSON.parse`): the default `serde_json` parser can be an ulp off on a
-  decimal of 17 digits, and the core takes the parsed `f64` as it is.
+- Parse JSON number text correctly rounded, as a browser's `JSON.parse` does. The core
+  takes the parsed `f64` as it is, and `serde_json`'s default parser can be an ulp off
+  on a decimal of 17 digits; this crate depends on `serde_json` with `float_roundtrip`
+  on (and `preserve_order`), and cargo unifies features, so a shell that parses with
+  `serde_json` inherits exact parsing and needs to do nothing. A shell that parses some
+  other way (a different JSON crate, hand-made text) must parse correctly rounded.
 - On `wasm32-unknown-unknown`, give the trace a clock, in two places. `Instant::now()`
   panics there, and with `panic=abort` (that target's default) the panic ends the
   module, so `catch_unwind` cannot turn it into an `engine_crashed`. The core reads the

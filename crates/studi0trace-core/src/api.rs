@@ -353,8 +353,9 @@ impl Core {
     }
 
     /// A core that traces with `tracer` where it would trace with Vexel: how the failure paths
-    /// are tested (a trace that panics), as [`auto::run_with`] is for Auto. It is given the image
+    /// are tested (a trace that panics), as `auto::run_with` is for Auto. It is given the image
     /// and the validated parameters, and returns the engine's SVG before the viewBox is set.
+    #[doc(hidden)]
     pub fn with_tracer(limits: Limits, max_cache_bytes: usize, tracer: impl Fn(&Image, &VexelParams) -> String + Send + Sync + 'static) -> Core {
         Core { limits, tracer: Box::new(tracer), store: Mutex::new(Store::new(max_cache_bytes)) }
     }
@@ -364,11 +365,13 @@ impl Core {
     }
 
     /// How many uploads are kept.
+    #[doc(hidden)]
     pub fn cached_images(&self) -> usize {
         self.store().items.len()
     }
 
     /// How many bytes of pixels they come to (the number the cap is held against).
+    #[doc(hidden)]
     pub fn cached_bytes(&self) -> usize {
         self.store().bytes
     }

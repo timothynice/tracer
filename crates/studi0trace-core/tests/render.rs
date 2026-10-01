@@ -238,3 +238,42 @@ fn refusals_carry_the_renderers_words() {
     assert!(render::render(SQUARE, 0, 10, false).unwrap_err().contains("width"));
     assert!(render::render(SQUARE, 10, 0, false).unwrap_err().contains("height"));
 }
+
+/// `levels` nested groups around one square.
+fn nested(levels: usize) -> String {
+    format!(r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">{}<rect width="10" height="10" fill="#c33"/>{}</svg>"##, "<g>".repeat(levels), "</g>".repeat(levels))
+}
+
+#[test]
+fn an_svg_nested_beyond_reach_is_refused_by_every_way_into_the_renderer_before_it_parses() {
+    // 100 000 nested groups overflow the stack of any thread in resvg's recursive parser; a refusal
+    // from the text alone is quick and cannot overflow, here on a thread with a small stack on purpose
+    let deep = nested(100_000);
+    let answer = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            let a = render::render(&deep, 16, 16, false);
+            let b = render::render(&deep, 16, 16, true);
+            let c = render::render_fit(&deep, 16, 16, false);
+            (a.map(|v| v.len()), b.map(|v| v.len()), c.map(|r| r.rgba.len()), started.elapsed())
+        })
+        .unwrap()
+        .join()
+        .expect("a refusal, not an overflow");
+    let (a, b, c, took) = answer;
+    for e in [a.unwrap_err(), b.unwrap_err(), c.unwrap_err()] {
+        assert!(e.contains("nested more than 988"), "{e}");
+    }
+    assert!(took.as_secs() < 5, "{took:?}");
+    // the limit is the drawing's: 987 levels draw, 988 are refused, as the Python's recursion would
+    // (resvg wants about 3.5 MiB of stack to render one that deep, so it is rendered on a thread that has it)
+    let (ok, over) = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| (render::render(&nested(987), 16, 16, false).is_ok(), render::render(&nested(988), 16, 16, false).is_err()))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(ok, "987 levels render");
+    assert!(over, "988 levels are refused");
+}

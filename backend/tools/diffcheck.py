@@ -176,7 +176,8 @@ TOLERANCE = {
     # arm64) except the two ΔE keys: CIEDE2000 runs over CIELAB, which numpy
     # reaches through BLAS's fused multiply-add in `matmul` and the core through
     # plain arithmetic, a few ulps of a Lab value that the mean and the 95th
-    # percentile carry (7.8e-13 and 9.2e-14 relative over the corpus). Elsewhere the
+    # percentile carry (2.0e-14 and 9.2e-14 relative over the corpus; the mean is numpy's
+    # pairwise sum in both, a left-to-right one was 2e-11 off on a 4.2 MP trace). Elsewhere the
     # libm differs in the last bit (`sin`, `atan2`, `sqrt` under the geometry's
     # sums), so 1e-9 is the bar for every float; the counts do not move with it,
     # since a decision a ulp could tip would be a threshold the card sits on.

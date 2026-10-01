@@ -165,7 +165,7 @@ fn percentile_is_numpys_linear_method() {
         for pair in case["expect"].as_array().unwrap() {
             let (q, want) = (pair[0].as_f64().unwrap(), pair[1].as_f64().unwrap());
             let got = color::percentile(&values, q);
-            // Not `==`: serde_json's default float parsing is up to an ulp off for some decimals.
+            // 1e-12 relative, not `==` (the fixture's decimals parse exactly; the lerp is numpy's, not its code)
             assert!((got - want).abs() <= 1e-12 * want.abs().max(1.0), "n={} q={q}: {got} vs {want}", values.len());
         }
     }
@@ -179,6 +179,35 @@ fn percentile_edges() {
     assert_eq!(color::percentile(&[3.0, 1.0, 2.0], 0.0), 1.0);
     assert_eq!(color::percentile(&[3.0, 1.0, 2.0], 100.0), 3.0);
     assert_eq!(color::percentile(&[3.0, 1.0, 2.0], 50.0), 2.0);
+}
+
+#[test]
+fn a_percentile_out_of_range_is_the_smallest_or_the_largest_and_never_a_panic() {
+    // numpy rejects a `q` outside 0..=100; the port answers with the end of the data (its documentation)
+    // and a NaN `q` with NaN. A single value used to index past its end for an infinite `q`
+    // (`0 * inf` is NaN), and every one of these is the same on slices of one, two and many.
+    let many: Vec<f64> = (0..50).map(|i| ((i * 37) % 50) as f64 - 10.0).collect();
+    let slices: [(&[f64], f64, f64); 4] = [(&[7.0], 7.0, 7.0), (&[9.0, 2.0], 2.0, 9.0), (&[3.0, 1.0, 2.0], 1.0, 3.0), (&many, -10.0, 39.0)];
+    for (values, min, max) in slices {
+        for q in [-1.0, -0.0001, -1e300, f64::NEG_INFINITY] {
+            assert_eq!(color::percentile(values, q), min, "n={} q={q}", values.len());
+        }
+        for q in [100.0001, 150.0, 1e300, f64::INFINITY] {
+            assert_eq!(color::percentile(values, q), max, "n={} q={q}", values.len());
+        }
+        assert!(color::percentile(values, f64::NAN).is_nan(), "n={} q=NaN", values.len());
+        // and the ends themselves, 0 and -0
+        assert_eq!(color::percentile(values, 0.0), min);
+        assert_eq!(color::percentile(values, -0.0), min);
+        assert_eq!(color::percentile(values, 100.0), max);
+    }
+    // empty: NaN whatever `q` is
+    for q in [-1.0, 0.0, 50.0, 100.0, 150.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        assert!(color::percentile(&[], q).is_nan(), "q={q}");
+    }
+    // a NaN among the data is NaN, in range or out of it
+    assert!(color::percentile(&[1.0, f64::NAN], 150.0).is_nan());
+    assert!(color::percentile(&[1.0, f64::NAN], f64::NEG_INFINITY).is_nan());
 }
 
 #[test]

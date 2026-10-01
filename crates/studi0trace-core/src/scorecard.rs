@@ -15,9 +15,11 @@
 //! Every number but two is what the modules it is built from already hold to the bit (on the
 //! platform the fixtures were exported on; see `tests/scorecard.rs`). The two are
 //! `delta_e_mean` and `delta_e_p95`: the Lab of a colour differs from scikit-image's by up to
-//! 1e-13 (numpy's matrix product fuses; [`crate::color::lab`] cannot), and the mean is a plain
-//! sum where numpy's is pairwise. Both agree to 1e-12 relative or better, far below anything
-//! that is ranked on them.
+//! 1e-13 (numpy's matrix product fuses; [`crate::color::lab`] cannot). The mean is numpy's own
+//! pairwise sum (`edges::pairwise_sum`), so that is the only difference left: over the
+//! 96 corpus items `tools.diffcheck scorecard` measured 2.0e-14 relative for the mean and
+//! 9.2e-14 for the 95th percentile, far below anything that is ranked on them. (A left-to-right
+//! sum was 2e-11 relative off on a 4.2 MP trace, and grows with the pixel count.)
 //!
 //! # What it refuses that the Python does not
 //!

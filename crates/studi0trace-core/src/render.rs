@@ -40,6 +40,10 @@
 //!   read the filesystem: usvg's default `href` resolver opens whatever path an `<image>`
 //!   names, so that resolver is replaced by one that finds nothing. (A `data:` URL of a
 //!   nested SVG is still resolved; it is bytes already in the document.)
+//! - **Depth.** An SVG whose elements nest more than [`drawing::MAX_DEPTH`] (988) deep is refused,
+//!   from its text and before resvg parses it ([`drawing::check_nesting`]): usvg's parser recurses,
+//!   and 100 000 nested groups would overflow the stack of any thread (a few hundred do a 2 MiB one;
+//!   a wasm build's is 1 MiB).
 //! - **Size.** A render is refused above [`MAX_PIXELS`], and so is a request above it, before
 //!   anything is allocated. resvg-py tries to allocate what it is asked; at 100 000 x 100 000
 //!   that is a 40 GB pixmap.
@@ -61,6 +65,7 @@
 //! made them, before any resize.
 //!
 //! Nothing here touches the filesystem or spawns a thread, and resvg pulls in no C code.
+use crate::drawing;
 use crate::resample;
 use resvg::{tiny_skia, usvg};
 
@@ -100,7 +105,8 @@ fn check_box(width: u32, height: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn check_pixels(width: u32, height: u32) -> Result<(), String> {
+/// A `width x height` image of more than [`MAX_PIXELS`] is refused, before anything is allocated.
+pub(crate) fn check_pixels(width: u32, height: u32) -> Result<(), String> {
     if u64::from(width) * u64::from(height) > MAX_PIXELS {
         return Err(format!("a {width}x{height} render is more than the {MAX_PIXELS} pixels allowed"));
     }
@@ -112,6 +118,10 @@ fn check_pixels(width: u32, height: u32) -> Result<(), String> {
 /// fitted inside `width x height` (so its size may be smaller on one side), as straight alpha.
 pub fn render_fit(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Rendered, String> {
     check_box(width, height)?;
+    // resvg's parser recurses a level of nesting at a time (about 3.5 KB of stack a level in all, so a
+    // few hundred levels overflow a 2 MiB thread, and 100 000 any thread): every way into it, `render`
+    // and the scorecard's, is refused here from the text alone, before anything parses it
+    drawing::check_nesting(svg).map_err(|e| e.to_string())?;
 
     let mut opt = usvg::Options::default();
     opt.dpi = 0.0;

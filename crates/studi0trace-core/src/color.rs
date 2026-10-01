@@ -7,6 +7,7 @@
 //! to the tolerance the tests allow. Where numpy does something the obvious Rust would not
 //! (`x ** 7` is libm's `pow`, not a chain of multiplications; `np.maximum` propagates NaN)
 //! the Rust does what numpy does, and says so.
+use crate::edges::pairwise_sum;
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
@@ -186,9 +187,9 @@ fn ciede2000_map(a: &[[f64; 3]], b: &[[f64; 3]]) -> Vec<f64> {
 /// are NaN for empty images. Panics if the images are not the same size.
 pub fn delta_e_lab(a: &[[f64; 3]], b: &[[f64; 3]]) -> (f64, f64) {
     let de = ciede2000_map(a, b);
-    // A plain left-to-right sum: numpy's pairwise sum differs from it by about 1e-13 relative
-    // on a 512 x 512 image, far below anything the scorecard compares at.
-    (de.iter().sum::<f64>() / de.len() as f64, percentile(&de, 95.0))
+    // `de.mean()`: numpy's pairwise sum (bit-equal to `np.sum`), not a left-to-right one, which
+    // is 2e-11 relative off on a 4.2 MP trace (measured) and grows with the pixel count.
+    (pairwise_sum(&de) / de.len() as f64, percentile(&de, 95.0))
 }
 
 /// (mean, 95th percentile) of the per-pixel CIEDE2000 between two RGB8 images
@@ -211,13 +212,18 @@ pub fn percentile(values: &[f64], q: f64) -> f64 {
     let mut v = values.to_vec();
     v.sort_by(f64::total_cmp);
     let last = v.len() - 1;
+    // outside 0..=100 (infinities included) before any arithmetic on it: `0 * inf` is NaN, and
+    // a NaN position indexes past the end of a slice of one
+    if q <= 0.0 {
+        return v[0];
+    }
+    if q >= 100.0 {
+        return v[last];
+    }
     // numpy: virtual index `(n - 1) * (q / 100)`, weight `virtual - floor(virtual)`.
     let pos = last as f64 * (q / 100.0);
     if pos >= last as f64 {
         return v[last];
-    }
-    if pos < 0.0 {
-        return v[0];
     }
     let lo = pos.floor() as usize;
     let gamma = pos - lo as f64;
@@ -228,5 +234,31 @@ pub fn percentile(values: &[f64], q: f64) -> f64 {
         b - diff * (1.0 - gamma)
     } else {
         a + diff * gamma
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Reference.fidelity` takes `de.mean()`, and numpy's mean is its pairwise sum over the count: the
+    /// bits of that, not of a running sum, which part ways from it on data like this (a 4.2 MP trace
+    /// was 2e-11 relative off). The sum itself is held to `np.sum` by the holes and edges tests.
+    #[test]
+    fn the_mean_of_the_delta_e_is_the_pairwise_sum_over_the_count() {
+        let lab_of = |i: usize, k: usize| -> [f64; 3] {
+            let h = (i.wrapping_mul(2654435761).wrapping_add(k.wrapping_mul(40503))) as u32 as f64 / u32::MAX as f64;
+            let g = (i.wrapping_mul(40503).wrapping_add(k.wrapping_mul(2654435761))) as u32 as f64 / u32::MAX as f64;
+            [100.0 * h, 80.0 * g - 40.0, 90.0 * ((h * 7.0 + g * 3.0) % 1.0) - 45.0]
+        };
+        let a: Vec<[f64; 3]> = (0..20_000).map(|i| lab_of(i, 1)).collect();
+        let b: Vec<[f64; 3]> = (0..20_000).map(|i| lab_of(i, 2)).collect();
+        let (mean, _) = delta_e_lab(&a, &b);
+        let de = ciede2000_map(&a, &b);
+        let n = de.len() as f64;
+        assert_eq!(mean.to_bits(), (pairwise_sum(&de) / n).to_bits());
+        let running = de.iter().sum::<f64>() / n;
+        assert_ne!(mean.to_bits(), running.to_bits(), "these data do not tell the two sums apart");
+        assert!((mean - running).abs() < 1e-9 * mean);
     }
 }

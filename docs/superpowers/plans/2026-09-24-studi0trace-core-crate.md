@@ -1595,8 +1595,9 @@ this is the list a later plan needs.
   maturin. The binding keeps the card's types (counts are `int`, ratios `float`), turns the core's errors into
   `ValueError` and releases the GIL. `diffcheck scorecard` compares, over the 96 corpus items, the keys and their
   order, every key's type, every count exactly and every float to 1e-9 relative, not the plan's 1e-6 and
-  `edge_f1` to 0.005: measured, every float is bit-equal except `delta_e_mean` (7.8e-13 relative) and
-  `delta_e_p95` (9.2e-14), CIELAB through numpy's BLAS matmul against plain arithmetic. It is a default stage, not
+  `edge_f1` to 0.005: measured, every float is bit-equal except `delta_e_mean` and `delta_e_p95`, CIELAB through
+  numpy's BLAS matmul against plain arithmetic (7.8e-13 and 9.2e-14 relative as first written; the final fixes
+  made the mean numpy's pairwise sum, and it is now 2.0e-14). It is a default stage, not
   `--all` only: both sides are given one SVG, so it gates like the per-stage comparisons, and without the
   extension it exits non-zero with the build command.
 - **Distribution is unsigned** (no Developer ID, no notarization): decided 2026-09-30 and recorded in the spec's

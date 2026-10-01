@@ -42,7 +42,9 @@ pub enum Filter {
 }
 
 /// `Image.fromarray(rgba).resize((out_width, out_height), filter)` for an RGBA8 image.
-/// `Err` for a zero size or a buffer that is not `width * height * 4` bytes.
+/// `Err` for a zero size, a buffer that is not `width * height * 4` bytes, or an output of more
+/// than [`crate::render::MAX_PIXELS`] pixels (checked before anything is allocated: the Python
+/// would try, and this is public).
 pub fn resize_rgba(src: &[u8], width: u32, height: u32, out_width: u32, out_height: u32, filter: Filter) -> Result<Vec<u8>, String> {
     let bytes = |w: u32, h: u32| (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4));
     if width == 0 || height == 0 || out_width == 0 || out_height == 0 {
@@ -52,6 +54,7 @@ pub fn resize_rgba(src: &[u8], width: u32, height: u32, out_width: u32, out_heig
         return Err(format!("a {width}x{height} RGBA image is not {} bytes", src.len()));
     }
     bytes(out_width, out_height).ok_or("the resized image is too large")?;
+    crate::render::check_pixels(out_width, out_height)?;
     let (w, h, ow, oh) = (width as usize, height as usize, out_width as usize, out_height as usize);
     if (w, h) == (ow, oh) {
         return Ok(src.to_vec());

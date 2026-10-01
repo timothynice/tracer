@@ -87,3 +87,19 @@ fn an_unchanged_size_is_a_copy_and_a_bad_request_is_an_error() {
         assert!(resize_rgba(&img, 5, 4, 6, 3, filter).is_err(), "a buffer of another size");
     }
 }
+
+#[test]
+fn an_output_over_the_render_cap_is_refused_before_anything_is_allocated() {
+    // `resize_rgba` is public and has no other cap: 20 000 x 20 000 is 1.6 GB of pixels
+    let one = [10u8, 20, 30, 255];
+    for filter in [Filter::Nearest, Filter::Lanczos] {
+        for (w, h) in [(20_000, 20_000), (1 << 28, 2), (u32::MAX, u32::MAX), (2, 1 << 28)] {
+            let e = resize_rgba(&one, 1, 1, w, h, filter).unwrap_err();
+            // the cap, or (where the byte count itself overflows a usize) the older overflow check
+            assert!(e.contains("pixels allowed") || e.contains("too large"), "{w}x{h}: {e}");
+            assert!((w, h) == (u32::MAX, u32::MAX) || e.contains("pixels allowed"), "{w}x{h}: the cap's words: {e}");
+        }
+        // at the cap it is allowed (and not allocated here: a thin strip of it)
+        assert_eq!(resize_rgba(&one, 1, 1, 1 << 14, 1, filter).map(|v| v.len()), Ok((1 << 14) * 4));
+    }
+}

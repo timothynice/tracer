@@ -57,8 +57,8 @@
 //! # The SVG
 //!
 //! The SVG goes straight to [`render::render`], as in the Python. `render` (resvg, roxmltree)
-//! recurses with the SVG's nesting, so a caller that cannot trust its SVG should
-//! [`crate::drawing::parse`] it first, which refuses what is too deep.
+//! recurses with the SVG's nesting, and refuses what nests deeper than
+//! [`crate::drawing::MAX_DEPTH`] before it parses.
 use crate::edges::pairwise_sum;
 use crate::render;
 use serde_json::{Map, Value};
