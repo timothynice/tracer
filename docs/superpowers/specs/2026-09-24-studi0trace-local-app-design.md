@@ -80,7 +80,9 @@ frontend is shared.
   served cross-origin isolated (COOP/COEP) with `wasm-bindgen-rayon`. Expect about twice the
   native time; Auto's four candidates may need a progress indicator.
 - **Renderer version.** The scorecard's numbers depend on the renderer; the Rust core pins the
-  `resvg` release that `resvg-py` 0.5.0 bundles, so the Python and Rust scorecards render alike.
+  `resvg` release that `resvg-py` 0.5.0 bundles (`=0.48.1`, over tiny-skia 0.12.0), so the Python
+  and Rust scorecards render alike. Bumping `resvg-py` means bumping the pin, re-exporting the
+  core's fixtures and running `diffcheck scorecard`.
 
 ## Open questions (none block plan 1)
 

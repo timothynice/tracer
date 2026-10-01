@@ -56,6 +56,21 @@
 //!
 //! An evicted or unknown id is `image_expired`, which the frontend answers by uploading again.
 //!
+//! **An id is not a security boundary.** It is a hash of the file, so anyone who has the bytes
+//! can compute it and an id says nothing about who uploaded the file: it names an entry, it does
+//! not authorise a caller (the Python's random `uuid4` ids were no capability either, but they
+//! could not be guessed from a file). A shell that serves more than one person must key its own
+//! sessions, not rely on the id being secret.
+//!
+//! # Time, and `wasm32`
+//!
+//! A trace is timed with `std::time::Instant` (`auto::trace_finished`, which `elapsed_ms` is
+//! read from), and on `wasm32-unknown-unknown` `Instant::now()` **traps**: the call aborts the
+//! module, it is not a panic that [`Core::vectorize`] could turn into an `engine_crashed` entry.
+//! A web build therefore has to give `trace_finished` a clock (a JavaScript `performance.now()`
+//! behind a parameter or a feature) before it can trace; this is plan 3's, and nothing here
+//! calls a clock anywhere else.
+//!
 //! # Threads
 //!
 //! [`Core`] is `Send + Sync`, and the store sits behind a `Mutex` that is held only to look an
@@ -386,6 +401,15 @@ impl Core {
     /// `parameters` (see the module documentation). With `auto`, every candidate preset is
     /// traced and scored and the pick is also `results.vexel`; `parameters` is then validated
     /// and otherwise unused, and `parameters_used` is the pick's.
+    ///
+    /// `parameters` are validated in Pydantic's **strict** mode: a number given as a string
+    /// (`"6"`), `true` where a number is wanted, and `"yes"` or `1` where a boolean is are a 422
+    /// here and are converted by the Python's lax mode (the frontend sends none of them). The
+    /// route's other half belongs to the shell: it parses the request, takes the `vexel` key of
+    /// the form's `parameters` JSON (malformed JSON, or JSON that is not an object, is a 400
+    /// `bad_parameters`), reads the `auto` flag, answers an `engines` list that names anything but
+    /// `vexel` with a 400 `unknown_engine`, and, for a request that carries a `file` rather than
+    /// an `image_id`, calls [`Core::upload`] and then this.
     pub fn vectorize(&self, image_id: &str, parameters: &Value, auto: bool) -> Result<Value, ApiError> {
         // the route's order: the parameters, then the image
         let empty = Value::Object(Map::new());

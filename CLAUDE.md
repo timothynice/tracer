@@ -13,17 +13,37 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   selects explicitly. **Change one and you change both** — a fix to a stage in
   Python needs the same fix in `vexel-rs/src/`, and `tools/diffcheck.py` is what
   proves it landed.
+- `crates/studi0trace-core/` — the Rust port of everything the Python server does
+  around the engine: image intake, the parameters and their JSON schema, presets,
+  SVG finishing, the artifact scorecard, Auto, and the `Core` facade that answers
+  the API's five calls with the API's JSON (the desktop app and the web build call
+  it; its `README.md` has the facade, the known differences from the Python and
+  the contract a shell must keep). The root `Cargo.toml` is the workspace of it and
+  `backend/vexel-rs`: `cargo test --workspace --release`, Rust ≥ 1.88. Its golden
+  fixtures (`tests/fixtures`) are exported from the Python by
+  `backend/tools/export_core_fixtures.py`, and `tools/diffcheck.py scorecard` holds
+  its scorecard to `imaging/quality.py` over the corpus, through the
+  `studi0trace_core` extension (`--features python`, built apart from `vexel_rs`:
+  `maturin develop --release -m ../crates/studi0trace-core/Cargo.toml --features python`
+  from `backend/`). The fixtures were exported on macOS arm64: results that go
+  through libm are compared to the bit there (`tests/common::exact()`) and to a
+  tolerance elsewhere; `STUDI0TRACE_FORCE_TOLERANT=1` runs the tolerant branch on any
+  machine.
 - `backend/tools/diffcheck.py` — runs a pipeline stage in both implementations
   over the corpus and reports where they disagree. Most stages feed both sides
   one input (`segments` hands the Python's placed arcs to both fitters and
   expects the same segments back); `trace_labels` and `trace_arcs` run the two engines end to end
   (`VEXEL_DUMP=<dir>` makes either engine write the label map it hands the
   boundary build, the fitted arcs and the stroke decisions — `vexel/dump.py`,
-  `vexel-rs/src/dump.rs`, one format) and compare what each actually produced
+  `vexel-rs/src/dump.rs`, one format) and compare what each actually produced.
+  `scorecard` is a per-stage gate like the rest (both scorecards are handed one SVG,
+  so it is in the default run) and exits non-zero, with the build command, when
+  `studi0trace_core` is not installed
 - `backend/bench/` — Vexel Bench (`python -m bench …`); `bench/geometry.py` measures
   against vector truth, `bench/truth.py` reads the truth's corners
 - `backend/tests/` — pytest; run `cd backend && .venv/bin/python -m pytest`.
-  Rust tests: `cd backend/vexel-rs && cargo test`
+  Rust tests: `cargo test --workspace --release` at the root (the engine and the
+  core; `cd backend/vexel-rs && cargo test` for the engine alone)
 - `frontend/` — Studi0Trace React 18 + TS app; `npm run test:run`, `npm run build`
   (`src/components`, `src/hooks`, `src/lib`; tokens in `src/styles.css`)
 - `docs/superpowers/specs|plans/` — design specs and implementation plans
@@ -334,6 +354,14 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   --write-details` rewrites `engines/preset_details.json`. Auto (`auto.py`,
   `/vectorize auto=true`) traces the candidates concurrently and keeps the
   cleanest within the fidelity slack of the most faithful.
+- The core is a port, not a fork, and stays wasm-clean: no filesystem, no
+  `Instant` outside `auto::trace_finished`, no threads outside `rayon` in `auto.rs`,
+  no C dependencies. Change the Python scorecard, Auto, intake, presets or API
+  and you change the core; `export_core_fixtures` regenerates what its tests hold
+  and `diffcheck scorecard` (a default stage) proves the scorecard end to end.
+  The preset bundles are `engines/presets.json`, one file both read, and
+  `preset_details.json` is embedded in the core too: `presets_eval --write-details`
+  changes what the core answers, so re-export the fixtures after it.
 - Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`.
 - Frontend follows the Studi0 design system (semantic HSL tokens, Poppins,
   `.dark` on `<html>`, `h-10 rounded-md` buttons, sticky blurred header). Never

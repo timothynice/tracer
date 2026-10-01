@@ -1,7 +1,10 @@
 [package]
 name = "studi0trace-core"
-version = "0.1.0"
+# the Python app's `studi0trace.__version__`: the UI shows `v{health.version}`, and `Core::health` reports this
+version = "0.2.0"
 edition = "2021"
+# `slice::as_chunks` (1.88); `auto::py_round` relies on ties-to-even float formatting (1.67)
+rust-version = "1.88"
 license = "MIT"
 description = "Studi0Trace: everything around the Vexel engine, for the app and the web build"
 

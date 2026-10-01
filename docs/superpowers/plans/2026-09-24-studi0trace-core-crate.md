@@ -6,7 +6,7 @@
 
 **Architecture:** A Cargo workspace at the repo root with two members: the existing engine `backend/vexel-rs` (unchanged location) and the new `crates/studi0trace-core`, which depends on it. Every piece of the core is a port of a Python module and is held to it by golden JSON fixtures that a dev-only Python script exports from the reference implementation. The core returns the same JSON shapes the FastAPI routes return today, so the frontend changes only its transport in later plans.
 
-**Tech Stack:** Rust 2021; `serde`/`serde_json`; `image` 0.25 (png, jpeg, gif, webp, bmp); `resvg` `=0.48.0` (the release `resvg-py` 0.5.0 builds on); `regex`; `rayon`; optional `pyo3` 0.22 for the parity stage. Python 3.12 dev tooling in `backend/` for fixtures.
+**Tech Stack:** Rust 2021; `serde`/`serde_json`; `image` 0.25 (png, jpeg, gif, webp, bmp); `resvg` `=0.48.1` (the release `resvg-py` 0.5.0 builds on; see "As built"); `regex`; `rayon`; optional `pyo3` 0.22 for the parity stage. Python 3.12 dev tooling in `backend/` for fixtures.
 
 Design and roadmap: `docs/superpowers/specs/2026-09-24-studi0trace-local-app-design.md`.
 
@@ -1546,3 +1546,54 @@ Expected: all green.
 - **Coverage:** intake (T4), parameters and schema (T2), presets (T3), SVG finishing (T5), scorecard (T6–T12), Auto (T13), the facade and the API's JSON (T14), parity with the Python (every task's fixtures, T15). Potrace and VTracer are not ported: the core describes one engine.
 - **Types used across tasks:** `intake::Image`, `params::parse -> VexelParams`, `presets::Preset`, `svg::Stats`, `scorecard::Reference`, `auto::{Scored, run}`, `api::{Core, ErrorBody}`, consistent between the tasks that produce and consume them.
 - **Known gaps left to later plans:** rayon as an optional feature for WebAssembly (plan 3); JPEG decoding differs from Pillow by design (T4 bounds it).
+
+## As built (2026-10-01)
+
+Where the implementation proved the plan wrong or went past it. The code and its module docs are the record;
+this is the list a later plan needs.
+
+- **The renderer is `resvg =0.48.1`**, not 0.48.0: `resvg-py` 0.5.0 reports resvg 0.48.1 over usvg 0.48.1 and
+  tiny-skia 0.12.0 (`resvg_py.__resvg_version__`). The tree therefore holds two tiny-skia: 0.11 for `vexel-rs`'s
+  refinement and 0.12 under resvg.
+- **A panicking trace is `engine_crashed`, not `engine_failed`.** The route's `_failure` answers `engine_failed`
+  only for an `EngineError`, which Vexel never raises, and `engine_crashed` (`"<Type>: <message>"`) for any other
+  exception. The core does the same, per candidate in Auto and per engine in a plain trace.
+- **Python's `round(x, 1)` rounds the exact binary value**: `round(0.35, 1)` is `0.3` (the nearest double to
+  0.35 is 0.34999999999999997), `round(0.45, 1)` is `0.5`, `round(0.25, 1)` is `0.2`. The plan's example of
+  `0.35 -> 0.4` is wrong. `auto::py_round` formats the double to `n` places, which Rust does exactly and to
+  even (stable since 1.67), and parses it back.
+- **`ErrorBody` is defined in `auto.rs`** (an Auto candidate carries one) and re-exported by `api`; there is one
+  type, not two.
+- **`render` ports Pillow's resize** (`resample.rs`, byte-exact against Pillow 12.3). resvg's fit to
+  `--width/--height` is not always the exact size (`IntSize::scale_to` rounds in f32, so about 4-5 % of large
+  sizes come out a pixel off) and `quality.render` then resizes with Pillow, nearest for the crisp render and
+  Lanczos on premultiplied pixels otherwise; the plan assumed the exact-size path was the only one.
+- **Fallible signatures.** `drawing::parse`, `render::render`, `holes::holes`, `scorecard::Reference::new`,
+  `Reference::fidelity`, `scorecard::scorecard` and `scorecard::assess(svg, &Reference, Option<u32>)` return
+  `Result`, where the plan's sketches return values: an SVG that does not render, a source of the wrong size or a
+  hole scale of 0 is an error, not a panic. The core also refuses what the Python would exhaust memory or its
+  recursion limit on: more than 2^24 outline samples (`geometry::MAX_SAMPLES`), more than 2^24 points in a drawing
+  (`drawing::MAX_POINTS`), elements nested more than 988 deep (`drawing::MAX_DEPTH`).
+- **Fixtures are exported on macOS arm64 and gated by platform.** Results that go through libm (`sin`, `cos`,
+  `atan2`) are bit-equal there and so are compared to the bit only when `tests/common::exact()` says so
+  (`target_os = "macos"` and `target_arch = "aarch64"`); anywhere else they are held to a tolerance.
+  `STUDI0TRACE_FORCE_TOLERANT=1` runs the tolerant branch on any machine. The plan assumed one comparison
+  everywhere.
+- **MSRV is Rust 1.88** (`rust-version` in the crate's manifest): `slice::as_chunks`, and `py_round`'s
+  ties-to-even formatting needs 1.67. The Docker image's older toolchain builds only `vexel-rs`, which is
+  unaffected.
+- **The upload store has no TTL**, and ids are the first 128 bits of the file's SHA-256 (32 hex digits, as the
+  frontend expects of a `uuid4().hex`); see the module documentation of `api.rs`. Strict parameter validation
+  (Pydantic's strict mode, not the route's lax one) and what a shell must do around `Core::vectorize` are
+  documented there and in the crate's `README.md`, with the list of intentional differences from the Python.
+- **Task 15.** The crate's version is the Python app's, `0.2.0` (the UI shows `v{health.version}`).
+  `crate-type` already had `cdylib`; the module name needed `[lib] name = "studi0trace_core"` spelled out for
+  maturin. The binding keeps the card's types (counts are `int`, ratios `float`), turns the core's errors into
+  `ValueError` and releases the GIL. `diffcheck scorecard` compares, over the 96 corpus items, the keys and their
+  order, every key's type, every count exactly and every float to 1e-9 relative, not the plan's 1e-6 and
+  `edge_f1` to 0.005: measured, every float is bit-equal except `delta_e_mean` (7.8e-13 relative) and
+  `delta_e_p95` (9.2e-14), CIELAB through numpy's BLAS matmul against plain arithmetic. It is a default stage, not
+  `--all` only: both sides are given one SVG, so it gates like the per-stage comparisons, and without the
+  extension it exits non-zero with the build command.
+- **Distribution is unsigned** (no Developer ID, no notarization): decided 2026-09-30 and recorded in the spec's
+  Distribution row.

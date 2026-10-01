@@ -7,6 +7,11 @@ preset and keeps the cleanest result that is as faithful as the best
 (`studi0trace.auto`). Flat & poster and Cut file are never candidates: one is
 a style, the other an output format, and only the user can want those.
 
+The bundles themselves are `presets.json` next to this file: one file that
+this module and the Rust core (`crates/studi0trace-core`, which embeds it and
+`preset_details.json`) both read, so change it there and re-export the core's
+fixtures (`tools.export_core_fixtures`).
+
 The `detail` line of every preset is measured, never written by hand: it is
 read from `preset_details.json` next to this file, which one command writes
 from a run over the whole bench corpus with the engine as built:

@@ -422,6 +422,11 @@ fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 /// engine's `engine_crashed`, never the caller's: the route's `_failure` for an exception that is
 /// not an `EngineError`, which Vexel never raises. [`run`] traces each candidate with it, and so
 /// does `api::Core` a plain trace.
+///
+/// **The one clock in the crate.** On `wasm32-unknown-unknown` `Instant::now()` traps: the call
+/// aborts the module, and no `catch_unwind` above it can turn that into `engine_crashed`. A web
+/// build has to hand this function a clock (plan 3) before it traces; nothing else here reads
+/// the time.
 pub(crate) fn trace_finished(
     img: &Image,
     params: &VexelParams,
