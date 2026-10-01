@@ -1,7 +1,7 @@
 {
  "exporters": {
   "api": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -13,10 +13,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "auto": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -28,10 +28,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "color": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -43,10 +43,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "drawing": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -58,10 +58,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "edges": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -73,10 +73,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "geometry": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -88,10 +88,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "holes": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -103,10 +103,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "intake": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -118,10 +118,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "presets": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -133,10 +133,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "render": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -148,10 +148,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "resample": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -163,10 +163,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "schema": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -178,10 +178,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "scorecard": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -193,10 +193,10 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   },
   "svg": {
-   "commit": "55a9c703974bf16f0002533bf21c661bfab7b5da",
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
    "environment": {
     "Pillow": "12.3.0",
     "machine": "arm64",
@@ -208,7 +208,7 @@
     "system": "Darwin",
     "vexel_backend": "rust"
    },
-   "sources_differ_from_commit": true
+   "sources_differ_from_commit": false
   }
  }
 }
