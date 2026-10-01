@@ -416,6 +416,57 @@ fn candidates_come_back_in_the_order_of_preference_whichever_finishes_first() {
 }
 
 #[test]
+fn the_svg_is_given_the_sources_view_box_whatever_the_engine_wrote() {
+    // `finish`: no width or height on the root, a viewBox of the source's size; the stats are of that SVG
+    let tracer = |_: &Preset, _: &Image, _: &VexelParams| -> String {
+        GOOD.replacen(r#"viewBox="0 0 16 16""#, r#"width="32pt" height="32pt" viewBox="0 0 32 32""#, 1)
+    };
+    let o = auto::run_with(&tiny(), &candidates(), &tracer).unwrap();
+    for c in &o.candidates {
+        let svg = c.svg.as_deref().unwrap();
+        assert!(svg.starts_with(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">"#), "{svg}");
+        assert_eq!(c.stats.unwrap().bytes as usize, svg.len());
+        assert!(c.scores.is_some());
+    }
+}
+
+#[test]
+fn a_panic_in_the_engines_own_parallel_work_is_the_candidates_error_and_the_pool_carries_on() {
+    use rayon::prelude::*;
+    let tracer = |p: &Preset, _: &Image, _: &VexelParams| -> String {
+        if p.id == "logo" {
+            (0..400).into_par_iter().for_each(|i| {
+                if i == 313 {
+                    panic!("deep in a par_iter")
+                }
+            });
+        }
+        GOOD.to_string()
+    };
+    for _ in 0..2 {
+        let o = auto::run_with(&tiny(), &candidates(), &tracer).unwrap();
+        let e = o.candidates[1].error.as_ref().expect("the panic of a worker is the candidate's error");
+        assert!(e.code == "engine_crashed" && e.message.contains("deep in a par_iter"), "{e:?}");
+        assert!(o.candidates.iter().filter(|c| c.scores.is_some()).count() == 3);
+        assert_eq!(o.pick.as_deref(), Some("balanced"));
+    }
+}
+
+#[test]
+fn the_order_holds_when_the_slowest_to_score_is_the_first_too() {
+    // balanced traces at once and scores last (a heavy SVG), the others the other way round
+    let heavy = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="8" height="16" fill="#c83232"/><rect x="8" width="8" height="16" fill="#3232c8"/>{}</svg>"##,
+        (0..4000).map(|i| format!(r##"<path d="M{} {}h0.5v0.5h-0.5z" fill="#c83232"/>"##, i % 16, (i / 16) % 16)).collect::<String>()
+    );
+    let tracer = |p: &Preset, _: &Image, _: &VexelParams| -> String { if p.id == "balanced" { heavy.clone() } else { GOOD.to_string() } };
+    let o = auto::run_with(&tiny(), &candidates(), &tracer).unwrap();
+    let ids: Vec<&str> = o.candidates.iter().map(|c| c.preset.as_str()).collect();
+    assert_eq!(ids, ["balanced", "logo", "detailed", "dense"]);
+    assert!(o.candidates.iter().all(|c| c.scores.is_some()));
+}
+
+#[test]
 fn the_candidates_trace_at_once() {
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
     let arrived = AtomicUsize::new(0);
