@@ -28,6 +28,13 @@
 //! Python and from the 2×2 scatter here; they agree to about 1e-15 (the bow and skew of a side,
 //! which only meet thresholds and a `round(_, 2)`).
 //!
+//! What is to the bit everywhere and what only on macOS on arm64: resampling, wrapping, the
+//! dilations, the area and every Accelerate-order sum are IEEE arithmetic (`mul_add` included),
+//! the same on every platform. `atan2` (the turning, hence the wobble, inflections and corners)
+//! and the drawing's `cos`/`sin` are libm's, and Apple's is not correctly rounded everywhere
+//! (about 1 input in 1 300 of the fixtures'): another libm can differ from the fixtures by an ulp
+//! there, which the tests allow off that platform (`tests/geometry.rs`, the module's tests).
+//!
 //! # Where it differs on purpose
 //!
 //! - [`MAX_SAMPLES`] samples over all the outlines of a drawing is the most this resamples

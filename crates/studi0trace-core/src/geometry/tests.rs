@@ -2,7 +2,25 @@
 //! `tools/export_core_fixtures.py`): made outlines (circles, rectangles rounded, bowed, skewed
 //! and chamfered, a bean, an S, a zig-zag, a sliver, a figure eight, a star, two- and one-point
 //! ones) and three outlines of a trace, so that a difference names the helper that makes it.
-//! Floats are compared to the bit, except a rectangle's bow and skew (see `rect_like`).
+//!
+//! # What is to the bit, and where
+//!
+//! A result made only of IEEE operations (`+ - * /`, `sqrt`, `mul_add`, `%`, rounding, and
+//! the orders of addition `accelerate` emulates) is the same on every platform, and is held to
+//! the Python's to the bit everywhere ([`Ops::Ieee`]): resample of the fixture's points, wrap,
+//! dilate, flips of given turnings, area, dot, convolve. A result downstream of libm
+//! ([`Ops::Libm`]: `atan2` in `turns`, and through it `cancelled` and a corner's turn and
+//! radius; `cos`/`sin` in the drawing's arcs and ellipses, through which the visibility scene's
+//! outlines pass) is to the bit only where the fixtures were made, macOS on arm64 with Apple's
+//! libm ([`exact`]). Apple's `atan2` is not correctly rounded on about 1 input in 1 300 of the
+//! fixture's, and glibc's, musl's or wasm's libm round some of those the other way, so elsewhere
+//! those floats are held to `1e-9 · (1 + |want|)`: a turn is a difference of angles of order π,
+//! so an ulp of libm shows in it as an absolute error near 4e-16, which a relative bound would
+//! not tolerate on a turn near zero. Counts, indices and flags are compared exactly everywhere.
+//!
+//! `STUDI0TRACE_FORCE_TOLERANT=1` takes the tolerant branch on macOS on arm64 too, so that it
+//! can be run where the fixtures were made (the integration tests read it as well, through
+//! `tests/common`).
 use super::accelerate::{convolve_same_ones, ddot, ddot_stride2};
 use super::ids::{id_map, id_svg, lookup, visible_samples};
 use super::outline::{cancelled, dilate, flips, inflections, resample, turns, wrap};
@@ -47,9 +65,32 @@ fn sha256(a: &[f64]) -> String {
     Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Whether libm's results are compared to the bit: on macOS on arm64, where the fixtures were
+/// exported, unless `STUDI0TRACE_FORCE_TOLERANT` is set.
+fn exact() -> bool {
+    cfg!(all(target_os = "macos", target_arch = "aarch64")) && std::env::var_os("STUDI0TRACE_FORCE_TOLERANT").is_none()
+}
+
+/// What made a float: IEEE operations only, or libm on the way (see the module docs).
+#[derive(Clone, Copy, PartialEq)]
+enum Ops {
+    Ieee,
+    Libm,
+}
+
+/// `got` equals `want`: to the bit for [`Ops::Ieee`] and for [`Ops::Libm`] where [`exact`],
+/// else to `1e-9 · (1 + |want|)`.
+fn close(got: f64, want: f64, ops: Ops) -> bool {
+    if ops == Ops::Ieee || exact() {
+        got.to_bits() == want.to_bits()
+    } else {
+        got == want || (got - want).abs() <= 1e-9 * (1.0 + want.abs())
+    }
+}
+
 /// `got` against an array the exporter wrote with `f64()`: whole when short, else every 16th
-/// value and the SHA-256 of all of them. To the bit.
-fn same_f64(what: &str, got: &[f64], want: &Value) {
+/// value and the SHA-256 of all of them, the digest only where the values are to the bit.
+fn same_f64(what: &str, got: &[f64], want: &Value, ops: Ops) {
     assert_eq!(got.len() as u64, want["n"].as_u64().unwrap(), "{what}: length");
     let (every, values) = match want.get("values") {
         Some(v) => (1, f64s(v)),
@@ -57,9 +98,11 @@ fn same_f64(what: &str, got: &[f64], want: &Value) {
     };
     for (i, w) in values.iter().enumerate() {
         let g = got[i * every];
-        assert!(g.to_bits() == w.to_bits(), "{what}: [{}] is {g:e}, the Python's {w:e}", i * every);
+        assert!(close(g, *w, ops), "{what}: [{}] is {g:e}, the Python's {w:e}", i * every);
     }
-    assert_eq!(sha256(got), want["sha256"].as_str().unwrap(), "{what}: digest (every value)");
+    if ops == Ops::Ieee || exact() {
+        assert_eq!(sha256(got), want["sha256"].as_str().unwrap(), "{what}: digest (every value)");
+    }
 }
 
 fn flat(q: &[[f64; 2]]) -> Vec<f64> {
@@ -82,7 +125,8 @@ fn outlines() -> Vec<(&'static Value, Vec<[f64; 2]>)> {
 #[test]
 fn resample_is_the_pythons() {
     for (o, q) in outlines() {
-        same_f64(&format!("{} resample", o["name"]), &flat(&q), &o["q"]);
+        // the fixture's points, resampled with + - * / sqrt and a fused interpolation
+        same_f64(&format!("{} resample", o["name"]), &flat(&q), &o["q"], Ops::Ieee);
     }
 }
 
@@ -105,7 +149,8 @@ fn turns_are_the_pythons() {
         let Some(want) = o.get("turns") else { continue };
         for k in [1, 2, 16, 24] {
             let closed = o["closed"].as_bool().unwrap();
-            same_f64(&format!("{} turns k={k}", o["name"]), &turns(&q, closed, k), &want[k.to_string()]);
+            // atan2
+            same_f64(&format!("{} turns k={k}", o["name"]), &turns(&q, closed, k), &want[k.to_string()], Ops::Libm);
         }
     }
 }
@@ -114,7 +159,8 @@ fn turns_are_the_pythons() {
 fn cancelled_is_the_pythons() {
     for (o, q) in outlines() {
         if let Some(want) = o.get("cancelled") {
-            same_f64(&format!("{} cancelled", o["name"]), &cancelled(&q, o["closed"].as_bool().unwrap(), 16), want);
+            // sums of turns, which are atan2's
+            same_f64(&format!("{} cancelled", o["name"]), &cancelled(&q, o["closed"].as_bool().unwrap(), 16), want, Ops::Libm);
         }
     }
 }
@@ -157,8 +203,9 @@ fn inflections_are_the_pythons() {
 fn area_is_the_pythons() {
     for (o, q) in outlines() {
         if let Some(want) = o.get("area") {
+            // fused products summed four ways: IEEE only
             let (g, w) = (area(&q), want.as_f64().unwrap());
-            assert!(g.to_bits() == w.to_bits(), "{}: area {g:e}, the Python's {w:e}", o["name"]);
+            assert!(close(g, w, Ops::Ieee), "{}: area {g:e}, the Python's {w:e}", o["name"]);
         }
     }
 }
@@ -172,11 +219,12 @@ fn corners_are_the_pythons() {
         let want = want.as_array().unwrap();
         assert_eq!(got.len(), want.len(), "{}: corners", o["name"]);
         for (c, w) in got.iter().zip(want) {
+            // `at` is a resampled point; the turn and the radius are sums of atan2's
             let at = f64s(&w["at"]);
-            let same = |a: f64, b: &Value| a.to_bits() == b.as_f64().unwrap().to_bits();
+            let same = |a: f64, b: &Value| close(a, b.as_f64().unwrap(), Ops::Libm);
             assert!(
-                c.at[0].to_bits() == at[0].to_bits()
-                    && c.at[1].to_bits() == at[1].to_bits()
+                close(c.at[0], at[0], Ops::Ieee)
+                    && close(c.at[1], at[1], Ops::Ieee)
                     && c.index as u64 == w["index"].as_u64().unwrap()
                     && c.lo as u64 == w["lo"].as_u64().unwrap()
                     && c.hi as u64 == w["hi"].as_u64().unwrap()
@@ -191,8 +239,9 @@ fn corners_are_the_pythons() {
     assert!(seen >= 20);
 }
 
-/// The radii, the spread and `mixed` to the bit; the bow and the skew, which the Python reads
-/// off LAPACK's SVD, to 1e-12 px and degrees.
+/// The radii and the spread (corners', so atan2's: [`Ops::Libm`]) and `mixed`; the bow and the
+/// skew, which the Python reads off LAPACK's SVD, to 1e-12 px and degrees on every platform
+/// (an ulp of libm moves them by about 1e-15).
 #[test]
 fn rect_like_is_the_pythons() {
     let (mut rects, mut worst) = (0, 0.0f64);
@@ -205,8 +254,8 @@ fn rect_like_is_the_pythons() {
                 (None, Value::Null) => {}
                 (Some(r), Value::Object(w)) => {
                     let radii = f64s(&w["radii"]);
-                    assert!(r.radii.iter().zip(&radii).all(|(a, b)| a.to_bits() == b.to_bits()), "{}: radii", o["name"]);
-                    assert_eq!(r.spread.to_bits(), w["spread"].as_f64().unwrap().to_bits(), "{}: spread", o["name"]);
+                    assert!(r.radii.iter().zip(&radii).all(|(&a, &b)| close(a, b, Ops::Libm)), "{}: radii", o["name"]);
+                    assert!(close(r.spread, w["spread"].as_f64().unwrap(), Ops::Libm), "{}: spread", o["name"]);
                     assert_eq!(r.mixed, w["mixed"].as_bool().unwrap(), "{}: mixed", o["name"]);
                     for (g, key) in [(r.bow, "bow"), (r.skew, "skew")] {
                         let d = (g - w[key].as_f64().unwrap()).abs();
@@ -235,7 +284,8 @@ fn dilate_is_the_pythons() {
 fn wrap_is_the_pythons() {
     let w = &fixture()["wrap"];
     for (a, want) in f64s(&w["in"]).into_iter().zip(f64s(&w["out"])) {
-        assert_eq!(wrap(a).to_bits(), want.to_bits(), "wrap({a:e}) = {:e}, the Python's {want:e}", wrap(a));
+        // + - and fmod: IEEE only
+        assert!(close(wrap(a), want, Ops::Ieee), "wrap({a:e}) = {:e}, the Python's {want:e}", wrap(a));
     }
 }
 
@@ -243,6 +293,10 @@ fn wrap_is_the_pythons() {
 fn the_id_map_and_what_is_visible_are_the_pythons() {
     let v = &fixture()["visibility"];
     let size = (v["size"][0].as_u64().unwrap() as u32, v["size"][1].as_u64().unwrap() as u32);
+    // The scene's circles and rounded corners are sampled with libm's cos and sin, so its points
+    // (and the outlines resampled from them) are [`Ops::Libm`]. The id map, the lookups and the
+    // visibility are read off them through round(_, 3) and floor at sub-pixel boundaries, which
+    // an ulp cannot move unless a point sits within one of such a boundary: those stay exact.
     let drawing = drawing::parse(v["svg"].as_str().unwrap(), Some(size)).unwrap();
     assert_eq!(id_svg(&drawing, size), v["id_svg"].as_str().unwrap());
     let pts = points(&Value::Array(v["lookup_pts"].as_array().unwrap().iter().flat_map(|p| p.as_array().unwrap().clone()).collect()));
@@ -266,7 +320,7 @@ fn the_id_map_and_what_is_visible_are_the_pythons() {
         assert_eq!(contours.len(), drawing.contours.len());
         for (c, w) in drawing.contours.iter().zip(contours) {
             let q = resample(&c.pts, c.closed, &mut MAX_SAMPLES.clone()).unwrap();
-            same_f64("visibility q", &flat(&q), &w["q"]);
+            same_f64("visibility q", &flat(&q), &w["q"], Ops::Libm);
             let vis = visible_samples(&q, c.closed, c.element, c.stroke, Some(&ids), scale);
             assert_eq!(bits(&vis), w["visible"].as_str().unwrap(), "scale {scale}: element {}", c.element);
         }
@@ -280,7 +334,8 @@ fn dot_is_accelerates() {
     for case in fixture()["dot"].as_array().unwrap() {
         let (x, y, q) = (f64s(&case["x"]), f64s(&case["y"]), points(&case["q"]));
         let n = x.len();
-        let same = |g: f64, key: &str| assert_eq!(g.to_bits(), case[key].as_f64().unwrap().to_bits(), "n={n} {key}");
+        // IEEE mul_add and additions in Accelerate's order: the same on every platform
+        let same = |g: f64, key: &str| assert!(close(g, case[key].as_f64().unwrap(), Ops::Ieee), "n={n} {key}: {g:e}");
         same(ddot(&x, &y[..n], true), "aligned");
         same(ddot(&x, &y[1..], false), "shifted");
         same(ddot_stride2(n, |i| q[i][0], |i| q[(i + 1) % n][1]), "strided");
@@ -294,7 +349,7 @@ fn convolve_is_numpys() {
         let want = f64s(&case["out"]);
         assert_eq!(got.len(), want.len());
         for (i, (g, w)) in got.iter().zip(&want).enumerate() {
-            assert_eq!(g.to_bits(), w.to_bits(), "n={} [{i}]: {g:e} vs {w:e}", want.len());
+            assert!(close(*g, *w, Ops::Ieee), "n={} [{i}]: {g:e} vs {w:e}", want.len());
         }
     }
 }

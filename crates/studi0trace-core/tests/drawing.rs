@@ -33,7 +33,7 @@ impl Worst {
         // The fixtures come from numpy with Accelerate and Apple's libm on arm64, and there this
         // port matches every point to the bit. Elsewhere a libm may round cos or sin an ulp
         // apart, which the 1e-9 comparisons allow.
-        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        if common::exact() {
             assert_eq!(self.digests, 0, "{what}: points that differ from the Python's in the last bit");
         }
     }

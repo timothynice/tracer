@@ -70,7 +70,8 @@ fn search(key: f64, arr: &[f64], guess: isize) -> isize {
 }
 
 /// `np.interp(x, xp, fp)` (`arr_interp`), whose `slope * (x - xp[j]) + fp[j]` the compiler
-/// fuses (measured: 300 511 interpolations, every one the fused value).
+/// fuses (measured: 300 511 interpolations, every one the fused value). `mul_add` is IEEE's
+/// correctly rounded fused multiply-add on every platform, so this is libm-free.
 fn interp(x: &[f64], xp: &[f64], fp: &[f64]) -> Vec<f64> {
     let len = xp.len() as isize;
     let (left, right) = (fp[0], fp[fp.len() - 1]);

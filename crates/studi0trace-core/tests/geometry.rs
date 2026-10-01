@@ -50,14 +50,11 @@ fn run(case: &Value) -> Result<Map<String, Value>, CardError> {
     geometry::card(&svg_of(case), size_of(case), vis, scale)
 }
 
-/// Floats are held to the bit where the fixtures were exported (macOS on arm64, whose libm and
-/// Accelerate the port follows); elsewhere a libm may round `atan2` or `cos` the other way, and
-/// they are held to `1e-9 * (1 + |want|)`.
-const EXACT: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
-
 /// Every number in `got` against `want`: integers (and booleans) exactly and of the same kind,
-/// floats to the bit ([`EXACT`]) or to `1e-9 * (1 + |want|)`, lists to the same length. The
-/// largest relative difference seen under each top-level key goes into `worst`.
+/// floats to `1e-9 * (1 + |want|)`, lists to the same length. A card's floats go through libm
+/// (`atan2` in the turning, `cos` and `sin` in the drawing's arcs and ellipses), so they are
+/// also held to the bit only where [`common::exact`]. The largest relative difference seen under
+/// each top-level key goes into `worst`.
 fn compare(path: &str, got: &Value, want: &Value, worst: &mut f64, errors: &mut Vec<String>) {
     match (got, want) {
         (Value::Number(g), Value::Number(w)) if w.is_f64() => {
@@ -70,7 +67,7 @@ fn compare(path: &str, got: &Value, want: &Value, worst: &mut f64, errors: &mut 
             if d > 0.0 {
                 *worst = worst.max(d / b.abs().max(f64::MIN_POSITIVE));
             }
-            if d > 1e-9 * (1.0 + b.abs()) || (EXACT && a.to_bits() != b.to_bits()) {
+            if d > 1e-9 * (1.0 + b.abs()) || (common::exact() && a.to_bits() != b.to_bits()) {
                 errors.push(format!("{path}: {a:e} vs {b:e}"));
             }
         }

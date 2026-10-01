@@ -21,6 +21,14 @@ pub fn backend(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../backend").join(rel)
 }
 
+/// Whether results that went through libm (`atan2`, `cos`, `sin`, ...) are compared to the bit:
+/// on macOS on arm64, where the fixtures were exported with Apple's libm, unless
+/// `STUDI0TRACE_FORCE_TOLERANT` is set (which runs the tolerant branch there too). Elsewhere a
+/// libm may round an ulp the other way, and those results are held to a tolerance.
+pub fn exact() -> bool {
+    cfg!(all(target_os = "macos", target_arch = "aarch64")) && std::env::var_os("STUDI0TRACE_FORCE_TOLERANT").is_none()
+}
+
 /// Lower-case hex SHA-256, for fixtures too large to keep as bytes.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};

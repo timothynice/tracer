@@ -1619,6 +1619,67 @@ def _geometry() -> None:
     card("made: an infinite rect", made('<rect x="0" y="0" width="1e999" height="10" fill="#000"/>'), (64, 64))
     card("made: not xml", "<svg", (64, 64))
 
+    # Each threshold of the card with a made case just either side of it (the measured values
+    # are the Python's, found by sweeping the shape).
+    def rounded(big: float, small: float) -> str:
+        """A 48 px square with three corners of radius `big` and the top-left one of `small`."""
+        b, r = big, small
+        return (f'<path d="M{8 + b} 8 H{56 - b} A{b} {b} 0 0 1 56 {8 + b} V{56 - b} A{b} {b} 0 0 1 {56 - b} 56 '
+                f'H{8 + b} A{b} {b} 0 0 1 8 {56 - b} V{8 + r} A{r} {r} 0 0 1 {8 + r} 8 Z" fill="#c33"/>')
+
+    def tilted(deg: float) -> str:
+        dy = 48 * math.tan(math.radians(deg))
+        return f'<path d="M8 8 L56 {8 + dy:.4f} L56 {50 + dy:.4f} L8 50 Z" fill="#33c"/>'
+
+    def spread(dr: float) -> str:
+        r, r2 = 4.0, 4.0 + dr
+        return (f'<path d="M{8 + r} 8 H{56 - r2} A{r2} {r2} 0 0 1 56 {8 + r2} V{56 - r} A{r} {r} 0 0 1 {56 - r} 56 '
+                f'H{8 + r} A{r} {r} 0 0 1 8 {56 - r} V{8 + r} A{r} {r} 0 0 1 {8 + r} 8 Z" fill="#c33"/>')
+
+    def arc_top(deg: float) -> str:
+        r = 24 / math.sin(math.radians(deg / 2))
+        return f'<path d="M8 12 A{r:.4f} {r:.4f} 0 0 1 56 12 L56 56 L8 56 Z" fill="#c33"/>'
+
+    thresholds = {
+        "edge: bow 0.240 px (RECT_BOW 0.25)": '<path d="M8 10 Q32 9.26 56 10 L56 50 L8 50 Z" fill="#3c3"/>',
+        "edge: bow 0.260 px": '<path d="M8 10 Q32 9.2 56 10 L56 50 L8 50 Z" fill="#3c3"/>',
+        "edge: skew 0.9 deg (RECT_SKEW 1)": tilted(0.9),
+        "edge: skew 1.1 deg": tilted(1.1),
+        "edge: skew 5.5 deg (RECT_GRID 6)": tilted(5.5),
+        "edge: skew 6.5 deg": tilted(6.5),
+        "edge: radii spread 0.96 px (RADIUS_SPREAD 1)": spread(0.9),
+        "edge: radii spread 1.13 px": spread(1.1),
+        "edge: radii 1.59 and 0.64, mixed (ROUND_R 1.5, SHARP_R 0.75)": rounded(1.55, 0.7),
+        "edge: radii 1.43 and 0.64, not mixed": rounded(1.45, 0.7),
+        "edge: radii 1.75 and 0.80, not mixed": rounded(1.75, 0.8),
+        "edge: a disc of 3.95 px2 (SLIVER_AREA 4)": '<circle cx="20" cy="20" r="1.13" fill="#000"/>',
+        "edge: a disc of 4.12 px2": '<circle cx="20" cy="20" r="1.15" fill="#000"/>',
+        "edge: corners whose window turns 46.8 deg (CORNER_SEED_DEG 45)": '<rect x="4" y="4" width="56" height="56" rx="12.25" fill="#c33"/>',
+        "edge: corners whose window turns 43.3 deg": '<rect x="4" y="4" width="56" height="56" rx="13.25" fill="#c33"/>',
+        "edge: a side turning 28 deg (RECT_SIDE_DEG 30)": arc_top(28.0),
+        "edge: a side turning 32 deg": arc_top(32.0),
+        "edge: a 2 px square, perimeter 8.0 (2 * WOBBLE_SCALE)": '<rect x="10" y="10" width="2" height="2" fill="#c33"/>',
+        "edge: a short thin stroke under a later shape": '<path d="M20 20 L20.2 20.1" stroke="#000" stroke-width="0.5" fill="none"/>'
+                                                         '<rect x="10" y="10" width="20" height="20" fill="#c33"/>',
+    }
+    for name, body in thresholds.items():
+        card(name, made(body), (64, 64))
+    edge = {c["name"]: c["card"] for c in cases if c["name"].startswith("edge:")}
+    expect = [("edge: bow 0.240 px (RECT_BOW 0.25)", "rect_bowed", 0), ("edge: bow 0.260 px", "rect_bowed", 1),
+              ("edge: skew 0.9 deg (RECT_SKEW 1)", "rect_skewed", 0), ("edge: skew 1.1 deg", "rect_skewed", 1),
+              ("edge: skew 5.5 deg (RECT_GRID 6)", "rect_like", 1), ("edge: skew 6.5 deg", "rect_like", 0),
+              ("edge: radii spread 0.96 px (RADIUS_SPREAD 1)", "radius_inconsistent", 0), ("edge: radii spread 1.13 px", "radius_inconsistent", 1),
+              ("edge: radii 1.59 and 0.64, mixed (ROUND_R 1.5, SHARP_R 0.75)", "radius_inconsistent", 1),
+              ("edge: radii 1.43 and 0.64, not mixed", "radius_inconsistent", 0), ("edge: radii 1.75 and 0.80, not mixed", "radius_inconsistent", 0),
+              ("edge: a disc of 3.95 px2 (SLIVER_AREA 4)", "slivers", 1), ("edge: a disc of 4.12 px2", "slivers", 0),
+              ("edge: corners whose window turns 46.8 deg (CORNER_SEED_DEG 45)", "rect_like", 1),
+              ("edge: corners whose window turns 43.3 deg", "rect_like", 0),
+              ("edge: a side turning 28 deg (RECT_SIDE_DEG 30)", "rect_like", 1), ("edge: a side turning 32 deg", "rect_like", 0),
+              ("edge: a short thin stroke under a later shape", "thin_strokes", 0)]
+    for name, key, want in expect:
+        assert edge[name][key] == want, (name, key, edge[name][key])
+    assert edge["edge: a 2 px square, perimeter 8.0 (2 * WOBBLE_SCALE)"]["outline_len_px"] == 8.0
+
     ok = [c["card"] for c in cases if c["card"] is not None]
     # The golden must not be vacuous: every counter and every location list is set off somewhere.
     for key in ("strokes", "outline_len_px", "hidden_len_px", "slivers", "sliver_area_px", "degenerate", "thin_strokes",

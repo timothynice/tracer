@@ -10,6 +10,11 @@
 //! kernel changes and this model does not follow it; the scorecard's dots there are the strided
 //! ones, which hold to at least 100 000.
 //!
+//! Nothing here calls libm: `f64::mul_add` is IEEE 754's fusedMultiplyAdd, correctly rounded
+//! wherever it runs (an `fmadd` on arm64, the FMA instruction or compiler-builtins' exact
+//! software `fma` elsewhere, wasm included), so these sums are the same on every platform; only
+//! whether they are Accelerate's is a fact about macOS on arm64.
+//!
 //! - **x at a stride of two** (`q[:, 0]`, a column of the outline): four running sums, the
 //!   `i`-th product fused into sum `i % 4`, then `(s0 + s2) + (s1 + s3)`.
 //! - **both contiguous**: under four elements, a plain sequential sum of unfused products.
