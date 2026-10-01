@@ -65,8 +65,10 @@
 //! # Time, and `wasm32`
 //!
 //! A trace is timed with `std::time::Instant` (`auto::trace_finished`, which `elapsed_ms` is
-//! read from), and on `wasm32-unknown-unknown` `Instant::now()` **traps**: the call aborts the
-//! module, it is not a panic that [`Core::vectorize`] could turn into an `engine_crashed` entry.
+//! read from), and on `wasm32-unknown-unknown` `Instant::now()` **panics**, which a build with
+//! `panic=abort` (that target's default) turns into a trap that ends the module: `catch_unwind`
+//! cannot catch it where panics abort, so [`Core::vectorize`] cannot report it as an
+//! `engine_crashed` entry.
 //! A web build therefore has to give `trace_finished` a clock (a JavaScript `performance.now()`
 //! behind a parameter or a feature) before it can trace; this is plan 3's, and nothing here
 //! calls a clock anywhere else.

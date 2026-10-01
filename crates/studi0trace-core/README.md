@@ -3,8 +3,9 @@
 Everything the Python server does around the Vexel engine, in Rust: image intake,
 the engine's parameters and their JSON schema, the presets, SVG finishing and
 stats, the artifact scorecard and fidelity assessment, Auto, and one facade,
-`api::Core`, that answers the API's five requests with the API's JSON. The
-desktop app and the web build call it; the Python in `backend/studi0trace` is the
+`api::Core`, that answers the API's five requests with the API's JSON. The desktop
+app (plan 2, `apps/desktop`) and the web build (plan 3, `crates/studi0trace-wasm`)
+are meant to call it, and neither exists yet; the Python in `backend/studi0trace` is the
 reference each module was ported from, and stays the definition of what the core
 does until the Python server is retired. Rust >= 1.88 (`slice::as_chunks`).
 
@@ -57,12 +58,27 @@ Re-export after changing the Python module a fixture is made from, and after
 `preset_details.json`). Review the diff of the fixtures as you would of code.
 
 **Platform.** The fixtures were exported on macOS arm64. Results that go through
-libm (`atan2`, `sin`, `cos`: the SVG parser's arcs, the geometry card, and the SVG
-text of a trace, which the engine's own floats decide) are compared to the bit
-there (`tests/common::exact()`), and to a tolerance on any other target, where a
-libm may round the last bit the other way. `STUDI0TRACE_FORCE_TOLERANT=1` runs the
-tolerant comparison on any machine, including the arm64 Mac, so that branch is not
-untested until someone builds elsewhere.
+libm (`atan2`, `sin`, `cos`: the SVG parser's arcs, the geometry card, the
+scorecard's floats) are compared to the bit there (`tests/common::exact()`), and to
+a tolerance on any other target, where a libm may round the last bit the other way.
+The SVG a trace writes, and the counts read off it, are decided by the engine's own
+floats; the two tests that hold them say what they give up off the fixtures'
+platform:
+
+- `tests/api.rs` blanks, on both sides, the SVG, the counts read off it (`stats`),
+  Auto's scores, pick and reason, and an Auto response's `parameters_used`. Everything
+  else is compared as a string, key order included: statuses, error bodies, ids,
+  sizes, the structure of every response.
+- `tests/auto.rs` does not compare the candidates' SVG bytes (nor the chosen one) or
+  their `stats`. It still compares the pick, the reason, the API's rounded scores
+  and each candidate's full scorecard against the Python's (integers exactly,
+  floats to 1e-9 relative).
+- `tests/scorecard.rs` holds every float to 1e-9 relative on every platform, and to
+  the bit as well on macOS arm64 (but for CIEDE2000).
+
+`STUDI0TRACE_FORCE_TOLERANT=1` runs the tolerant branch of all of these on any
+machine, including the arm64 Mac, so that branch is exercised here and not only
+when someone builds elsewhere.
 
 **Against the Python, end to end.** `backend/tools/diffcheck.py scorecard` scores
 a finished trace of every corpus item with `imaging/quality.assess` and with this
@@ -104,11 +120,26 @@ The core answers like the server except where it was decided not to:
   security boundary.
 - **Refusals only the core has**: more than 2^24 resampled outline points
   (`geometry::MAX_SAMPLES`), more than `drawing::MAX_POINTS` (2^24) points in a
-  drawing, and elements nested deeper than 988 levels, where the Python would
-  try (and exhaust memory, or recurse until it raises).
+  drawing, elements nested deeper than 988 levels, and a render of more than
+  `render::MAX_PIXELS` (2^28 pixels, a 1 GiB buffer; it applies to the size asked
+  for as well as the SVG's own), where the Python would try (and exhaust memory, or
+  recurse until it raises).
+- **Stack depth.** An SVG nested a few hundred levels deep takes resvg about 3.5 KB
+  of stack a level to render, so one near the 988 limit overflows a 2 MiB thread
+  (a rayon worker's, a test's), which is an abort and not an error. The SVGs the
+  engine writes nest a few levels, so only scoring an SVG the core did not make
+  can reach it; do that on a thread with room (`scorecard`'s module documentation).
+  The Python binding runs on the caller's thread: a deep SVG is fine on Python's
+  main thread and on its threads at the default stack size, and kills the
+  interpreter on a thread made after `threading.stack_size(2 * 1024 * 1024)` (a
+  980-deep SVG did).
+- **An empty parameter name.** The 422 for an unknown parameter whose name is the
+  empty string has `loc` `["vexel"]` where Pydantic's is `["vexel", ""]` (the facade
+  drops an empty `loc` element; `Violation::from`). The frontend never sends one.
 - **Non-finite floats** are `null` in the core's JSON (`serde_json` has no NaN or
-  infinity), and the Python's JSON writer treats them in its own way. None of the
-  scorecard's keys was non-finite over the corpus.
+  infinity). The Python server cannot send one: Starlette's `JSONResponse` raises
+  `ValueError` ("Out of range float values are not JSON compliant") and the client
+  gets a 500. None of the scorecard's keys was non-finite over the corpus.
 - **Float text** differs for a float outside the ordinary range (the Python's
   `3.4e-05`, the core's `0.000034`): the same double, and no parameter the UI sends
   reaches it.
@@ -140,5 +171,6 @@ HTTP half:
   a browser's `JSON.parse`): the default `serde_json` parser can be an ulp off on a
   decimal of 17 digits, and the core takes the parsed `f64` as it is.
 - On `wasm32-unknown-unknown`, give `auto::trace_finished` a clock: `Instant::now()`
-  traps there, an abort that no `engine_crashed` can report.
+  panics there, and with `panic=abort` (that target's default) the panic ends the
+  module, so `catch_unwind` cannot turn it into an `engine_crashed`.
 - Answer a refusal with `ApiError::status` and `ApiError::response_body()`.

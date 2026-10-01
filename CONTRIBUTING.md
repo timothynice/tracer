@@ -23,12 +23,19 @@ means that number was measured on the current corpus with the current build.
 ```bash
 cd backend && uv venv && uv pip install -e '.[dev]'   # Python ≥ 3.12
 cd backend && .venv/bin/python -m maturin develop --release -m vexel-rs/Cargo.toml
+cd backend && VIRTUAL_ENV=$PWD/.venv .venv/bin/python -m maturin develop --release \
+    -m ../crates/studi0trace-core/Cargo.toml --features python
 cd frontend && npm ci                                  # Node ≥ 20
 ```
 
-The middle line builds Vexel's Rust pipeline (needs a toolchain from
-<https://rustup.rs>). Skip it and everything still works — Vexel falls back to
-its Python implementation and traces about ten times slower.
+The two `maturin` lines build Rust (needs a toolchain from <https://rustup.rs>,
+1.88 or newer for the second). The first is Vexel's pipeline: skip it and
+everything still works — Vexel falls back to its Python implementation and
+traces about ten times slower. The second is `studi0trace_core`, the Rust port of
+everything around the engine, as a Python module beside `vexel_rs`; only
+`tools.diffcheck scorecard` and `tests/test_core_scorecard.py` use it. Without it
+the default `tools.diffcheck` run stops at once (see below) and that test file is
+skipped.
 
 Run both servers:
 
@@ -63,7 +70,10 @@ cd backend && .venv/bin/python -m tools.diffcheck
 is what proves it landed: it runs each stage in both over the whole corpus and
 reports where they disagree — the partition's labels to the last float32 bit,
 the fills by what they paint. Where the two are allowed to differ, the tolerance
-table at the top of that file says so and says why.
+table at the top of that file says so and says why. Its `scorecard` stage holds
+the Rust core's scorecard to the Python's and needs the second `maturin` line
+above: without `studi0trace_core` it exits at once with that command, and naming
+stages (`tools.diffcheck labels0 rects`) runs only those.
 
 Run the suite against both:
 

@@ -16,8 +16,8 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 - `crates/studi0trace-core/` — the Rust port of everything the Python server does
   around the engine: image intake, the parameters and their JSON schema, presets,
   SVG finishing, the artifact scorecard, Auto, and the `Core` facade that answers
-  the API's five calls with the API's JSON (the desktop app and the web build call
-  it; its `README.md` has the facade, the known differences from the Python and
+  the API's five calls with the API's JSON (the desktop app of plan 2 and the web
+  build of plan 3 will call it; neither exists yet; its `README.md` has the facade, the known differences from the Python and
   the contract a shell must keep). The root `Cargo.toml` is the workspace of it and
   `backend/vexel-rs`: `cargo test --workspace --release`, Rust ≥ 1.88. Its golden
   fixtures (`tests/fixtures`) are exported from the Python by

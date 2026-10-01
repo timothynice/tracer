@@ -61,6 +61,12 @@ fn map<'py>(py: Python<'py>, m: &Map<String, Value>) -> PyResult<Bound<'py, PyDi
 /// of `svg` against the source and the artifact scorecard, as one dict in the Python's key
 /// order. The work runs with the GIL released. A source of the wrong size, an SVG that does not
 /// render and the rest of [`scorecard::ScoreError`] are a `ValueError` with the error's text.
+///
+/// **Stack.** It runs on the calling thread, and an SVG nested near the 988-level limit needs
+/// about 3.5 MiB of stack to render (`scorecard`'s module documentation). A stack overflow is an
+/// abort, not an exception, so it ends the interpreter: a 980-deep SVG is fine on Python's main
+/// thread and on its threads at the default stack size, and killed the process on a thread made
+/// after `threading.stack_size(2 * 1024 * 1024)`. The SVGs the engine writes nest a few levels.
 #[pyfunction]
 fn assess<'py>(py: Python<'py>, svg: &str, rgba: &[u8], width: usize, height: usize) -> PyResult<Bound<'py, PyDict>> {
     let card = py

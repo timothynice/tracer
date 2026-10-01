@@ -30,10 +30,15 @@ CORPUS = ROOT / "backend" / "bench" / "corpus"
 REL = 1e-9
 
 
+def native(v):
+    """A numpy scalar as the Python number it is (`diffcheck._native`), so that a type is the Python's."""
+    return v.item() if isinstance(v, np.generic) else v
+
+
 def assert_same_card(py: dict, rs: dict) -> None:
     assert list(rs) == list(py), "the same keys in the same order"
     for key, x in py.items():
-        y = rs[key]
+        x, y = native(x), rs[key]
         assert type(y) is type(x), f"{key}: {x!r} in Python, {y!r} in Rust"
         if isinstance(x, float):
             assert abs(x - y) <= REL * max(abs(x), abs(y)), f"{key}: {x!r} in Python, {y!r} in Rust"

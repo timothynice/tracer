@@ -3,8 +3,10 @@
 //! sets of candidates the Python answered (`auto.json`), Python's `round` over a thousand
 //! numbers, `issues` and `summary` over their thresholds, and the whole of `auto=true` on real
 //! images: the SVG of every candidate to the byte, its scores, the pick and the reason, each as
-//! the route sends them. The failure paths run through [`auto::run_with`], whose tracer a test
-//! can replace.
+//! the route sends them. The SVG bytes and the counts read off them are compared where
+//! `common::exact` says the engine's floats are the fixtures' (macOS arm64) and not elsewhere,
+//! or under `STUDI0TRACE_FORCE_TOLERANT`; the pick, the reason and the scores always are. The
+//! failure paths run through [`auto::run_with`], whose tracer a test can replace.
 mod common;
 
 use serde_json::{json, Map, Value};
@@ -594,6 +596,7 @@ fn same_card(name: &str, got: &Map<String, Value>, want: &Value) {
 
 fn check_image(entry: &Value) {
     let name = entry["name"].as_str().unwrap();
+    let exact = common::exact();
     let img = image_of(entry);
     let started = Instant::now();
     let o = auto::run(&img).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -607,17 +610,25 @@ fn check_image(entry: &Value) {
         let id = c.preset.as_str();
         let at = format!("{name} {id}");
         assert_eq!((id, c.label.as_str()), (want["preset"].as_str().unwrap(), want["label"].as_str().unwrap()), "{name}");
-        // the SVG the Python route sends, to the byte
+        // the SVG the Python route sends, to the byte, and the counts read off it: the engine's
+        // floats decide both, so off the fixtures' platform (`common::exact`) they are not compared
+        // (`tests/api.rs` blanks the same two); the scores and the pick below are, on every platform
         let svg_file = want["svg_file"].as_str().unwrap();
-        let stored = String::from_utf8(common::fixture_bytes(svg_file)).unwrap();
-        if c.svg.as_deref() != Some(stored.as_str()) {
-            let got = c.svg.as_deref().unwrap_or("");
-            let at_byte = got.bytes().zip(stored.bytes()).position(|(a, b)| a != b).unwrap_or(got.len().min(stored.len()));
-            panic!("{at}: the SVG differs from {svg_file} ({} bytes vs {}) from byte {at_byte}", got.len(), stored.len());
+        if exact {
+            let stored = String::from_utf8(common::fixture_bytes(svg_file)).unwrap();
+            if c.svg.as_deref() != Some(stored.as_str()) {
+                let got = c.svg.as_deref().unwrap_or("");
+                let at_byte = got.bytes().zip(stored.bytes()).position(|(a, b)| a != b).unwrap_or(got.len().min(stored.len()));
+                panic!("{at}: the SVG differs from {svg_file} ({} bytes vs {}) from byte {at_byte}", got.len(), stored.len());
+            }
+        } else {
+            assert!(c.svg.as_deref().is_some_and(|s| s.starts_with("<svg")), "{at}: no SVG");
         }
         assert!(c.error.is_none() && c.elapsed_ms.unwrap() > 0.0, "{at}");
         // everything else of the candidate, as the API writes it
-        assert_eq!(serde_json::to_value(c.stats.unwrap()).unwrap(), want["stats"], "{at}: stats");
+        if exact {
+            assert_eq!(serde_json::to_value(c.stats.unwrap()).unwrap(), want["stats"], "{at}: stats");
+        }
         assert_eq!(Value::Object(c.parameters.clone().unwrap()), want["parameters"], "{at}: parameters");
         assert_eq!(c.scores.as_ref().unwrap(), &want["scores"], "{at}: scores");
         let python = &entry["scored"][id];
@@ -627,12 +638,16 @@ fn check_image(entry: &Value) {
         let from_python = auto::summary(python["card"].as_object().unwrap());
         assert_eq!(from_python, python["summary"], "{at}: summary of the stored card");
     }
-    // the whole response, but for the SVGs and the times (checked above)
+    // the whole response, but for the SVGs and the times (checked above), and off the fixtures'
+    // platform the counts read off the SVG
     let mut shaped = v.clone();
     for c in shaped["candidates"].as_array_mut().unwrap() {
         let c = c.as_object_mut().unwrap();
         c.remove("svg");
         c.remove("elapsed_ms");
+        if !exact {
+            c.remove("stats");
+        }
     }
     let order = &common::fixture_json("auto.json")["key_order"];
     let keys = |v: &Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
@@ -649,6 +664,9 @@ fn check_image(entry: &Value) {
             .map(|c| {
                 let mut c = c.as_object().unwrap().clone();
                 c.remove("svg_file");
+                if !exact {
+                    c.remove("stats");
+                }
                 Value::Object(c)
             })
             .collect(),
@@ -656,7 +674,9 @@ fn check_image(entry: &Value) {
     assert_eq!(shaped, want, "{name}");
     // the pick is also the engine's own result
     let chosen = o.chosen().unwrap();
-    assert_eq!(chosen.svg.as_deref(), Some(String::from_utf8(common::fixture_bytes(entry["chosen_svg_file"].as_str().unwrap())).unwrap().as_str()), "{name}");
+    if exact {
+        assert_eq!(chosen.svg.as_deref(), Some(String::from_utf8(common::fixture_bytes(entry["chosen_svg_file"].as_str().unwrap())).unwrap().as_str()), "{name}");
+    }
     assert_eq!(Value::Object(chosen.parameters.clone().unwrap()), entry["parameters_used"], "{name}");
 }
 

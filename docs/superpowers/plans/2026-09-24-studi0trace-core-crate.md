@@ -1573,7 +1573,11 @@ this is the list a later plan needs.
   `Result`, where the plan's sketches return values: an SVG that does not render, a source of the wrong size or a
   hole scale of 0 is an error, not a panic. The core also refuses what the Python would exhaust memory or its
   recursion limit on: more than 2^24 outline samples (`geometry::MAX_SAMPLES`), more than 2^24 points in a drawing
-  (`drawing::MAX_POINTS`), elements nested more than 988 deep (`drawing::MAX_DEPTH`).
+  (`drawing::MAX_POINTS`), elements nested more than 988 deep (`drawing::MAX_DEPTH`) and a render of more than
+  2^28 pixels (`render::MAX_PIXELS`). Two more differences are in the crate's `README.md`: an SVG nested near the
+  988 limit overflows a 2 MiB thread stack (an abort, which the Python binding turns into the interpreter's when
+  it is called from a small-stack Python thread), and an unknown parameter whose name is `""` has `loc`
+  `["vexel"]` where Pydantic's is `["vexel", ""]`.
 - **Fixtures are exported on macOS arm64 and gated by platform.** Results that go through libm (`sin`, `cos`,
   `atan2`) are bit-equal there and so are compared to the bit only when `tests/common::exact()` says so
   (`target_os = "macos"` and `target_arch = "aarch64"`); anywhere else they are held to a tolerance.
