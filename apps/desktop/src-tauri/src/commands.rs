@@ -80,3 +80,23 @@ pub async fn read_image(state: State<'_, AppState>, id: String) -> Result<Respon
 pub fn close_image(state: State<'_, AppState>, id: String) -> bool {
     state.images.remove(&id)
 }
+
+use crate::queue::JobSpec;
+use tauri::Emitter;
+
+#[tauri::command]
+pub async fn vectorize(app: tauri::AppHandle, state: State<'_, AppState>, image_id: String, parameters: Value, auto: bool, job: String) -> Result<Value, CommandError> {
+    let bytes = state.images.bytes(&image_id).ok_or_else(CommandError::expired)?;
+    let (emitter, job_id) = (app.clone(), job.clone());
+    let rx = state.queue.submit(JobSpec { id: job, image_id, bytes, parameters, auto, test: None }, move || {
+        let _ = emitter.emit("trace-phase", serde_json::json!({ "job": job_id, "phase": "tracing" }));
+    });
+    tauri::async_runtime::spawn_blocking(move || rx.recv().unwrap_or_else(|_| Err(CommandError::cancelled())))
+        .await
+        .unwrap_or_else(|e| Err(CommandError::crashed(e)))
+}
+
+#[tauri::command]
+pub fn cancel_trace(state: State<'_, AppState>, job: String) -> bool {
+    state.queue.cancel(&job)
+}
