@@ -9,9 +9,9 @@ import { createRoot } from "react-dom/client";
 import { Toaster } from "sonner";
 
 import App from "./App";
-import { applyTheme, getTheme } from "./lib/theme";
+import { platform } from "./platform";
 
-applyTheme(getTheme());
+if (platform.kind === "native") document.documentElement.classList.add("native");
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, staleTime: Infinity } },
@@ -21,7 +21,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <App />
-      <Toaster position="bottom-right" toastOptions={{ className: "font-sans" }} />
+      <Toaster position="bottom-center" toastOptions={{ className: "font-sans" }} />
     </QueryClientProvider>
   </StrictMode>,
 );

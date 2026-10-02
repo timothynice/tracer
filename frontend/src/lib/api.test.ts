@@ -11,7 +11,8 @@ afterAll(() => server.close());
 test("health and engines parse", async () => {
   expect((await getHealth()).engines).toEqual(["potrace", "vtracer"]);
   const engines = await getEngines();
-  expect(engines[0].params.properties.threshold.ui?.control).toBe("slider");
+  expect(engines[0].id).toBe("vexel");
+  expect(engines[0].params.properties.detail.ui?.control).toBe("slider");
 });
 
 test("upload and vectorize send the expected form fields", async () => {

@@ -1,8 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import { EngineTabs } from "./EngineTabs";
 import { ParamControl } from "./ParamControl";
 import { ParamPanel } from "./ParamPanel";
 import { specsFor } from "@/lib/schema";
@@ -58,19 +57,6 @@ test("there is no reset button: re-picking the active preset is the reset", () =
 test("a drawer holding an invalid field opens itself", () => {
   render(<ParamPanel engine="potrace" specs={specs} values={ENGINES[0].defaults} onChange={() => {}} invalidField="threshold" />);
   expect(screen.getByRole("button", { name: /^Bitmap/ })).toHaveAttribute("aria-expanded", "true");
-});
-
-test("engine tabs render one tab per engine and switch", () => {
-  const onChange = vi.fn();
-  render(
-    <EngineTabs engines={ENGINES} value="potrace" onChange={onChange}>
-      {(e) => <div>panel for {e.id}</div>}
-    </EngineTabs>,
-  );
-  expect(screen.getAllByRole("tab")).toHaveLength(2);
-  expect(screen.getByText("panel for potrace")).toBeInTheDocument();
-  fireEvent.mouseDown(screen.getByRole("tab", { name: /vtracer/i }));
-  expect(onChange).toHaveBeenCalledWith("vtracer");
 });
 
 test("shows whole numbers in full", () => {

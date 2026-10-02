@@ -7,7 +7,19 @@ export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
-      fontFamily: { sans: ["Poppins", "ui-sans-serif", "system-ui", "sans-serif"] },
+      fontFamily: {
+        sans: ["-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"Helvetica Neue"', "sans-serif"],
+        brand: ["Poppins", "ui-sans-serif", "system-ui", "sans-serif"],
+      },
+      // AppKit's sizes: 13 px body, 11 px secondary
+      fontSize: {
+        xs: ["11px", "14px"],
+        sm: ["13px", "18px"],
+        base: ["13px", "18px"],
+        lg: ["15px", "20px"],
+        xl: ["17px", "22px"],
+        "2xl": ["22px", "28px"],
+      },
       colors: {
         background: hsl("background"),
         foreground: hsl("foreground"),
@@ -25,6 +37,7 @@ export default {
         success: hsl("success"),
         warning: hsl("warning"),
         info: hsl("info"),
+        window: hsl("window"),
       },
       borderRadius: {
         lg: "var(--radius)",

@@ -44,6 +44,27 @@ export const PRESETS: Preset[] = [
   { id: "poster", label: "Poster", engine: "potrace", kind: "preset", description: "A style, never picked by Auto.", detail: "ΔE 1.2 · 3 paths", sample: "flat.png", params: { threshold: 90 } },
 ];
 
+export const VEXEL: EngineDescription = {
+  id: "vexel",
+  label: "Vexel",
+  description: "Faithful colour vectors.",
+  primary: true,
+  params: {
+    properties: {
+      detail: { type: "number", default: 6, minimum: 1, maximum: 20, description: "Colour detail", ui: { control: "slider", group: "Shapes", label: "Detail" } },
+      min_region: { type: "integer", default: 8, minimum: 1, maximum: 64, ui: { control: "slider", group: "Shapes", label: "Smallest shape", unit: "px" } },
+    },
+  },
+  defaults: { detail: 6, min_region: 8 },
+};
+
+export const VEXEL_PRESETS: Preset[] = [
+  { id: "auto", label: "Auto", engine: "vexel", kind: "auto", description: "Traces your image with Balanced and Logo & icon, and keeps the cleanest result. Start here.", detail: "ΔE 0.22 · 3 shapes", sample: "auto.png", params: {} },
+  { id: "balanced", label: "Balanced", engine: "vexel", kind: "preset", auto_candidate: true, description: "Gradients, shadows, strokes and overlaps all reconstructed. The most faithful all-rounder.", detail: "ΔE 0.25 · 3 shapes", sample: "balanced.png", params: {} },
+  { id: "logo", label: "Logo & icon", engine: "vexel", kind: "preset", auto_candidate: true, description: "Merges harder and fits whole shapes, for a small, clean file.", detail: "ΔE 0.31 · 3 shapes", sample: "logo.png", params: { detail: 10, min_region: 16 } },
+  { id: "flat", label: "Flat & poster", engine: "vexel", kind: "preset", description: "A style choice, not a quality setting: solid colours only.", detail: "ΔE 0.62 · 7 shapes", sample: "flat.png", params: { detail: 12 } },
+];
+
 export const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M16 16h32v32H16z" fill="#000"/></svg>';
 
 /** The trace an Auto candidate returns: the fixture SVG, tagged with its preset. */
@@ -55,24 +76,30 @@ function scores(delta_e: number, artifact_index: number, issues: string[], shape
   return { delta_e, edge_f1: 0.97, artifact_index, clean: issues.length === 0, issues, shapes, pinholes: issues.length ? 2 : 0, slivers: 0, wobble: 0, inflections: 0, uneven_rects: 0 };
 }
 
-/** What /vectorize with auto=true answers for an engine with candidates: every candidate, Crisp chosen. */
+const ALL_PRESETS = [...VEXEL_PRESETS, ...PRESETS];
+const ALL_ENGINES = [VEXEL, ...ENGINES];
+
+/** Per engine: Auto's pick and each candidate's scores. Vexel picks Logo & icon; the old Potrace fixture picks Crisp. */
+const AUTO_TABLE: Record<string, { pick: string; scores: Record<string, ReturnType<typeof scores>> }> = {
+  vexel: { pick: "logo", scores: { balanced: scores(0.25, 3.2, ["2 pinholes"], 6), logo: scores(0.31, 0, [], 3) } },
+  potrace: { pick: "crisp", scores: { balanced: scores(0.54, 3.2, ["2 pinholes"], 6), crisp: scores(0.61, 0, [], 5) } },
+};
+
+/** What /vectorize with auto=true answers for an engine with candidates: every candidate, the table's pick chosen. */
 export function autoResult(engine: string): AutoResult {
-  const cands = PRESETS.filter((p) => p.engine === engine && p.auto_candidate);
-  const table: Record<string, ReturnType<typeof scores>> = {
-    balanced: scores(0.54, 3.2, ["2 pinholes"], 6),
-    crisp: scores(0.61, 0, [], 5),
-  };
+  const cands = ALL_PRESETS.filter((p) => p.engine === engine && p.auto_candidate);
+  const table = AUTO_TABLE[engine] ?? { pick: cands[0]?.id ?? "", scores: {} };
   const candidates: AutoCandidate[] = cands.map((p) => ({
     preset: p.id, label: p.label, svg: candidateSvg(p.id), elapsed_ms: 10, stats: STATS,
-    parameters: { ...ENGINES.find((e) => e.id === engine)!.defaults, ...p.params }, scores: table[p.id] ?? null,
+    parameters: { ...ALL_ENGINES.find((e) => e.id === engine)!.defaults, ...p.params }, scores: table.scores[p.id] ?? null,
   }));
-  return { engine, pick: "crisp", reason: "the cleanest at the same fidelity", candidates };
+  return { engine, pick: table.pick, reason: "the cleanest at the same fidelity", candidates };
 }
 
 export const handlers = [
   http.get(`${API_URL}/health`, () => HttpResponse.json({ status: "ok", version: "0.2.0", engines: ["potrace", "vtracer"], vexel: "rust" })),
-  http.get(`${API_URL}/engines`, () => HttpResponse.json(ENGINES)),
-  http.get(`${API_URL}/presets`, () => HttpResponse.json(PRESETS)),
+  http.get(`${API_URL}/engines`, () => HttpResponse.json([VEXEL])),
+  http.get(`${API_URL}/presets`, () => HttpResponse.json(VEXEL_PRESETS)),
   http.post(`${API_URL}/uploads`, () => HttpResponse.json({ image_id: "a".repeat(32), width: 64, height: 64, format: "PNG" })),
   http.post(`${API_URL}/vectorize`, async ({ request }) => {
     const form = await request.formData();
@@ -83,7 +110,7 @@ export const handlers = [
       return HttpResponse.json({ success: true, image_id: form.get("image_id"), width: 64, height: 64, results, parameters_used: params });
     }
     // Auto: engines with candidates are traced once per candidate and answer with the chosen one.
-    const withCandidates = engines.filter((e) => PRESETS.some((p) => p.engine === e && p.auto_candidate));
+    const withCandidates = engines.filter((e) => ALL_PRESETS.some((p) => p.engine === e && p.auto_candidate));
     if (!withCandidates.length) {
       return HttpResponse.json({ detail: { code: "auto_unavailable", message: "Auto has no candidates for the selected engines" } }, { status: 400 });
     }
