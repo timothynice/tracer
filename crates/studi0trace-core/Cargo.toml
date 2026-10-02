@@ -1,0 +1,36 @@
+[package]
+name = "studi0trace-core"
+# the Python app's `studi0trace.__version__`: the UI shows `v{health.version}`, and `Core::health` reports this
+version = "0.2.0"
+edition = "2021"
+# `slice::as_chunks` (1.88); `auto::py_round` relies on ties-to-even float formatting (1.67)
+rust-version = "1.88"
+license = "MIT"
+description = "Studi0Trace: everything around the Vexel engine, for the app and the web build"
+
+[lib]
+# the default (the package name with its dash made an underscore), spelled out because maturin
+# takes the Python module's name from it and refuses a dash
+name = "studi0trace_core"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+vexel-rs = { path = "../../backend/vexel-rs" }
+serde = { version = "1", features = ["derive"] }
+# `preserve_order`: the API's JSON is ordered (the UI's controls follow `properties`); `float_roundtrip`: a number is
+# parsed correctly rounded, where the default parser can be an ulp off on a decimal of 17 digits and the core takes
+# the parsed f64 as it is. Both are features of a pure Rust crate, so they unify into a shell's whole graph and
+# are on for it too.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+regex = "1"
+# the id of an upload is a hash of its bytes (api.rs); pure Rust, so it builds for wasm32 too
+sha2 = "0.10"
+roxmltree = "0.21.1"
+rayon = "1.10"
+resvg = { version = "=0.48.1", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+pyo3 = { version = "0.22", features = ["abi3-py312"], optional = true }
+
+[features]
+default = []
+python = ["dep:pyo3", "pyo3/extension-module"]

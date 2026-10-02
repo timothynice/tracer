@@ -88,8 +88,8 @@ mod python {
                     out.extend_from_slice(&s.rgba);
                 }
             }
-            fills::Fill::Radial { cx, cy, r, stops } => {
-                out.extend_from_slice(&[*cx, *cy, *r]);
+            fills::Fill::Radial { cx, cy, r, fx, fy, stops } => {
+                out.extend_from_slice(&[*cx, *cy, *r, *fx, *fy]);
                 for s in stops {
                     out.push(s.offset);
                     out.extend_from_slice(&s.rgba);
@@ -325,7 +325,7 @@ mod python {
     fn _stage_ridge(rgba: Vec<u8>, h: usize, w: usize) -> Vec<i32> {
         let prep = prepare::prepare(&rgba, h, w);
         let grad = partition::discontinuity(&prep.features, 0.7);
-        let (ridge, valley) = partition::ridges_and_valleys(&prep.features, &grad, 1.5);
+        let (ridge, valley) = partition::ridges_and_valleys(&prep.features, &grad, 1.5, &partition::noise_floor(&grad, &prep.features, 1.5));
         ridge.data.iter().zip(valley.data.iter()).map(|(r, v)| *r as i32 + 2 * (*v as i32)).collect()
     }
 
@@ -348,6 +348,15 @@ mod python {
         let prep = prepare::prepare(&rgba, h, w);
         let grad = partition::discontinuity(&prep.features, 0.7);
         partition::initial_labels(&grad, &prep.features, min_region, 1.5, detail).data
+    }
+
+    /// The partition merged, as `engine` merges it: the labels `labels_merge` dumps.
+    #[pyfunction]
+    fn _stage_merge(rgba: Vec<u8>, h: usize, w: usize, min_region: usize, detail: f64) -> Vec<i32> {
+        let prep = prepare::prepare(&rgba, h, w);
+        let grad = partition::discontinuity(&prep.features, 0.7);
+        let labels0 = partition::initial_labels(&grad, &prep.features, min_region, 1.5, detail);
+        merge::merge_regions(&labels0, &prep.features, merge::MergeParams { detail, gradients: true, edge_veto: 0.6 }, Some(&grad)).data
     }
 
     /// The fills every stage hook needs, fitted the way `engine` fits them.
@@ -445,7 +454,7 @@ mod python {
                 let f = match kind.as_str() {
                     "solid" => fills::Fill::Solid { rgba: [v[0], v[1], v[2], v[3]] },
                     "linear" => fills::Fill::Linear { x1: v[0], y1: v[1], x2: v[2], y2: v[3], stops: stops(&v[4..]) },
-                    _ => fills::Fill::Radial { cx: v[0], cy: v[1], r: v[2], stops: stops(&v[3..]) },
+                    _ => fills::Fill::Radial { cx: v[0], cy: v[1], r: v[2], fx: v[3], fy: v[4], stops: stops(&v[5..]) },
                 };
                 (*lab, f)
             })
@@ -708,7 +717,7 @@ mod python {
             let f = match kind.as_str() {
                 "solid" => Fill::Solid { rgba: [v[0], v[1], v[2], v[3]] },
                 "linear" => Fill::Linear { x1: v[0], y1: v[1], x2: v[2], y2: v[3], stops: stops(&v[4..]) },
-                _ => Fill::Radial { cx: v[0], cy: v[1], r: v[2], stops: stops(&v[3..]) },
+                _ => Fill::Radial { cx: v[0], cy: v[1], r: v[2], fx: v[3], fy: v[4], stops: stops(&v[5..]) },
             };
             fills.insert(*lab, f);
             visible.insert(*lab, true);
@@ -808,6 +817,7 @@ mod python {
         m.add_function(wrap_pyfunction!(_stage_features, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_rgb, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_labels0, m)?)?;
+        m.add_function(wrap_pyfunction!(_stage_merge, m)?)?;
     m.add_function(wrap_pyfunction!(_stage_upsample, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_arcs, m)?)?;
         m.add_function(wrap_pyfunction!(_stage_rects, m)?)?;

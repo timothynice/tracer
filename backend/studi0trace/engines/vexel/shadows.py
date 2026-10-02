@@ -65,6 +65,7 @@ class ShadowPlan:
     shadows: dict[int, Shadow] = field(default_factory=dict)  # caster label -> its shadow
     absorbed: set[int] = field(default_factory=set)  # regions the shadows explain
     refit: set[int] = field(default_factory=set)  # backdrops to refit on `corrected`
+    backdrop: int | None = None  # the opaque backdrop the absorbed bands lie on, if they do
     corrected: np.ndarray | None = None  # rgba255 with the accepted shadows removed
     canvas: int | None = None  # the transparent canvas the shadows fall on (`_detect_clear`), if they do
     ground: np.ndarray | None = None  # (H, W, 4) rgba255: what that canvas shows under the shadows
@@ -392,6 +393,7 @@ def detect_shadows(
             plan.shadows[caster] = Shadow(caster, dx, dy, sigma, np.clip(colour, 0, 255), opacity, False, rms, _filter_region(sils[caster], dx, dy, sigma))
             plan.absorbed |= group
         plan.refit.add(backdrop)
+        plan.backdrop = backdrop
         corrected[..., :3] -= composed - flat
         accepted = True
         if accepted:

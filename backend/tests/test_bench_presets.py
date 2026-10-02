@@ -62,4 +62,6 @@ def test_every_shipped_preset_quotes_a_measured_line_and_the_file_ships():
     for p in all_presets():
         assert p.detail == doc["lines"][p.id] and p.detail.startswith("ΔE "), p.id
     pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"studi0trace.engines" = ["preset_details.json"]' in pyproject
+    shipped = [line for line in pyproject.splitlines() if line.startswith('"studi0trace.engines" =')]
+    # presets.json holds the bundles themselves (the Rust core embeds the same file).
+    assert len(shipped) == 1 and '"presets.json"' in shipped[0] and '"preset_details.json"' in shipped[0]

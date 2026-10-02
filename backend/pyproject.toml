@@ -40,8 +40,9 @@ studi0trace-bench = "bench.cli:main"
 include = ["studi0trace*", "bench*"]
 
 [tool.setuptools.package-data]
-# The presets' measured detail lines (bench.presets_eval --write-details).
-"studi0trace.engines" = ["preset_details.json"]
+# The preset bundles (shared with the Rust core) and their measured detail lines
+# (bench.presets_eval --write-details).
+"studi0trace.engines" = ["presets.json", "preset_details.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

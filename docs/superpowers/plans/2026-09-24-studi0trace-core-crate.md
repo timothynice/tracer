@@ -6,7 +6,7 @@
 
 **Architecture:** A Cargo workspace at the repo root with two members: the existing engine `backend/vexel-rs` (unchanged location) and the new `crates/studi0trace-core`, which depends on it. Every piece of the core is a port of a Python module and is held to it by golden JSON fixtures that a dev-only Python script exports from the reference implementation. The core returns the same JSON shapes the FastAPI routes return today, so the frontend changes only its transport in later plans.
 
-**Tech Stack:** Rust 2021; `serde`/`serde_json`; `image` 0.25 (png, jpeg, gif, webp, bmp); `resvg` `=0.48.0` (the release `resvg-py` 0.5.0 builds on); `regex`; `rayon`; optional `pyo3` 0.22 for the parity stage. Python 3.12 dev tooling in `backend/` for fixtures.
+**Tech Stack:** Rust 2021; `serde`/`serde_json`; `image` 0.25 (png, jpeg, gif, webp, bmp); `resvg` `=0.48.1` (the release `resvg-py` 0.5.0 builds on; see "As built"); `regex`; `rayon`; optional `pyo3` 0.22 for the parity stage. Python 3.12 dev tooling in `backend/` for fixtures.
 
 Design and roadmap: `docs/superpowers/specs/2026-09-24-studi0trace-local-app-design.md`.
 
@@ -355,7 +355,7 @@ pub fn fields() -> Vec<Field> {
         Field { name: "shadows", kind: Bool { default: true },
             description: "Rebuild drop shadows, glows and inner shadows as SVG filters instead of banded paths",
             ui: ui(json!({"control": "toggle", "group": "Effects"})) },
-        Field { name: "stroke_tolerance", kind: Number { default: 0.2, min: 0.05, max: 1.0 },
+        Field { name: "stroke_tolerance", kind: Number { default: 0.13, min: 0.05, max: 1.0 },
             description: "Largest error a centreline may leave before the thin region is drawn filled instead of stroked; lower keeps more shapes filled",
             ui: ui(json!({"control": "slider", "step": 0.01, "group": "Curves", "label": "Stroke tolerance"})) },
         Field { name: "overlaps", kind: Bool { default: true },
@@ -1546,3 +1546,105 @@ Expected: all green.
 - **Coverage:** intake (T4), parameters and schema (T2), presets (T3), SVG finishing (T5), scorecard (T6–T12), Auto (T13), the facade and the API's JSON (T14), parity with the Python (every task's fixtures, T15). Potrace and VTracer are not ported: the core describes one engine.
 - **Types used across tasks:** `intake::Image`, `params::parse -> VexelParams`, `presets::Preset`, `svg::Stats`, `scorecard::Reference`, `auto::{Scored, run}`, `api::{Core, ErrorBody}`, consistent between the tasks that produce and consume them.
 - **Known gaps left to later plans:** rayon as an optional feature for WebAssembly (plan 3); JPEG decoding differs from Pillow by design (T4 bounds it).
+
+## As built (2026-10-01)
+
+Where the implementation proved the plan wrong or went past it. The code and its module docs are the record;
+this is the list a later plan needs.
+
+- **The renderer is `resvg =0.48.1`**, not 0.48.0: `resvg-py` 0.5.0 reports resvg 0.48.1 over usvg 0.48.1 and
+  tiny-skia 0.12.0 (`resvg_py.__resvg_version__`). The tree therefore holds two tiny-skia: 0.11 for `vexel-rs`'s
+  refinement and 0.12 under resvg.
+- **A panicking trace is `engine_crashed`, not `engine_failed`.** The route's `_failure` answers `engine_failed`
+  only for an `EngineError`, which Vexel never raises, and `engine_crashed` (`"<Type>: <message>"`) for any other
+  exception. The core does the same, per candidate in Auto and per engine in a plain trace.
+- **Python's `round(x, 1)` rounds the exact binary value**: `round(0.35, 1)` is `0.3` (the nearest double to
+  0.35 is 0.34999999999999997), `round(0.45, 1)` is `0.5`, `round(0.25, 1)` is `0.2`. The plan's example of
+  `0.35 -> 0.4` is wrong. `auto::py_round` formats the double to `n` places, which Rust does exactly and to
+  even (stable since 1.67), and parses it back.
+- **`ErrorBody` is defined in `auto.rs`** (an Auto candidate carries one) and re-exported by `api`; there is one
+  type, not two.
+- **`render` ports Pillow's resize** (`resample.rs`, byte-exact against Pillow 12.3). resvg's fit to
+  `--width/--height` is not always the exact size (`IntSize::scale_to` rounds in f32, so about 4-5 % of large
+  sizes come out a pixel off) and `quality.render` then resizes with Pillow, nearest for the crisp render and
+  Lanczos on premultiplied pixels otherwise; the plan assumed the exact-size path was the only one.
+- **Fallible signatures.** `drawing::parse`, `render::render`, `holes::holes`, `scorecard::Reference::new`,
+  `Reference::fidelity`, `scorecard::scorecard` and `scorecard::assess(svg, &Reference, Option<u32>)` return
+  `Result`, where the plan's sketches return values: an SVG that does not render, a source of the wrong size or a
+  hole scale of 0 is an error, not a panic. The core also refuses what the Python would exhaust memory or its
+  recursion limit on: more than 2^24 outline samples (`geometry::MAX_SAMPLES`), more than 2^24 points in a drawing
+  (`drawing::MAX_POINTS`), elements nested more than 988 deep (`drawing::MAX_DEPTH`) and a render of more than
+  2^28 pixels (`render::MAX_PIXELS`). Two more differences are in the crate's `README.md`: an SVG nested near the
+  988 limit overflows a 2 MiB thread stack (an abort, which the Python binding turns into the interpreter's when
+  it is called from a small-stack Python thread), and an unknown parameter whose name is `""` has `loc`
+  `["vexel"]` where Pydantic's is `["vexel", ""]`.
+- **Fixtures are exported on macOS arm64 and gated by platform.** Results that go through libm (`sin`, `cos`,
+  `atan2`) are bit-equal there and so are compared to the bit only when `tests/common::exact()` says so
+  (`target_os = "macos"` and `target_arch = "aarch64"`); anywhere else they are held to a tolerance.
+  `STUDI0TRACE_FORCE_TOLERANT=1` runs the tolerant branch on any machine. The plan assumed one comparison
+  everywhere.
+- **MSRV is Rust 1.88** (`rust-version` in the crate's manifest): `slice::as_chunks`, and `py_round`'s
+  ties-to-even formatting needs 1.67. The Docker image's older toolchain builds only `vexel-rs`, which is
+  unaffected.
+- **The upload store has no TTL**, and ids are the first 128 bits of the file's SHA-256 (32 hex digits, as the
+  frontend expects of a `uuid4().hex`); see the module documentation of `api.rs`. Strict parameter validation
+  (Pydantic's strict mode, not the route's lax one) and what a shell must do around `Core::vectorize` are
+  documented there and in the crate's `README.md`, with the list of intentional differences from the Python.
+- **Task 15.** The crate's version is the Python app's, `0.2.0` (the UI shows `v{health.version}`).
+  `crate-type` already had `cdylib`; the module name needed `[lib] name = "studi0trace_core"` spelled out for
+  maturin. The binding keeps the card's types (counts are `int`, ratios `float`), turns the core's errors into
+  `ValueError` and releases the GIL. `diffcheck scorecard` compares, over the 96 corpus items, the keys and their
+  order, every key's type, every count exactly and every float to 1e-9 relative, not the plan's 1e-6 and
+  `edge_f1` to 0.005: measured, every float is bit-equal except `delta_e_mean` and `delta_e_p95`, CIELAB through
+  numpy's BLAS matmul against plain arithmetic (7.8e-13 and 9.2e-14 relative as first written; the final fixes
+  made the mean numpy's pairwise sum, and it is now 2.0e-14). It is a default stage, not
+  `--all` only: both sides are given one SVG, so it gates like the per-stage comparisons, and without the
+  extension it exits non-zero with the build command.
+- **Distribution is unsigned** (no Developer ID, no notarization): decided 2026-09-30 and recorded in the spec's
+  Distribution row.
+- **Found by the final review of the branch** (the fixes are in the commits after Task 15; what a later plan needs):
+  - *Engine changes now reach the core's tests.* The goldens `api.json`, `auto.json`, `auto_*.svg` embed the SVG the
+    engine writes and are compared to the byte on macOS arm64, so a change to the engine that alters its output
+    breaks `tests/api.rs` and `tests/auto.rs` until the fixtures are re-exported
+    (`tools.export_core_fixtures --only scorecard,api,auto`; `auto` checks the wordmark's trace against `scorecard`'s copy). `CONTRIBUTING.md` and `CLAUDE.md` say so, and
+    `cargo test --workspace --release` (not `cd backend/vexel-rs && cargo test`, which in a workspace runs the engine
+    alone) is on the pre-PR list.
+  - *The core is not the only clock.* `auto::trace_finished` is the core's one `Instant::now()`, but the engine reads
+    a clock on every trace: `vexel_rs::timing::Timer::new()` calls `Instant::now()` unconditionally (top of
+    `engine::trace_rgba`, again in the partition, shadow and topology stages), whether or not `VEXEL_TIMING` is set.
+    On `wasm32-unknown-unknown` that panics, which is a trap with `panic=abort`. Plan 3 must make the engine's `Timer`
+    lazy (read the clock only when `VEXEL_TIMING` is set) or give it a wasm clock, and hand `trace_finished` one.
+    *Done after the review (2026-10-02):* the `Timer` reads the clock only when `VEXEL_TIMING` is set; plan 3 still
+    has to give `trace_finished` a clock.
+  - *Follow-ups done after the review (2026-10-02):* Python's builtins (`max`/`min` with their NaN rule, `round`,
+    `int(round())`, `math.ceil`, float `%`, `repr`) are one module, `crate::py`, instead of copies in six files; the
+    renderer and the resampler refuse with `render::RenderError` and the hole count with `holes::HolesError`
+    (`ScoreError` and `CardError` carry them) instead of `String`, with the Python's words kept as their `Display`.
+  - *The engine's cost is far above the intake limit's.* On a 2048 x 2048 (4.2 MP) upscaled badge a plain Balanced
+    trace took 97 s and 7.5 GB resident; Auto 120 s and 10.8 GB (14.9 GB peak footprint). The 40 MP intake limit admits
+    ten times that, a wasm build has 4 GB of address space, and `vectorize` can be neither cancelled nor observed. Plans 2
+    and 3 must measure and set their own pixel cap (or downscale before tracing), run it off the UI thread and plan
+    for cancellation and progress. `Core::with_limits` with `max_pixels` over 2^26 (about 67.1 MP) makes Auto's 2x
+    renders pass `render::MAX_PIXELS`, and Auto then degrades to "scoring was unavailable" (documented, not clamped).
+    *After the review (2026-10-02):* a side is capped at 4096 px in both intakes (`Limits::max_side`, the server's
+    `max_image_side` / `MAX_IMAGE_SIDE`, `too_many_pixels`, checked from the header before the pixel count), which
+    still admits four times the measured 4.2 MP; cancellation and progress remain plans 2 and 3's.
+  - *Release profile and lockfile in the Docker build.* The image's build context is `backend/`, which has no root
+    manifest, so the workspace's `[profile.release]` is carried by `CARGO_PROFILE_RELEASE_LTO` and
+    `CARGO_PROFILE_RELEASE_CODEGEN_UNITS` in `backend/Dockerfile` (mirror comments in both places).
+    `backend/vexel-rs/Cargo.lock` is used only by that build; cargo never touches it inside the workspace, so
+    `backend/tests/test_vexel_lock_matches_workspace.py` holds it to the vexel-rs closure of the root `Cargo.lock`,
+    and the image builds with `--locked`.
+  - *Dependencies a shell inherits.* `serde_json`'s `preserve_order` (the UI's property order; cargo unifies it into a
+    shell's whole graph) and, since the final fixes, `float_roundtrip` (exact float parsing of a request's numbers).
+  - *Auto's pool.* A dedicated rayon pool, threads named `studi0trace-auto-N`, 8 MiB stacks, built on first use. Where
+    threads cannot be spawned (wasm without shared memory) it is not built and Auto runs on the calling thread.
+  - *Test seams:* `Core::with_tracer` and `auto::run_with` (`auto::Tracer`) replace the engine in tests;
+    `Core::cached_images`/`cached_bytes` read the store. Public, `#[doc(hidden)]`.
+  - *Documented differences that lived only in module docs:* raster `<image>` is dropped by `render` (and the
+    filesystem is never read); roxmltree against expat (`<!ATTLIST>` defaults, undeclared entities, and `xmlns=""`,
+    which leaves an element out here and draws it in the Python); `cargo build/test --features python` cannot link
+    without maturin, so `--all-features` must never be used in CI.
+  - *Provenance.* The fixtures are exact only on macOS arm64 with a given numpy/scipy/scikit-image/Pillow/resvg-py and
+    the Rust `vexel_rs`; the exporter records them in `tests/fixtures/provenance.json` and refuses to run elsewhere
+    without `--force`.

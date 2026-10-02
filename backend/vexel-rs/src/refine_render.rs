@@ -122,8 +122,8 @@ fn shader(fill: &Fill, t: Transform, pr: usize) -> Option<Shader<'static>> {
             SpreadMode::Pad,
             t,
         ),
-        Fill::Radial { cx, cy, r: rad, stops } => RadialGradient::new(
-            Point::from_xy(r(*cx), r(*cy)),
+        Fill::Radial { cx, cy, r: rad, fx, fy, stops } => RadialGradient::new(
+            Point::from_xy(r(*fx), r(*fy)),
             Point::from_xy(r(*cx), r(*cy)),
             r(*rad),
             stops.iter().map(|s| GradientStop::new(s.offset.clamp(0.0, 1.0) as f32, colour(s.rgba))).collect(),

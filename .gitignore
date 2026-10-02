@@ -25,6 +25,7 @@ coverage/
 .env.*.local
 
 # Rust build output
+/target/
 backend/vexel-rs/target/
 
 # Bench output

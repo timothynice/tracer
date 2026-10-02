@@ -60,6 +60,18 @@ def test_rejects_too_many_pixels():
     assert exc.value.code == "too_many_pixels"
 
 
+def test_rejects_a_side_over_the_limit():
+    """The engine's cost grows with the image, and a side past `max_side` is refused
+    from the header (the server's default is 4096), whatever the pixel count."""
+    for size in ((65, 1), (1, 65)):
+        with pytest.raises(IntakeError) as exc:
+            load_upload(make_png(*size), **LIMITS, max_side=64)
+        assert (exc.value.code, exc.value.message) == ("too_many_pixels", "Image exceeds the 64x64 pixel limit")
+    assert load_upload(make_png(64, 64), **LIMITS, max_side=64).width == 64
+    # no `max_side`, no limit on a side (the bench's and the tools' own loads)
+    assert load_upload(make_png(65, 1), **LIMITS).width == 65
+
+
 def test_preserves_alpha():
     result = load_upload(black_square_on_transparent(64, 16), **LIMITS)
     assert result.image.getpixel((0, 0))[3] == 0

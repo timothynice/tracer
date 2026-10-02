@@ -6,6 +6,7 @@ scoreboard that says which trace is more true to the source image.
 ```
 backend/   FastAPI service + engines + bench     (Python ≥ 3.12)
 backend/vexel-rs/   Vexel's pipeline in Rust, built as an extension module
+crates/studi0trace-core/   Everything around the engine, in Rust: intake, presets, the scorecard, Auto
 frontend/  Studi0Trace web app: React 18 + TS + Tailwind on the Studi0 design system (Node ≥ 20)
 ```
 
@@ -141,9 +142,17 @@ npm run dev                                            # http://localhost:5173
 
 ```bash
 cd backend           && .venv/bin/python -m pytest
-cd backend/vexel-rs  && cargo test
+cargo test --workspace --release                       # the engine and the core (Rust >= 1.88)
+cd backend/vexel-rs  && cargo test                     # the engine alone
 cd frontend          && npm run test:run
 ```
+
+The core's golden fixtures (`crates/studi0trace-core/tests/fixtures`) were
+exported from the Python on macOS arm64 (`cd backend && .venv/bin/python -m
+tools.export_core_fixtures`), and results that go through the system's libm are
+compared to the bit only there. `STUDI0TRACE_FORCE_TOLERANT=1 cargo test
+--workspace --release` runs the tolerant comparison, the one every other machine
+gets, on any machine.
 
 The backend suite includes a concurrency test (two 0.4 s traces must finish in
 < 0.7 s) and asserts CORS headers on every error path, including 500s. It runs
@@ -159,18 +168,32 @@ cd backend && .venv/bin/python -m tools.diffcheck            # every stage
 .venv/bin/python -m tools.diffcheck labels0 --filter 128     # one stage, some items
 ```
 
+Its `scorecard` stage holds the Rust core's scorecard (`crates/studi0trace-core`)
+to `studi0trace/imaging/quality.py` on a trace of every corpus item, so it needs
+the core built as a Python extension, beside `vexel_rs` and under its own name:
+
+```bash
+cd backend && VIRTUAL_ENV=$PWD/.venv .venv/bin/python -m maturin develop --release \
+    -m ../crates/studi0trace-core/Cargo.toml --features python
+.venv/bin/python -m tools.diffcheck scorecard
+```
+
+Without it the stage fails with this command rather than skipping, and the
+core's tests in `backend/tests/test_core_scorecard.py` are skipped.
+
 ## API
 
 | Route | Purpose |
 |---|---|
 | `GET /health` | `{status, version, engines}` |
 | `GET /engines` | Each engine's `id`, `label`, `description`, JSON Schema `params` and `defaults`. The UI renders every control from this — adding an engine or a parameter needs no frontend change. |
-| `GET /presets` | Auto first, then named parameter bundles: `id`, `label`, `engine`, `description`, `detail` (what it measurably costs, from the bench), `params`, `kind` (`auto` or `preset`) and `auto_candidate`. A preset layers over the engine's **defaults**, never over current values. Auto has no params; it is asked for with `auto=true`. The `detail` lines are measured, never hand-written: `VEXEL_BACKEND=rust RAYON_NUM_THREADS=1 .venv/bin/python -m bench.presets_eval --out DIR --fast --workers 3 --write-details` rewrites `studi0trace/engines/preset_details.json` from a run over the whole corpus. |
+| `GET /presets` | Auto first, then named parameter bundles: `id`, `label`, `engine`, `description`, `detail` (what it measurably costs, from the bench), `params`, `kind` (`auto` or `preset`) and `auto_candidate`. A preset layers over the engine's **defaults**, never over current values. The bundles are `studi0trace/engines/presets.json`, one file the Python server and the Rust core both read (the core embeds it and `preset_details.json`; re-export its fixtures after changing either). Auto has no params; it is asked for with `auto=true`. The `detail` lines are measured, never hand-written: `VEXEL_BACKEND=rust RAYON_NUM_THREADS=1 .venv/bin/python -m bench.presets_eval --out DIR --fast --workers 3 --write-details` rewrites `studi0trace/engines/preset_details.json` from a run over the whole corpus. |
 | `POST /uploads` | multipart `file` → `{image_id, width, height, format}`. Validated once and kept server-side (LRU, sliding 30 min TTL) so re-tracing while tuning doesn't re-send the file. |
 | `POST /vectorize` | multipart: `image_id` **or** `file`, `parameters` (JSON keyed by engine id), `engines` (comma list; default all). Returns `results.{engine}.{svg, elapsed_ms, stats | error}`, `image_id`, `width`, `height`. Expired id → 404 `image_expired`; the client re-uploads and retries once. With `auto=true`, each selected engine that has Auto candidates (Vexel: Balanced, Logo & icon, Detailed, Simplified) is traced once per candidate, concurrently, and each trace is scored against the source (`studi0trace/imaging/quality.py`: ΔE, edge F1, the artifact scorecard); `auto.{engine}` then holds every candidate's `svg`, `stats`, `parameters` and `scores`, the `pick` and a `reason`, and `results.{engine}` is the pick. The rule (`studi0trace/auto.py`): the lowest artifact index among candidates within ΔE +max(0.15, 30 %) and edge F1 −0.02 of the best, ties to fewer shapes. A failing candidate is reported and left out; `auto=true` with no engine that has candidates → 400 `auto_unavailable`. |
 
 Uploads are sniffed with Pillow (client `Content-Type` is ignored), limited by
-`MAX_UPLOAD_BYTES` (20 MB) and `MAX_IMAGE_PIXELS` (40 MP), and normalised to
+`MAX_UPLOAD_BYTES` (20 MB), `MAX_IMAGE_SIDE` (4096 px a side) and
+`MAX_IMAGE_PIXELS` (40 MP), and normalised to
 RGBA — transparency reaches every engine. Errors carry a stable `code`.
 Env: `ALLOWED_ORIGINS` (comma list), `MAX_UPLOAD_CACHE_BYTES` (256 MB),
 `UPLOAD_TTL_SECONDS` (1800). The upload cache is per process; with several

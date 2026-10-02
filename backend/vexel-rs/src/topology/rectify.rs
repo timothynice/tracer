@@ -1414,7 +1414,7 @@ fn fillet_holds(pts: &[P], x: P, da: P, db: P, r: f64, p95: f64, worst: f64) -> 
 /// Move the node at p to q: every arc there ends at q, and the fitted
 /// segments of the arcs not in `keep` move their end with it, a cubic its arm
 /// too. See the Python `_move_node`.
-fn move_node(arcs: &mut [Arc], p: P, q: P, keep: &HashSet<usize>) {
+pub(crate) fn move_node(arcs: &mut [Arc], p: P, q: P, keep: &HashSet<usize>) {
     if norm(sub(q, p)) <= 1e-12 {
         return;
     }

@@ -72,6 +72,27 @@ def test_flat_neighbours_merge_only_below_detail():
     assert len(np.unique(merge_regions(labels0, f, MergeParams(detail=12)))) == 1
 
 
+def test_a_crisp_step_under_detail_is_still_an_edge():
+    """Two flat halves 3 ΔE apart, well under Balanced's `detail` of 6, stay
+    two regions across their crisp edge: the boundary stands far above the
+    flat interiors (a clean field's discontinuity is 0.0) and is a ridge along
+    its whole length, so a gradient model may not explain the step away, and
+    as solids they are further apart than `EDGE_SAME`. Sixteen tiles 2.9 ΔE
+    apart (flat/low-contrast-512) came out as two shapes this way."""
+    img = flat_halves(3)
+    f = features_from(img)
+    grad = discontinuity(f)
+    labels0 = initial_labels(grad, f)
+    assert len(np.unique(labels0)) == 2
+    assert len(np.unique(merge_regions(labels0, f, MergeParams(detail=6), grad))) == 2
+    # under 2 ΔE the two are one flat colour to the eye and still merge
+    img = flat_halves(1.5)
+    f = features_from(img)
+    grad = discontinuity(f)
+    labels0 = initial_labels(grad, f)
+    assert len(np.unique(merge_regions(labels0, f, MergeParams(detail=6), grad))) == 1
+
+
 def test_gradient_disc_over_flat_background_is_two_regions():
     size = 96
     img = np.zeros((size, size, 4), np.uint8)

@@ -1,0 +1,3044 @@
+{
+ "image_id_format": "^[0-9a-f]{32}$",
+ "python_engines": [
+  "vexel",
+  "potrace",
+  "vtracer"
+ ],
+ "sources": {
+  "wordmark": {
+   "file": "bench/corpus/real/logo/vexel-wordmark-512.png"
+  },
+  "mark128": {
+   "file": "bench/corpus/real/logo/studi0trace-mark-128.png"
+  },
+  "multi_shape128": {
+   "file": "bench/corpus/synthetic/gradient/multi-shape-128.png"
+  },
+  "linear_4stop128": {
+   "file": "bench/corpus/synthetic/gradient/linear-4stop-128.png"
+  },
+  "venn128": {
+   "file": "bench/corpus/synthetic/logo/venn-128.png"
+  },
+  "garbage": {
+   "b64": "ZGVmaW5pdGVseSBub3QgYW4gaW1hZ2U="
+  },
+  "empty": {
+   "b64": ""
+  },
+  "corrupt_png": {
+   "b64": "iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAMK0lEQVR42u1dXXLT2BL++jj21H1CdwWjWcAtNCtALCBErABlBZjXQFVEFeQVs4KIFaCQBUS5G0BZwTgrGOfpFjZS3wcrTAKJ1Uc6suT4dBXFQxRJUffp/s7XPwewYsWKFStWrGyj0Ca/vB+ELuX0+10/Y2IPgGPoUTNiyu58zoAv0ySeWgMwo1CPcnoEwCkVCDD8Hx8bMKnUtmRGQHbjC6cAUBrQjAd8lSZxttUG4Aehh4IeA+yC4TPBAcPbMt+bEWO2NBCaQvF5F56E1uWqUWAPDJ8BfwNWcZfeIwUhhcLJOgyiVQN4uru/x+BxqXQr+spJCTQ5Oz0+2RgD8IPQQUF7DI7AcK0ajWhpSqAIik/SJJ711gD8Z+EhM8bWxbcYIgiT9Ev8tlcG4AehywU+bx2Q6xJAKjw3gRHIgPJ9zvHZrvoOvMEAz9MkTjszgNLlRx2CpAsAs/tWyb0/05dV21SHgcedfQNC1CQk1DYAfzc8ZiA0/MdcgUvFUUmmqFuKzEyDoFZAMH4Yi4MC14TWksQieMx4ZHghxOlpvL82A/B3w5CB48arl5CBkWGArKkrw+bR2D5yeCB4YHhNvQgB++lpHLduAH4Qepzja82XPAGQYICk7yu5E8+RIwAQMLBX6/sO8KcuzUy6L8kFvurs74lwBSCBQrTJSZN1J7lQIGLGC22+QOFPncVFmq7/TIfVI+AEA4R2tTfyCrGORyAgSU/j58YNwA/CoNzuSW/8Kj2NJ1aNBgxhNxwz8EEjFDxPkziRXKvEb5HjpdTl0wBPrfLNSXoaT2iAp2U4NaYrsQfQAX461mdFOySIvbAUEMo8QIGxcPV/tMpv0RMkcUKEj0Z1JuL5c/wluNF5ehr7Vk1rwQSZhDegAf6o2nkpgSWForcadEcJb50MZKtbortKA2BU70UJuNg2Jq/jUJAScGlCd6qSkJCRPhbxr1+qPS7D9YPQre8BltRk5bavDgdtpfHWMBZtC/PVxF1VCJCAOov6u5NEAPPrGwCTIEPFsLG/KxF8ewae1DIAPwgdUfwfWA/Q4W4gFeIAp44H8ATo/9ImejrdDUyF9LCnbwCFKP5nVg39DwOrdLmz4tdcSXXqxnwnjlwsFk9A7KKAByIH4PLDUArmZZvWcHRCFE2xQRXC4Mp0satvAJL4r/oPAPn76z0UGGMx969R0ZIA55tX+SUpHmAxn/D8IAbwkUZH/TdwhQx5NQ7QNgBhjdqsp6vdwWL+AowxCnZr3CIEEPL8YJ9GR33nOKaCncDjOiDQEYCQ3q0Qnh94mM+/ApiA4Da83THPD47RbyCYicradQzAD0JfWJPfN+W/BPDVgOJveYO+G4EkL3CfTlWD58765PL528HnFnMSIc8Pwk0OA3ohIBf0+FH9h7bi8qk6b2EgHHh97R5GdU7Ak4PA5cSO1qzOMNg7NuzyV6GpzwD+MHa7xRsfzIdAOQ4HlIHoLQ3fpcY9AN2NA1RdAAjuNgSUyj8D1tiRTHB5/nps5P2/HUTg4qzkIpzlP/bBxRl/O4g0DXNWFwiqe27oCXjobKuU/8/TD5kjp/HKJxyuMLRDXrzxIc8JZAIj8UyDwO5kPj+ur3y6AOMtSD3FcPRvkHoK4Bw6ncKLeTO8wUVk5BoDsnNPGviRAAN0BfomQA3Ax7gEIaLR+/jnrTQAn+evM4AfC+91CCBu8Gc8NnSN/M+nuzuSa4eALmoA+fubAJA3PdyQj/TbkbuS1RsOA0DYeEFwy3dB7XkDZq6R62LTQwBz5KAo6hAy+zQ6GleXtkVTAHKAlxchHoCoDYv7OuDrCko91+HyaXQUg6tZtdIL7DUFg700gFXVIz+1fK/X9esSPUqFtPOuTrWSPLYvFmGtHYBMzrvyAJ4gnmT9dv30qqbygdFoIsYC4BfoTz7gvE4+QD0810+faPR+Un9OUTTT8AIec+RqasqxGECPMNFx/ec0et8cnA1HEw0D1XteXkj5i8yCQC4+QAf0DUehmWll0RQgabr7RSseYE1Ue28NoEy/arB9FBmu5Yvl+QGtLOETIYhNt9sD8Aqu/G7Xb7YWYDiMoVdCJgO06Nc4XVWrHJzaLQbl+UGokeI15vp/AYOME6GxyoY45d998fN1U8KSCu3812+qesn4aQxEAmPSWhk3CbuepNRwwUGLHMBM8p79DwHzuXzcPOOSfjuKWnuX4SgRcwIVyl0aNu8Za/Z4iBiAOXJAGskeancqyZIToERKCq3kBJYpZKdPALB/HmBJrTrSvP5aavYVJUY4ATmovapREvZADIBZY/XTeB2vRDvvEo0E0cu7EkQ8fz3WALUxtpEJLBM+rnjbt8ZVIgaDy2qh6NfkD39ohYVESxVBnUihs/pVtNZ3G44mWMyl7/eSv79JMdjJsJjvaZZ2na+7MVX1pnP3R6duz1b/NTUs5QQAoCg+YzH/C8tGFUcjhT3ZzmTQYhH1dvWvTznntVPYm2wAmvvjy3Wv/p+YufMWw0y4nQ=="
+  },
+  "tiff": {
+   "b64": "SUkqAAgAAAAKAAABBAABAAAACAAAAAEBBAABAAAACAAAAAIBAwADAAAAhgAAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAjAAAABUBAwABAAAAAwAAABYBBAABAAAACAAAABcBBAABAAAAwAAAABwBAwABAAAAAQAAAAAAAAAIAAgACADIHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh7IHh4="
+  }
+ },
+ "cases": [
+  {
+   "name": "health",
+   "call": "health",
+   "status": 200,
+   "body": {
+    "status": "ok",
+    "version": "<version>",
+    "engines": [
+     "vexel"
+    ],
+    "vexel": "rust"
+   }
+  },
+  {
+   "name": "engines",
+   "call": "engines",
+   "status": 200,
+   "body": [
+    {
+     "id": "vexel",
+     "label": "Vexel",
+     "description": "Studi0's fidelity-first engine: gradient-aware regions, sub-pixel edges, whole-shape fitting.",
+     "primary": true,
+     "params": {
+      "additionalProperties": false,
+      "properties": {
+       "upsample": {
+        "default": "auto",
+        "description": "Trace a small input (≤ 192 px) at twice its size when its own trace shows a region thinner than 2.2 px",
+        "enum": [
+         "auto",
+         "never",
+         "always"
+        ],
+        "title": "Upsample",
+        "type": "string",
+        "ui": {
+         "control": "select",
+         "group": "Regions",
+         "label": "Small-input upsampling"
+        }
+       },
+       "detail": {
+        "default": 6.0,
+        "description": "Colour difference (ΔE) below which neighbouring regions merge; lower keeps more regions",
+        "maximum": 40.0,
+        "minimum": 1.0,
+        "title": "Detail",
+        "type": "number",
+        "ui": {
+         "control": "slider",
+         "group": "Regions",
+         "step": 0.5
+        }
+       },
+       "min_region": {
+        "default": 6,
+        "description": "Regions smaller than this many pixels are absorbed",
+        "maximum": 200,
+        "minimum": 1,
+        "title": "Min Region",
+        "type": "integer",
+        "ui": {
+         "control": "slider",
+         "group": "Regions",
+         "label": "Speckle floor",
+         "step": 1,
+         "unit": "px"
+        }
+       },
+       "gradients": {
+        "default": true,
+        "description": "Reconstruct linear and radial gradients instead of flat bands",
+        "title": "Gradients",
+        "type": "boolean",
+        "ui": {
+         "control": "toggle",
+         "group": "Fills"
+        }
+       },
+       "max_stops": {
+        "default": 4,
+        "description": "Maximum colour stops per gradient",
+        "maximum": 8,
+        "minimum": 2,
+        "title": "Max Stops",
+        "type": "integer",
+        "ui": {
+         "control": "slider",
+         "group": "Fills",
+         "label": "Gradient stops",
+         "step": 1
+        }
+       },
+       "layering": {
+        "default": "stacked",
+        "description": "Stacked shapes in painter's order (seamless, editable) or exact non-overlapping cut-outs",
+        "enum": [
+         "stacked",
+         "cutout"
+        ],
+        "title": "Layering",
+        "type": "string",
+        "ui": {
+         "control": "select",
+         "group": "Output"
+        }
+       },
+       "corner_threshold": {
+        "default": 60.0,
+        "description": "Turning angle (degrees) above which an outline point is a corner",
+        "maximum": 150.0,
+        "minimum": 20.0,
+        "title": "Corner Threshold",
+        "type": "number",
+        "ui": {
+         "control": "slider",
+         "group": "Curves",
+         "step": 1,
+         "unit": "°"
+        }
+       },
+       "curve_tolerance": {
+        "default": 0.4,
+        "description": "Maximum distance (px) between the fitted curve and the traced outline",
+        "maximum": 2.0,
+        "minimum": 0.1,
+        "title": "Curve Tolerance",
+        "type": "number",
+        "ui": {
+         "control": "slider",
+         "group": "Curves",
+         "step": 0.05,
+         "unit": "px"
+        }
+       },
+       "shape_fitting": {
+        "default": true,
+        "description": "Emit circles, ellipses and rectangles as primitives when they fit",
+        "title": "Shape Fitting",
+        "type": "boolean",
+        "ui": {
+         "control": "toggle",
+         "group": "Curves",
+         "label": "Whole-shape fitting"
+        }
+       },
+       "refine": {
+        "default": false,
+        "description": "Render each edge's two shapes and nudge the curve until the pixels match the source (slow)",
+        "title": "Refine",
+        "type": "boolean",
+        "ui": {
+         "control": "toggle",
+         "group": "Curves",
+         "label": "Render refinement"
+        }
+       },
+       "strokes": {
+        "default": true,
+        "description": "Recover thin lines as stroked centreline paths instead of filled slivers",
+        "title": "Strokes",
+        "type": "boolean",
+        "ui": {
+         "control": "toggle",
+         "group": "Curves",
+         "label": "Stroke recovery"
+        }
+       },
+       "shadows": {
+        "default": true,
+        "description": "Rebuild drop shadows, glows and inner shadows as SVG filters instead of banded paths",
+        "title": "Shadows",
+        "type": "boolean",
+        "ui": {
+         "control": "toggle",
+         "group": "Effects"
+        }
+       },
+       "stroke_tolerance": {
+        "default": 0.13,
+        "description": "Largest error a centreline may leave before the thin region is drawn filled instead of stroked; lower keeps more shapes filled",
+        "maximum": 1.0,
+        "minimum": 0.05,
+        "title": "Stroke Tolerance",
+        "type": "number",
+        "ui": {
+         "control": "slider",
+         "group": "Curves",
+         "label": "Stroke tolerance",
+         "step": 0.01
+        }
+       },
+       "overlaps": {
+        "default": true,
+        "description": "Rebuild semi-transparent overlaps as two overlapping shapes with opacity",
+        "title": "Overlaps",
+        "type": "boolean",
+        "ui": {
+         "control": "toggle",
+         "group": "Fills",
+         "label": "Overlap decomposition"
+        }
+       },
+       "path_precision": {
+        "default": 2,
+        "description": "Decimal places in coordinates",
+        "maximum": 4,
+        "minimum": 0,
+        "title": "Path Precision",
+        "type": "integer",
+        "ui": {
+         "control": "slider",
+         "group": "Output",
+         "step": 1
+        }
+       }
+      },
+      "title": "VexelParams",
+      "type": "object"
+     },
+     "defaults": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    }
+   ]
+  },
+  {
+   "name": "presets",
+   "call": "presets",
+   "status": 200,
+   "body": [
+    {
+     "id": "auto",
+     "label": "Auto",
+     "engine": "vexel",
+     "description": "Traces your image with Balanced, Logo & icon, Detailed illustration and Simplified, and keeps the cleanest result that is as faithful as the best. Start here.",
+     "detail": "ΔE 0.22 · 3 shapes · clean on 82% of 104 test images",
+     "sample": "auto.png",
+     "params": {},
+     "kind": "auto",
+     "auto_candidate": false
+    },
+    {
+     "id": "balanced",
+     "label": "Balanced",
+     "engine": "vexel",
+     "description": "Gradients, shadows, strokes and overlaps all reconstructed. The most faithful all-rounder.",
+     "detail": "ΔE 0.25 · 3 shapes · clean on 81% of 104 test images",
+     "sample": "balanced.png",
+     "params": {},
+     "kind": "preset",
+     "auto_candidate": true
+    },
+    {
+     "id": "logo",
+     "label": "Logo & icon",
+     "engine": "vexel",
+     "description": "Merges harder and fits whole shapes, for a small, clean, hand-editable file. Best where the mark matters more than the last half-pixel.",
+     "detail": "ΔE 0.31 · 3 shapes · clean on 83% of 104 test images",
+     "sample": "logo.png",
+     "params": {
+      "detail": 10.0,
+      "min_region": 16,
+      "curve_tolerance": 0.6,
+      "corner_threshold": 70.0
+     },
+     "kind": "preset",
+     "auto_candidate": true
+    },
+    {
+     "id": "detailed",
+     "label": "Detailed illustration",
+     "engine": "vexel",
+     "description": "Keeps subtler colour steps and more gradient stops, and fits a little tighter. For illustration where soft shading matters.",
+     "detail": "ΔE 0.25 · 4 shapes · clean on 72% of 104 test images",
+     "sample": "detailed.png",
+     "params": {
+      "detail": 3.5,
+      "min_region": 6,
+      "max_stops": 6,
+      "curve_tolerance": 0.4
+     },
+     "kind": "preset",
+     "auto_candidate": true
+    },
+    {
+     "id": "dense",
+     "label": "Simplified",
+     "engine": "vexel",
+     "description": "Fewest shapes; the cleanest on busy art and soft shadows. Skips stroke, overlap and shadow recovery and merges hard.",
+     "detail": "ΔE 0.40 · 3 shapes · clean on 86% of 104 test images",
+     "sample": "dense.png",
+     "params": {
+      "detail": 14.0,
+      "min_region": 24,
+      "strokes": false,
+      "overlaps": false,
+      "shadows": false
+     },
+     "kind": "preset",
+     "auto_candidate": true
+    },
+    {
+     "id": "flat",
+     "label": "Flat & poster",
+     "engine": "vexel",
+     "description": "A style choice, not a quality setting: solid colours only, no gradients and no filters. Also the safest file for an old importer. Auto never picks it.",
+     "detail": "ΔE 0.62 · 7 shapes · clean on 77% of 104 test images",
+     "sample": "flat.png",
+     "params": {
+      "gradients": false,
+      "shadows": false,
+      "detail": 14.0,
+      "min_region": 16
+     },
+     "kind": "preset",
+     "auto_candidate": false
+    },
+    {
+     "id": "cutfile",
+     "label": "Cut file",
+     "engine": "vexel",
+     "description": "An output format, not a quality setting: shapes that never overlap and no filters, for plotters and cutting machines. Auto never picks it.",
+     "detail": "ΔE 0.35 · 4 shapes · clean on 74% of 104 test images",
+     "sample": "cutfile.png",
+     "params": {
+      "shadows": false,
+      "strokes": false,
+      "layering": "cutout",
+      "detail": 10.0
+     },
+     "kind": "preset",
+     "auto_candidate": false
+    }
+   ]
+  },
+  {
+   "name": "upload_wordmark",
+   "call": "upload",
+   "source": "wordmark",
+   "status": 200,
+   "body": {
+    "image_id": "<image_id>",
+    "width": 512,
+    "height": 512,
+    "format": "PNG"
+   }
+  },
+  {
+   "name": "upload_mark128",
+   "call": "upload",
+   "source": "mark128",
+   "status": 200,
+   "body": {
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "format": "PNG"
+   }
+  },
+  {
+   "name": "upload_garbage",
+   "call": "upload",
+   "source": "garbage",
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "unsupported_format",
+     "message": "File is not a recognised image"
+    }
+   }
+  },
+  {
+   "name": "upload_empty",
+   "call": "upload",
+   "source": "empty",
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "unsupported_format",
+     "message": "File is not a recognised image"
+    }
+   }
+  },
+  {
+   "name": "upload_corrupt_png",
+   "call": "upload",
+   "source": "corrupt_png",
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "corrupt_image",
+     "message": "Image data is corrupt or truncated"
+    }
+   }
+  },
+  {
+   "name": "upload_tiff",
+   "call": "upload",
+   "source": "tiff",
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "unsupported_format",
+     "message": "Unsupported image format: TIFF"
+    }
+   }
+  },
+  {
+   "name": "upload_too_large",
+   "call": "upload",
+   "source": "wordmark",
+   "limits": {
+    "max_bytes": 1000,
+    "max_pixels": 40000000,
+    "max_side": 4096
+   },
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "too_large",
+     "message": "File exceeds the 0 MB limit"
+    }
+   }
+  },
+  {
+   "name": "upload_too_many_pixels",
+   "call": "upload",
+   "source": "wordmark",
+   "limits": {
+    "max_bytes": 20971520,
+    "max_pixels": 100000,
+    "max_side": 4096
+   },
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "too_many_pixels",
+     "message": "Image exceeds the 0 megapixel limit"
+    }
+   }
+  },
+  {
+   "name": "upload_too_wide",
+   "call": "upload",
+   "source": "wordmark",
+   "limits": {
+    "max_bytes": 20971520,
+    "max_pixels": 40000000,
+    "max_side": 100
+   },
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "too_many_pixels",
+     "message": "Image exceeds the 100x100 pixel limit"
+    }
+   }
+  },
+  {
+   "name": "default_wordmark",
+   "call": "vectorize",
+   "image": "wordmark",
+   "parameters": {},
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 512,
+    "height": 512,
+    "results": {
+     "vexel": {
+      "svg": "9ce1617ff84baa4e343fb8cfb1a3d5aa8387bf15e92298a684c41dd2792e0aa6",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 16,
+       "nodes": 208,
+       "bytes": 4544,
+       "gradients": 4,
+       "unique_fills": 10
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "default_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {},
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "changed_wordmark",
+   "call": "vectorize",
+   "image": "wordmark",
+   "parameters": {
+    "detail": 12.5,
+    "min_region": 20,
+    "gradients": false,
+    "layering": "cutout",
+    "curve_tolerance": 0.8,
+    "path_precision": 3,
+    "shape_fitting": false,
+    "strokes": false,
+    "shadows": false
+   },
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 512,
+    "height": 512,
+    "results": {
+     "vexel": {
+      "svg": "547e73f9f762f94b0f16121b73ae74f4ecb2582bbcb134f74627345d13703246",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 32,
+       "nodes": 544,
+       "bytes": 8828,
+       "gradients": 0,
+       "unique_fills": 26
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 12.5,
+      "min_region": 20,
+      "gradients": false,
+      "max_stops": 4,
+      "layering": "cutout",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.8,
+      "shape_fitting": false,
+      "refine": false,
+      "strokes": false,
+      "shadows": false,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 3
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "changed_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "upsample": "always",
+    "detail": 10,
+    "min_region": 16.0,
+    "max_stops": 6,
+    "corner_threshold": 90,
+    "overlaps": false,
+    "stroke_tolerance": 0.2,
+    "curve_tolerance": 0.25
+   },
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "67cc20333f610cd34d6bd205dc4cd7fd28c39b351732cacbdd6c50742e3b7a8b",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 532,
+       "bytes": 7092,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "always",
+      "detail": 10.0,
+      "min_region": 16,
+      "gradients": true,
+      "max_stops": 6,
+      "layering": "stacked",
+      "corner_threshold": 90.0,
+      "curve_tolerance": 0.25,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.2,
+      "overlaps": false,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "refined_wordmark",
+   "call": "vectorize",
+   "image": "wordmark",
+   "parameters": {
+    "refine": true
+   },
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 512,
+    "height": 512,
+    "results": {
+     "vexel": {
+      "svg": "b7bf0d89d80cef837bf2d2eca4cb6bbdb92b91af3811c93bf39f374d3244b21d",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 16,
+       "nodes": 211,
+       "bytes": 4593,
+       "gradients": 4,
+       "unique_fills": 10
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": true,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "auto_wordmark",
+   "call": "vectorize",
+   "image": "wordmark",
+   "parameters": {},
+   "auto": true,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 512,
+    "height": 512,
+    "results": {
+     "vexel": {
+      "svg": "9ce1617ff84baa4e343fb8cfb1a3d5aa8387bf15e92298a684c41dd2792e0aa6",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 16,
+       "nodes": 208,
+       "bytes": 4544,
+       "gradients": 4,
+       "unique_fills": 10
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": {
+     "vexel": {
+      "engine": "vexel",
+      "pick": "balanced",
+      "reason": "the cleanest at the same fidelity",
+      "candidates": [
+       {
+        "preset": "balanced",
+        "label": "Balanced",
+        "svg": "9ce1617ff84baa4e343fb8cfb1a3d5aa8387bf15e92298a684c41dd2792e0aa6",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 16,
+         "nodes": 208,
+         "bytes": 4544,
+         "gradients": 4,
+         "unique_fills": 10
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 6.0,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.4328,
+         "edge_f1": 0.9998,
+         "artifact_index": 0.83,
+         "clean": true,
+         "issues": [],
+         "shapes": 16,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 3.3,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "logo",
+        "label": "Logo & icon",
+        "svg": "d32c8fb829693237a7458f4d56a3e44ccbd3221618be05f39e426b345bd403b0",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 16,
+         "nodes": 206,
+         "bytes": 4338,
+         "gradients": 4,
+         "unique_fills": 10
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 10.0,
+         "min_region": 16,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 70.0,
+         "curve_tolerance": 0.6,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.4638,
+         "edge_f1": 0.9998,
+         "artifact_index": 1.0,
+         "clean": true,
+         "issues": [],
+         "shapes": 16,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 4.0,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "detailed",
+        "label": "Detailed illustration",
+        "svg": "e7136aefdb214e07acc6eb32dab703bc2acecb0235f5cd8aad4340a09726857f",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 16,
+         "nodes": 208,
+         "bytes": 4840,
+         "gradients": 4,
+         "unique_fills": 10
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 3.5,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 6,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.4282,
+         "edge_f1": 0.9998,
+         "artifact_index": 0.89,
+         "clean": true,
+         "issues": [],
+         "shapes": 16,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 3.5,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "dense",
+        "label": "Simplified",
+        "svg": "3752fe5766fff09b30859eb16f1389dc624f6a3589464f888aae78119a2e9410",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 16,
+         "nodes": 216,
+         "bytes": 4239,
+         "gradients": 3,
+         "unique_fills": 10
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 14.0,
+         "min_region": 24,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": false,
+         "shadows": false,
+         "stroke_tolerance": 0.13,
+         "overlaps": false,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.4957,
+         "edge_f1": 0.9997,
+         "artifact_index": 1.07,
+         "clean": true,
+         "issues": [],
+         "shapes": 16,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 4.3,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "auto_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {},
+   "auto": true,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": {
+     "vexel": {
+      "engine": "vexel",
+      "pick": "balanced",
+      "reason": "as clean at the same fidelity, with fewer shapes",
+      "candidates": [
+       {
+        "preset": "balanced",
+        "label": "Balanced",
+        "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 2,
+         "nodes": 126,
+         "bytes": 1633,
+         "gradients": 0,
+         "unique_fills": 2
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 6.0,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3237,
+         "edge_f1": 1.0,
+         "artifact_index": 5.1,
+         "clean": true,
+         "issues": [],
+         "shapes": 2,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 12.4,
+         "inflections": 2,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "logo",
+        "label": "Logo & icon",
+        "svg": "f196c07e727ebf099792cfec10b78e4015fa0687102a970644aa28ce7c7523b1",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 2,
+         "nodes": 109,
+         "bytes": 1453,
+         "gradients": 0,
+         "unique_fills": 2
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 10.0,
+         "min_region": 16,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 70.0,
+         "curve_tolerance": 0.6,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.4955,
+         "edge_f1": 1.0,
+         "artifact_index": 4.36,
+         "clean": true,
+         "issues": [
+          "wavy curves"
+         ],
+         "shapes": 2,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 1.4,
+         "inflections": 4,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "detailed",
+        "label": "Detailed illustration",
+        "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 2,
+         "nodes": 126,
+         "bytes": 1633,
+         "gradients": 0,
+         "unique_fills": 2
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 3.5,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 6,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3237,
+         "edge_f1": 1.0,
+         "artifact_index": 5.1,
+         "clean": true,
+         "issues": [],
+         "shapes": 2,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 12.4,
+         "inflections": 2,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "dense",
+        "label": "Simplified",
+        "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 2,
+         "nodes": 126,
+         "bytes": 1633,
+         "gradients": 0,
+         "unique_fills": 2
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 14.0,
+         "min_region": 24,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": false,
+         "shadows": false,
+         "stroke_tolerance": 0.13,
+         "overlaps": false,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3237,
+         "edge_f1": 1.0,
+         "artifact_index": 5.1,
+         "clean": true,
+         "issues": [],
+         "shapes": 2,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 12.4,
+         "inflections": 2,
+         "uneven_rects": 0
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "auto_with_parameters_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "detail": 12.5
+   },
+   "auto": true,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": {
+     "vexel": {
+      "engine": "vexel",
+      "pick": "balanced",
+      "reason": "as clean at the same fidelity, with fewer shapes",
+      "candidates": [
+       {
+        "preset": "balanced",
+        "label": "Balanced",
+        "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 2,
+         "nodes": 126,
+         "bytes": 1633,
+         "gradients": 0,
+         "unique_fills": 2
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 6.0,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3237,
+         "edge_f1": 1.0,
+         "artifact_index": 5.1,
+         "clean": true,
+         "issues": [],
+         "shapes": 2,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 12.4,
+         "inflections": 2,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "logo",
+        "label": "Logo & icon",
+        "svg": "f196c07e727ebf099792cfec10b78e4015fa0687102a970644aa28ce7c7523b1",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 2,
+         "nodes": 109,
+         "bytes": 1453,
+         "gradients": 0,
+         "unique_fills": 2
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 10.0,
+         "min_region": 16,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 70.0,
+         "curve_tolerance": 0.6,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.4955,
+         "edge_f1": 1.0,
+         "artifact_index": 4.36,
+         "clean": true,
+         "issues": [
+          "wavy curves"
+         ],
+         "shapes": 2,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 1.4,
+         "inflections": 4,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "detailed",
+        "label": "Detailed illustration",
+        "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 2,
+         "nodes": 126,
+         "bytes": 1633,
+         "gradients": 0,
+         "unique_fills": 2
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 3.5,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 6,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3237,
+         "edge_f1": 1.0,
+         "artifact_index": 5.1,
+         "clean": true,
+         "issues": [],
+         "shapes": 2,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 12.4,
+         "inflections": 2,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "dense",
+        "label": "Simplified",
+        "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 2,
+         "nodes": 126,
+         "bytes": 1633,
+         "gradients": 0,
+         "unique_fills": 2
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 14.0,
+         "min_region": 24,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": false,
+         "shadows": false,
+         "stroke_tolerance": 0.13,
+         "overlaps": false,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3237,
+         "edge_f1": 1.0,
+         "artifact_index": 5.1,
+         "clean": true,
+         "issues": [],
+         "shapes": 2,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 12.4,
+         "inflections": 2,
+         "uneven_rects": 0
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "auto_multi_shape128",
+   "call": "vectorize",
+   "image": "multi_shape128",
+   "parameters": {},
+   "auto": true,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "79abe20b83f58924768a3f3c3e7951375395eaf897dd48a23773f60d11bfd00c",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 3,
+       "nodes": 42,
+       "bytes": 1266,
+       "gradients": 3,
+       "unique_fills": 3
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 10.0,
+      "min_region": 16,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 70.0,
+      "curve_tolerance": 0.6,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": {
+     "vexel": {
+      "engine": "vexel",
+      "pick": "logo",
+      "reason": "the cleanest at the same fidelity",
+      "candidates": [
+       {
+        "preset": "balanced",
+        "label": "Balanced",
+        "svg": "86f73366929cacb6a4294f5dbfad4fb7e9d1c343418cf4458a0e086df9203ae3",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 3,
+         "nodes": 61,
+         "bytes": 1491,
+         "gradients": 3,
+         "unique_fills": 3
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 6.0,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3979,
+         "edge_f1": 1.0,
+         "artifact_index": 3.27,
+         "clean": false,
+         "issues": [
+          "2 uneven rectangles"
+         ],
+         "shapes": 3,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 9.1,
+         "inflections": 0,
+         "uneven_rects": 2
+        },
+        "error": null
+       },
+       {
+        "preset": "logo",
+        "label": "Logo & icon",
+        "svg": "79abe20b83f58924768a3f3c3e7951375395eaf897dd48a23773f60d11bfd00c",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 3,
+         "nodes": 42,
+         "bytes": 1266,
+         "gradients": 3,
+         "unique_fills": 3
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 10.0,
+         "min_region": 16,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 70.0,
+         "curve_tolerance": 0.6,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.4266,
+         "edge_f1": 1.0,
+         "artifact_index": 3.01,
+         "clean": false,
+         "issues": [
+          "2 uneven rectangles"
+         ],
+         "shapes": 3,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 8.0,
+         "inflections": 0,
+         "uneven_rects": 2
+        },
+        "error": null
+       },
+       {
+        "preset": "detailed",
+        "label": "Detailed illustration",
+        "svg": "6808d1f3ff6b49008710175397556d2c9ef0c36f10aa55deb42884803effcc2d",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 3,
+         "nodes": 61,
+         "bytes": 1534,
+         "gradients": 3,
+         "unique_fills": 3
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 3.5,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 6,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3963,
+         "edge_f1": 1.0,
+         "artifact_index": 3.27,
+         "clean": false,
+         "issues": [
+          "2 uneven rectangles"
+         ],
+         "shapes": 3,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 9.1,
+         "inflections": 0,
+         "uneven_rects": 2
+        },
+        "error": null
+       },
+       {
+        "preset": "dense",
+        "label": "Simplified",
+        "svg": "9c72a6f190a43b249996132f3ac11c7062a467f43c83976f8d0fd1f2eca79008",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 3,
+         "nodes": 61,
+         "bytes": 1249,
+         "gradients": 2,
+         "unique_fills": 3
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 14.0,
+         "min_region": 24,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": false,
+         "shadows": false,
+         "stroke_tolerance": 0.13,
+         "overlaps": false,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 1.3116,
+         "edge_f1": 1.0,
+         "artifact_index": 3.25,
+         "clean": false,
+         "issues": [
+          "2 uneven rectangles"
+         ],
+         "shapes": 3,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 9.0,
+         "inflections": 0,
+         "uneven_rects": 2
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "auto_linear_4stop128",
+   "call": "vectorize",
+   "image": "linear_4stop128",
+   "parameters": {},
+   "auto": true,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "07522f432b409173e4dab099fce017e6b1f07fe965bc3781714e258c3ca10a21",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 1,
+       "nodes": 0,
+       "bytes": 471,
+       "gradients": 1,
+       "unique_fills": 1
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 3.5,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 6,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": {
+     "vexel": {
+      "engine": "vexel",
+      "pick": "detailed",
+      "reason": "the only one this faithful to the image",
+      "candidates": [
+       {
+        "preset": "balanced",
+        "label": "Balanced",
+        "svg": "371d2f904b4a9f8b721bd1279b3f1093822fef24a316f566010adddaa9567d7d",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 1,
+         "nodes": 0,
+         "bytes": 428,
+         "gradients": 1,
+         "unique_fills": 1
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 6.0,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.5201,
+         "edge_f1": 1.0,
+         "artifact_index": 0.0,
+         "clean": true,
+         "issues": [],
+         "shapes": 1,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 0.0,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "logo",
+        "label": "Logo & icon",
+        "svg": "371d2f904b4a9f8b721bd1279b3f1093822fef24a316f566010adddaa9567d7d",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 1,
+         "nodes": 0,
+         "bytes": 428,
+         "gradients": 1,
+         "unique_fills": 1
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 10.0,
+         "min_region": 16,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 70.0,
+         "curve_tolerance": 0.6,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.5201,
+         "edge_f1": 1.0,
+         "artifact_index": 0.0,
+         "clean": true,
+         "issues": [],
+         "shapes": 1,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 0.0,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "detailed",
+        "label": "Detailed illustration",
+        "svg": "07522f432b409173e4dab099fce017e6b1f07fe965bc3781714e258c3ca10a21",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 1,
+         "nodes": 0,
+         "bytes": 471,
+         "gradients": 1,
+         "unique_fills": 1
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 3.5,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 6,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.1456,
+         "edge_f1": 1.0,
+         "artifact_index": 0.0,
+         "clean": true,
+         "issues": [],
+         "shapes": 1,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 0.0,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "dense",
+        "label": "Simplified",
+        "svg": "371d2f904b4a9f8b721bd1279b3f1093822fef24a316f566010adddaa9567d7d",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 1,
+         "nodes": 0,
+         "bytes": 428,
+         "gradients": 1,
+         "unique_fills": 1
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 14.0,
+         "min_region": 24,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": false,
+         "shadows": false,
+         "stroke_tolerance": 0.13,
+         "overlaps": false,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.5201,
+         "edge_f1": 1.0,
+         "artifact_index": 0.0,
+         "clean": true,
+         "issues": [],
+         "shapes": 1,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 0.0,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "auto_venn128",
+   "call": "vectorize",
+   "image": "venn128",
+   "parameters": {},
+   "auto": true,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "6b369e6ae780bd7e06b8cab18923fb2f1def894a39393556193461157a795319",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 6,
+       "nodes": 164,
+       "bytes": 2299,
+       "gradients": 0,
+       "unique_fills": 6
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 14.0,
+      "min_region": 24,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": false,
+      "shadows": false,
+      "stroke_tolerance": 0.13,
+      "overlaps": false,
+      "path_precision": 2
+     }
+    },
+    "auto": {
+     "vexel": {
+      "engine": "vexel",
+      "pick": "dense",
+      "reason": "the most faithful, and the cleanest",
+      "candidates": [
+       {
+        "preset": "balanced",
+        "label": "Balanced",
+        "svg": "d398a7690a1aa8a654dd5f160d9f2b346b7169abcb078ec636b735c716be0d78",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 4,
+         "nodes": 136,
+         "bytes": 1867,
+         "gradients": 0,
+         "unique_fills": 4
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 6.0,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3089,
+         "edge_f1": 0.9966,
+         "artifact_index": 45.96,
+         "clean": false,
+         "issues": [
+          "wobbly edges"
+         ],
+         "shapes": 4,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 183.9,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "logo",
+        "label": "Logo & icon",
+        "svg": "5c4b0bad2c86d560bc96fc435c1ff80556f3cbb266f1585cab0f85291e6e248c",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 4,
+         "nodes": 148,
+         "bytes": 1976,
+         "gradients": 0,
+         "unique_fills": 4
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 10.0,
+         "min_region": 16,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 70.0,
+         "curve_tolerance": 0.6,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3705,
+         "edge_f1": 0.9966,
+         "artifact_index": 49.7,
+         "clean": false,
+         "issues": [
+          "wobbly edges"
+         ],
+         "shapes": 4,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 198.8,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "detailed",
+        "label": "Detailed illustration",
+        "svg": "d398a7690a1aa8a654dd5f160d9f2b346b7169abcb078ec636b735c716be0d78",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 4,
+         "nodes": 136,
+         "bytes": 1867,
+         "gradients": 0,
+         "unique_fills": 4
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 3.5,
+         "min_region": 6,
+         "gradients": true,
+         "max_stops": 6,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": true,
+         "shadows": true,
+         "stroke_tolerance": 0.13,
+         "overlaps": true,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.3089,
+         "edge_f1": 0.9966,
+         "artifact_index": 45.96,
+         "clean": false,
+         "issues": [
+          "wobbly edges"
+         ],
+         "shapes": 4,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 183.9,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       },
+       {
+        "preset": "dense",
+        "label": "Simplified",
+        "svg": "6b369e6ae780bd7e06b8cab18923fb2f1def894a39393556193461157a795319",
+        "elapsed_ms": null,
+        "stats": {
+         "paths": 6,
+         "nodes": 164,
+         "bytes": 2299,
+         "gradients": 0,
+         "unique_fills": 6
+        },
+        "parameters": {
+         "upsample": "auto",
+         "detail": 14.0,
+         "min_region": 24,
+         "gradients": true,
+         "max_stops": 4,
+         "layering": "stacked",
+         "corner_threshold": 60.0,
+         "curve_tolerance": 0.4,
+         "shape_fitting": true,
+         "refine": false,
+         "strokes": false,
+         "shadows": false,
+         "stroke_tolerance": 0.13,
+         "overlaps": false,
+         "path_precision": 2
+        },
+        "scores": {
+         "delta_e": 0.2148,
+         "edge_f1": 1.0,
+         "artifact_index": 28.44,
+         "clean": false,
+         "issues": [
+          "wobbly edges"
+         ],
+         "shapes": 6,
+         "pinholes": 0,
+         "slivers": 0,
+         "wobble": 113.8,
+         "inflections": 0,
+         "uneven_rects": 0
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "falsy_null_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": null,
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "falsy_zero_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": 0,
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "falsy_zero_float_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": 0.0,
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "falsy_false_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": false,
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "falsy_empty_string_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": "",
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "falsy_empty_list_mark128",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": [],
+   "auto": false,
+   "status": 200,
+   "body": {
+    "success": true,
+    "image_id": "<image_id>",
+    "width": 128,
+    "height": 128,
+    "results": {
+     "vexel": {
+      "svg": "a5e40184d60257887ad0f3949d8c587f01b97111cc6c5a5fe4551c6090ca2496",
+      "elapsed_ms": null,
+      "stats": {
+       "paths": 2,
+       "nodes": 126,
+       "bytes": 1633,
+       "gradients": 0,
+       "unique_fills": 2
+      },
+      "error": null
+     }
+    },
+    "parameters_used": {
+     "vexel": {
+      "upsample": "auto",
+      "detail": 6.0,
+      "min_region": 6,
+      "gradients": true,
+      "max_stops": 4,
+      "layering": "stacked",
+      "corner_threshold": 60.0,
+      "curve_tolerance": 0.4,
+      "shape_fitting": true,
+      "refine": false,
+      "strokes": true,
+      "shadows": true,
+      "stroke_tolerance": 0.13,
+      "overlaps": true,
+      "path_precision": 2
+     }
+    },
+    "auto": null
+   }
+  },
+  {
+   "name": "refused_range_low",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "detail": 0.5
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "greater_than_equal",
+      "loc": [
+       "vexel",
+       "detail"
+      ],
+      "msg": "Input should be greater than or equal to 1",
+      "input": 0.5,
+      "ctx": {
+       "ge": 1.0
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_range_high",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "min_region": 201
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "less_than_equal",
+      "loc": [
+       "vexel",
+       "min_region"
+      ],
+      "msg": "Input should be less than or equal to 200",
+      "input": 201,
+      "ctx": {
+       "le": 200
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_range_float_bound",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "stroke_tolerance": 0.04
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "greater_than_equal",
+      "loc": [
+       "vexel",
+       "stroke_tolerance"
+      ],
+      "msg": "Input should be greater than or equal to 0.05",
+      "input": 0.04,
+      "ctx": {
+       "ge": 0.05
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_range_corner",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "corner_threshold": 151
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "less_than_equal",
+      "loc": [
+       "vexel",
+       "corner_threshold"
+      ],
+      "msg": "Input should be less than or equal to 150",
+      "input": 151,
+      "ctx": {
+       "le": 150.0
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_float_null",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "detail": null
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "float_type",
+      "loc": [
+       "vexel",
+       "detail"
+      ],
+      "msg": "Input should be a valid number",
+      "input": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_float_list",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "detail": [
+     1
+    ]
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "float_type",
+      "loc": [
+       "vexel",
+       "detail"
+      ],
+      "msg": "Input should be a valid number",
+      "input": [
+       1
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_bool_null",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "gradients": null
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "bool_type",
+      "loc": [
+       "vexel",
+       "gradients"
+      ],
+      "msg": "Input should be a valid boolean",
+      "input": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_int_fraction",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "min_region": 16.5
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "int_from_float",
+      "loc": [
+       "vexel",
+       "min_region"
+      ],
+      "msg": "Input should be a valid integer, got a number with a fractional part",
+      "input": 16.5
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_int_null",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "path_precision": null
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "int_type",
+      "loc": [
+       "vexel",
+       "path_precision"
+      ],
+      "msg": "Input should be a valid integer",
+      "input": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_choice_wrong",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "layering": "sideways"
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "literal_error",
+      "loc": [
+       "vexel",
+       "layering"
+      ],
+      "msg": "Input should be 'stacked' or 'cutout'",
+      "input": "sideways",
+      "ctx": {
+       "expected": "'stacked' or 'cutout'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_choice_number",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "upsample": 3
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "literal_error",
+      "loc": [
+       "vexel",
+       "upsample"
+      ],
+      "msg": "Input should be 'auto', 'never' or 'always'",
+      "input": 3,
+      "ctx": {
+       "expected": "'auto', 'never' or 'always'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_unknown_field",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "colour": 3
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "extra_forbidden",
+      "loc": [
+       "vexel",
+       "colour"
+      ],
+      "msg": "Extra inputs are not permitted",
+      "input": 3
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_several",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "colour": {
+     "a": 1
+    },
+    "detail": 0,
+    "layering": "x",
+    "max_stops": 9
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "greater_than_equal",
+      "loc": [
+       "vexel",
+       "detail"
+      ],
+      "msg": "Input should be greater than or equal to 1",
+      "input": 0,
+      "ctx": {
+       "ge": 1.0
+      }
+     },
+     {
+      "type": "less_than_equal",
+      "loc": [
+       "vexel",
+       "max_stops"
+      ],
+      "msg": "Input should be less than or equal to 8",
+      "input": 9,
+      "ctx": {
+       "le": 8
+      }
+     },
+     {
+      "type": "literal_error",
+      "loc": [
+       "vexel",
+       "layering"
+      ],
+      "msg": "Input should be 'stacked' or 'cutout'",
+      "input": "x",
+      "ctx": {
+       "expected": "'stacked' or 'cutout'"
+      }
+     },
+     {
+      "type": "extra_forbidden",
+      "loc": [
+       "vexel",
+       "colour"
+      ],
+      "msg": "Extra inputs are not permitted",
+      "input": {
+       "a": 1
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_not_an_object_string",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": "abc",
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "model_type",
+      "loc": [
+       "vexel"
+      ],
+      "msg": "Input should be a valid dictionary or instance of VexelParams",
+      "input": "abc",
+      "ctx": {
+       "class_name": "VexelParams"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_not_an_object_number",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": 5,
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "model_type",
+      "loc": [
+       "vexel"
+      ],
+      "msg": "Input should be a valid dictionary or instance of VexelParams",
+      "input": 5,
+      "ctx": {
+       "class_name": "VexelParams"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_not_an_object_list",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": [
+    1
+   ],
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "model_type",
+      "loc": [
+       "vexel"
+      ],
+      "msg": "Input should be a valid dictionary or instance of VexelParams",
+      "input": [
+       1
+      ],
+      "ctx": {
+       "class_name": "VexelParams"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_not_an_object_true",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": true,
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "model_type",
+      "loc": [
+       "vexel"
+      ],
+      "msg": "Input should be a valid dictionary or instance of VexelParams",
+      "input": true,
+      "ctx": {
+       "class_name": "VexelParams"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_with_auto",
+   "call": "vectorize",
+   "image": "mark128",
+   "parameters": {
+    "detail": 0.5
+   },
+   "auto": true,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "greater_than_equal",
+      "loc": [
+       "vexel",
+       "detail"
+      ],
+      "msg": "Input should be greater than or equal to 1",
+      "input": 0.5,
+      "ctx": {
+       "ge": 1.0
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "refused_before_expired",
+   "call": "vectorize",
+   "image_id": "00000000000000000000000000000000",
+   "parameters": {
+    "detail": 0.5
+   },
+   "auto": false,
+   "status": 422,
+   "body": {
+    "detail": [
+     {
+      "type": "greater_than_equal",
+      "loc": [
+       "vexel",
+       "detail"
+      ],
+      "msg": "Input should be greater than or equal to 1",
+      "input": 0.5,
+      "ctx": {
+       "ge": 1.0
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "expired",
+   "call": "vectorize",
+   "image_id": "00000000000000000000000000000000",
+   "parameters": {},
+   "auto": false,
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "image_expired",
+     "message": "Upload expired or unknown; upload it again"
+    }
+   }
+  },
+  {
+   "name": "expired_auto",
+   "call": "vectorize",
+   "image_id": "00000000000000000000000000000000",
+   "parameters": {},
+   "auto": true,
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "image_expired",
+     "message": "Upload expired or unknown; upload it again"
+    }
+   }
+  },
+  {
+   "name": "expired_garbage_id",
+   "call": "vectorize",
+   "image_id": "not-an-id",
+   "parameters": {},
+   "auto": false,
+   "status": 404,
+   "body": {
+    "detail": {
+     "code": "image_expired",
+     "message": "Upload expired or unknown; upload it again"
+    }
+   }
+  },
+  {
+   "name": "no_image",
+   "call": "vectorize",
+   "image_id": "",
+   "parameters": {},
+   "auto": false,
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "no_image",
+     "message": "Send either `file` or `image_id`"
+    }
+   }
+  }
+ ]
+}

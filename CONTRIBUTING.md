@@ -23,12 +23,19 @@ means that number was measured on the current corpus with the current build.
 ```bash
 cd backend && uv venv && uv pip install -e '.[dev]'   # Python ≥ 3.12
 cd backend && .venv/bin/python -m maturin develop --release -m vexel-rs/Cargo.toml
+cd backend && VIRTUAL_ENV=$PWD/.venv .venv/bin/python -m maturin develop --release \
+    -m ../crates/studi0trace-core/Cargo.toml --features python
 cd frontend && npm ci                                  # Node ≥ 20
 ```
 
-The middle line builds Vexel's Rust pipeline (needs a toolchain from
-<https://rustup.rs>). Skip it and everything still works — Vexel falls back to
-its Python implementation and traces about ten times slower.
+The two `maturin` lines build Rust (needs a toolchain from <https://rustup.rs>,
+1.88 or newer for the second). The first is Vexel's pipeline: skip it and
+everything still works — Vexel falls back to its Python implementation and
+traces about ten times slower. The second is `studi0trace_core`, the Rust port of
+everything around the engine, as a Python module beside `vexel_rs`; only
+`tools.diffcheck scorecard` and `tests/test_core_scorecard.py` use it. Without it
+the default `tools.diffcheck` run stops at once (see below) and that test file is
+skipped.
 
 Run both servers:
 
@@ -41,9 +48,23 @@ npm --prefix frontend run dev
 
 ```bash
 cd backend           && .venv/bin/python -m pytest
-cd backend/vexel-rs  && cargo test
+cargo test --workspace --release        # at the repo root: the engine and the core
+RUSTDOCFLAGS="-D warnings" cargo doc -p studi0trace-core --no-deps   # the core's docs build clean
 cd frontend          && npm run test:run && npm run build
 ```
+
+`cargo test --workspace --release` is the Rust line, not `cd backend/vexel-rs &&
+cargo test`: inside the workspace that runs the engine alone. The core's golden
+fixtures (`crates/studi0trace-core/tests/fixtures`) embed the SVG the engine
+writes (`api.json`, `auto.json`, `auto_*.svg`), so a change to the engine that
+alters its output breaks the core's tests on macOS arm64, where they compare the
+bytes. Re-export them before you push (the next section).
+
+If you change a dependency of the Rust workspace (`cargo update`, a version in any `Cargo.toml`), the Docker
+image's own lockfile moves with it: `cd backend && .venv/bin/python -m tools.sync_vexel_lock` copies the
+engine's closure out of the root `Cargo.lock` (the pytest `test_vexel_lock_matches_workspace.py` fails with this
+command when it has fallen behind), and the image builds with `--locked`. Likewise `[profile.release]` in the
+root `Cargo.toml` is carried by `CARGO_PROFILE_RELEASE_*` in `backend/Dockerfile`; change both.
 
 New behaviour ships with a test. The concurrency and CORS-on-error tests in
 `backend/tests/test_api.py` are regression guards for real production
@@ -63,7 +84,31 @@ cd backend && .venv/bin/python -m tools.diffcheck
 is what proves it landed: it runs each stage in both over the whole corpus and
 reports where they disagree — the partition's labels to the last float32 bit,
 the fills by what they paint. Where the two are allowed to differ, the tolerance
-table at the top of that file says so and says why.
+table at the top of that file says so and says why. Its `scorecard` stage holds
+the Rust core's scorecard to the Python's and needs the second `maturin` line
+above: without `studi0trace_core` it exits at once with that command, and naming
+stages (`tools.diffcheck labels0 rects`) runs only those.
+
+A change to either that alters what the engine writes has a third step, because
+the Rust core (`crates/studi0trace-core`) holds the engine's SVG to the byte on
+macOS arm64. With the Rust `vexel_rs` built and installed from your checkout
+(`maturin develop --release -m vexel-rs/Cargo.toml`, the first line above), on
+macOS arm64:
+
+```bash
+cd backend && .venv/bin/python -m tools.export_core_fixtures --only scorecard,api,auto
+cargo test --workspace --release
+```
+
+`api` and `auto` are the two fixtures the core's tests compare a live trace with
+(`tests/api.rs`, `tests/auto.rs`); they fail until they are re-exported, and
+`auto` checks the wordmark's trace against the copy `scorecard` keeps, so the
+three go together. The other exporters that trace (`svg,render,drawing,holes,geometry`)
+store the trace as an input, so their tests keep passing; re-export them too
+(`.venv/bin/python -m tools.export_core_fixtures` is everything) so the fixtures
+stand for what the engine writes now, and review the diff as you would code.
+Off macOS arm64 the SVG bytes are not compared (the crate's README says what is),
+and the exporter refuses to run there.
 
 Run the suite against both:
 

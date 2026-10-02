@@ -12,18 +12,57 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   and the fallback when the extension is missing. `VEXEL_BACKEND=python|rust`
   selects explicitly. **Change one and you change both** — a fix to a stage in
   Python needs the same fix in `vexel-rs/src/`, and `tools/diffcheck.py` is what
-  proves it landed.
+  proves it landed. **And a third step** when the change alters what the engine
+  writes: the core's tests compare that SVG to the byte on macOS arm64, so
+  re-export its fixtures with the Rust `vexel_rs` built from your checkout
+  (`cd backend && .venv/bin/python -m tools.export_core_fixtures --only scorecard,api,auto`
+  makes the tests pass again — `auto` checks the wordmark's trace against the copy
+  `scorecard` keeps, so it cannot run without it; `svg,render,drawing,holes,geometry`
+  also hold a trace, as an input, and are worth re-exporting so they stay current) and
+  run `cargo test --workspace --release`.
+- `crates/studi0trace-core/` — the Rust port of everything the Python server does
+  around the engine: image intake, the parameters and their JSON schema, presets,
+  SVG finishing, the artifact scorecard, Auto, and the `Core` facade that answers
+  the API's five calls with the API's JSON. The desktop app of plan 2 and the web
+  build of plan 3 will call it; neither exists yet. Its `README.md` has the
+  facade, the known differences from the Python and the contract a shell must
+  keep. The root `Cargo.toml` is the workspace of it and `backend/vexel-rs`:
+  `cargo test --workspace --release`, Rust ≥ 1.88. Its golden fixtures
+  (`tests/fixtures`) are exported from the Python by
+  `backend/tools/export_core_fixtures.py` (on macOS arm64 with the Rust
+  `vexel_rs` built; it writes `provenance.json` and refuses to run elsewhere
+  without `--force`), and `tools/diffcheck.py scorecard` holds its scorecard to
+  `imaging/quality.py` over the corpus, through the `studi0trace_core` extension
+  (`--features python`, built apart from `vexel_rs`:
+  `maturin develop --release -m ../crates/studi0trace-core/Cargo.toml --features python`
+  from `backend/`; never `--all-features`, which cannot link without maturin).
+  The fixtures were exported on macOS arm64: results that go through libm are
+  compared to the bit there (`tests/common::exact()`) and to a tolerance
+  elsewhere; `STUDI0TRACE_FORCE_TOLERANT=1` runs the tolerant branch on any
+  machine. Results that depend on libm but are rounded to f32 or to fixed point
+  before they are compared (the Canny stages in `tests/edges.rs`, whose Gaussian
+  taps are `f64::exp` stored as f32; the Lanczos digests in `tests/resample.rs`
+  and `tests/render.rs`, whose taps are `f64::sin` rounded to 22-bit fixed point;
+  the holes digests) are compared to the bit on every platform and are
+  practically immune: all 25 Gaussian taps in the fixture are correctly rounded,
+  and tiny-skia's one architecture-dependent operation, `recip_fast`, is used only
+  by the colour-burn and colour-dodge blend modes. If one of them ever fails on
+  another platform, that is where to look.
 - `backend/tools/diffcheck.py` — runs a pipeline stage in both implementations
   over the corpus and reports where they disagree. Most stages feed both sides
   one input (`segments` hands the Python's placed arcs to both fitters and
   expects the same segments back); `trace_labels` and `trace_arcs` run the two engines end to end
   (`VEXEL_DUMP=<dir>` makes either engine write the label map it hands the
   boundary build, the fitted arcs and the stroke decisions — `vexel/dump.py`,
-  `vexel-rs/src/dump.rs`, one format) and compare what each actually produced
+  `vexel-rs/src/dump.rs`, one format) and compare what each actually produced.
+  `scorecard` is a per-stage gate like the rest (both scorecards are handed one SVG,
+  so it is in the default run) and exits non-zero, with the build command, when
+  `studi0trace_core` is not installed
 - `backend/bench/` — Vexel Bench (`python -m bench …`); `bench/geometry.py` measures
   against vector truth, `bench/truth.py` reads the truth's corners
 - `backend/tests/` — pytest; run `cd backend && .venv/bin/python -m pytest`.
-  Rust tests: `cd backend/vexel-rs && cargo test`
+  Rust tests: `cargo test --workspace --release` at the root (the engine and the
+  core; `cd backend/vexel-rs && cargo test` for the engine alone)
 - `frontend/` — Studi0Trace React 18 + TS app; `npm run test:run`, `npm run build`
   (`src/components`, `src/hooks`, `src/lib`; tokens in `src/styles.css`)
 - `docs/superpowers/specs|plans/` — design specs and implementation plans
@@ -80,7 +119,23 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   symmetric. Repeated shapes (same primitive to 0.1 px, or paths whose
   outlines agree to 0.1 px after translation) are written once into `<defs>`
   and painted as `<use href x y fill>` (`vexel/reuse.py`); anything that
-  reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`.
+  reads the SVG (the frontend's `svgdoc.ts`) must resolve `<use>`. A shape
+  that carries a filter or a gradient is written in full: a filter or a
+  `userSpaceOnUse` gradient on a `<use>` applies in the use's own user space,
+  which its x and y shift, so a filter region in the file's units moves with
+  the copy and clips it, and a gradient solved in the file's units paints the
+  copy with the wrong stretch of itself (a cherry 240 px right of its twin).
+- A ring that is a circle or a rectangle draws as that primitive, and its
+  arcs carry the primitive's outline (`topology._imprint`, after the fit and
+  the regularity snap, before the bleed): the nodes move onto it and every arc
+  meeting them follows, so the neighbours draw the same curve. Left as the
+  arcs' own fits they sat a quarter pixel off a circle and a few hundredths off
+  a rect's side, and where the primitive was painted first the two
+  anti-aliased edges left a hairline (a ring of seam round a disc, a line
+  between every two tiles). A primitive painted before a neighbour keeps its
+  bled outline beneath it (`Boundary.bleeds`), as any shape reaches under a
+  later one. A node the primitive would move by more than the tolerance
+  vetoes the ring; ellipses are not written back.
 - `upsample` (default `auto`): an input of at most 192 px whose own direct
   trace has a region thinner than 2.2 px (2·area/perimeter over the label map
   handed to topology) is traced again at 2× through a Lanczos-3 upsample and
@@ -111,7 +166,11 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   to one direction (axis within `snap_axis_deg`, exactly perpendicular to a
   heavier cluster within a degree). Lines turn about their node end or their
   midpoint; nodes never move, so rings still close. A line with a node at both
-  ends is left alone.
+  ends is left alone. No snap — this stage's, `_snap_axis`'s in the arc fit or
+  `snap_axis_lines`'s on a closed contour — may move a line's end further
+  than `SNAP_END_MOVE` (0.15 px, what the placement knows an edge to): a
+  side drawn 1.3° off vertical is inside the snap angle, and turning a 330 px
+  one onto the axis took 3.6 px off each end of a glyph's bar.
 - Junction nodes are placed where the incident arcs' approach lines cross, at
   any angle, and held on the canvas edge; the vertices inside a node's approach
   window are never fitted (`NODE_TRIM`, `TIP_TRIM`, capped at `TRIM_SHARE` of
@@ -131,8 +190,30 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   tiebreaker; `core/skeleton.rs` sorts by the same key. Never break the
   tie by raster index: on a two-pixel line that thins the same side first
   everywhere and puts the centreline half a pixel off, enough for
-  `stroke_fidelity` to fail a ring the random order passes. `tools/diffcheck.py
-  strokes` compares the two per thin group.
+  `stroke_fidelity` to fail a ring the random order passes. The skeleton is
+  only the start: `_refine_centreline` moves every vertex along its normal to
+  the bilinear coverage centroid across the stroke (±(w/2+1) px at 0.25 px,
+  two passes), and `stroke_fidelity` predicts each pixel's coverage from its
+  exact distance to that polyline — never from a rasterised centreline, which
+  scored a line half a pixel off the lattice at the gate whichever way the
+  tie-break fell. The exact measure runs at two thirds of the old one, and
+  the gate (`stroke_tolerance`) is 0.13: over corpus and held-out every drawn
+  line scores at most 0.118, the stems and blobs a stroke would mangle 0.141
+  up. The centreline is then fitted at `STROKE_FIT_SHARE` (half) of the curve
+  tolerance, since its error shows on both edges of the stroke; at the full
+  tolerance the cubics through a 150 px ring sagged 0.14 px inside it.
+  `tools/diffcheck.py strokes` compares the two per thin group.
+- A pixel's stored colour is noise below 8-bit alpha 32 (straight alpha
+  quantises it to ±128/alpha levels; a resampled asset rings every edge with
+  alpha 1–15 noise), so the transparent field is never inpainted from it as
+  it stands: `prepare.inpaint_transparent` reads such a source through
+  `settle_rim`, the alpha-weighted mean of its 5×5 neighbourhood (the ink
+  beside an edge, a faint field's own colour in a halo), and visible pixels
+  keep the colour they have — settling them too moved a shadow's halo to its
+  caster's colour. `upsample2x` inpaints the same way before it resamples,
+  since its channels are straight and the black under transparency would be
+  mixed into every edge at 2×. Inpainted from noise, the field carried seams
+  the partition read as edges: a serrated triangle, a ring in 39 fragments.
 - The Rust engine is not allowed to diverge from the Python one by accident.
   `tools/diffcheck.py` holds the partition's labels to the last float32 bit and
   the fills to a colour level; where the two are allowed to differ, the
@@ -188,13 +269,57 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   (`rescue.edge_mix`); placement reads colour premultiplied, against each
   region's fill plus its own smoothed residual (local fills, gated off where
   the two sides' local colours converge). A shadow on a transparent canvas is
-  a filter (`shadows._detect_clear`).
+  a filter (`shadows._detect_clear`). The bands a drop-shadow filter explains
+  join the ground they lie on before the outline is built, an opaque backdrop
+  as much as a transparent canvas (`ShadowPlan.backdrop`): left in the label
+  map and skipped at paint time, the rescued band stopped a pixel short of the
+  caster and the thread of backdrop between them cut the caster's outline into
+  two-point arcs, a node at every step of a rounded corner.
+- The colour under a pixel of alpha below `prepare.COLOUR_ALPHA_FLOOR` (8/255)
+  may be unpremultiply noise: a premultiplied pipeline leaves it quantised to
+  steps of 255/a per channel (at alpha 1 or 2 only 0, 128 and 255), about 45/a
+  ΔE of noise against the neighbours over the corpus, and below 8 a halo of it
+  is all ridge and no seed (`seed_mask`'s 8 ΔE/px), so the watershed flooded a
+  speech balloon out to the far end of its shadow's alpha-2 halo and the
+  rescue carved the halo back out as an "invisible" region that took the rim
+  with it. A colour on that grid (`unpremultiply_noise`, a level of rounding
+  either way) becomes the alpha-weighted mean of the noise pixels within
+  `NOISE_RADIUS` (`smooth_faint_noise`, 7×7: alpha-2 noise from ±64 to ±9
+  levels), its own neighbourhood's samples and never a shape's — inpainted
+  from the nearest pixel that shows, a ramp's tail beside a disc took the
+  disc's colour (the corpus is rendered premultiplied: its tails are on the
+  grid too). A colour off the grid is a straight-alpha file's own and stays.
+  The 2× upsample resamples the prepared colour, not the file's: what a file
+  stores under alpha 0 was mixed into the ringing beside every thin line. And
+  a four-connected piece of a region below `min_region` is not a region: the
+  shards carving a feature leaves of its host — the islands the host's fill
+  passes through, the one-pixel thread of the host's own edge between the
+  feature and a third region, a sliver each in `_directed_rings` — join the
+  nearest neighbouring region as `split_rim` hands a rim over
+  (`engine.absorb_shards`: distance, own colour, lower label; never an
+  invisible one while a visible one is as near; a label whose every piece is
+  small is a dotted line, not shards), after the shadow stage and without
+  reading the enclosure again: the shards are the host's edge, and an inset
+  shadow's band is enclosed by its card through the card's corner bits — with
+  those bits in the band and the enclosure read again, the card was painted
+  without its band ring; absorbed before the shadow stage, the band touched
+  the backdrop and the shadow model no longer fitted.
 - Rounded rectangles are read under blur (`vexel/rects.py`: the blur is taken
   out of each radius, r² ≈ r_read² − (1.86σ)² − 0.58), given one radius per
   shape and across shapes, one size and shared edge levels, and a corner that
   meets a neighbour becomes a cusp; a Line-curve-Line corner elsewhere is one
   circular arc of the mark's radius (`topology._rectify`, `_fillets`;
   `vexel-rs/src/rects.rs`, `topology/rectify.rs`; `diffcheck rects`).
+- A radial fill may be SVG's focal radial (`fills.Radial.fx/fy`,
+  `focal_param`): a lit sphere's highlight sits off its centre, and the
+  concentric fit put its brightest ring in the wrong place. The focal search
+  runs only when the concentric radial leaves `FOCAL_MIN_RMS` tolerances of
+  error over `FOCAL_MIN_PIXELS`, keeps the focal point within `FOCAL_REACH`
+  of the radius (where the parameter is well conditioned) and must win by
+  `FOCAL_MARGIN`. Anything that reads a radial's geometry has to honour the
+  focal point: a level line is the circle of radius t·r centred at
+  F + t·(C − F) (`posterize`), the Rust renderer's start point is F, and the
+  diffcheck wire carries `[cx, cy, r, fx, fy]` with F = C when concentric.
 - `gradients=False` posterises the fitted model, not the pixels
   (`posterize.posterize_fills`): each ramp is cut at equal-ΔE levels of its own
   parameter, band edges are placed on the level line exactly, and bands are
@@ -206,17 +331,63 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   between them is a real step (gradient ≥ 3× either piece's own and ≥ 0.25× their
   colour difference). A weak edge meeting a strong one drops out of the ridge map
   for a few pixels, and one strip of seed across that gap had fused a crater
-  into its moon under JPEG, before any later stage could see it. And a region is
+  into its moon under JPEG, before any later stage could see it. A step is a
+  ridge: the split is kept only where the boundary is `NECK_RIDGE` times
+  steeper than the pixels `NECK_REACH` to either side at more than half its
+  pairs — a boundary through a soft band (the necks of a ring of seed round a
+  highlight) is as steep beside itself as on itself and had seeded a cap in
+  two halves with a seam through the highlight's ends. And a region is
   an overlap of two shapes only if at least half its outline runs along them
   (`overlaps`): a face read as a translucent eye over a sliver was dropped.
+  And a blend is evidence of translucency only when the shift it makes,
+  (1 − α)·|backdrop − X|, is `OVERLAP_SHIFT` fit tolerances: a flat tile four
+  levels from its neighbours was drawn as the next tile at 96 % over it.
+- A crisp edge is a real boundary however small its step. The partition's
+  ridge threshold and junction test drop to `G_LOW_MIN`/`G_SEED_MIN` where the
+  area is clean outright (the median discontinuity round the pixel, ridges
+  left out, under `CLEAN_FLOOR`; `partition.noise_floor`), and the merge
+  refuses a gradient across a boundary that stands `EDGE_PROMINENCE` times
+  above both regions' interior discontinuity, is at least `EDGE_FLOOR`, and
+  is a ridge at more than half its pairs, merging only colours within
+  `EDGE_SAME` as solids (`merge.ridge_pairs`, `interior_floor`). Sixteen tiles
+  2.9 ΔE apart came out as two shapes before. JPEG's ringing keeps every old
+  threshold: its floor is never clean and its interiors are never flat.
 - A stretch that is lines-first at `KIND_TOL` (0.4 px) stays lines at any
   looser `curve_tolerance`: a loose tolerance buys fewer curve segments, never
   a straight edge drawn as a bow.
+- A soft edge has no position finer than its blur. `_crossing` also returns
+  how far coverage drops across the three pixels it samples (1.0 on a crisp
+  edge); `_place` reads the blur width off the chain's median drop
+  (`SOFT_WIDTH / drop − SOFT_BIAS`) and smooths the placed vertices along the
+  arc by a Gaussian of that width (from 1 px, capped at 4, never a chain
+  shorter than the kernel, never a posterised level line), in both engines
+  (`_soften`, `soften`; `diffcheck placed`). Without it every vertex of a
+  ramp fell to the lattice edge and the fit drew the label staircase as a
+  wobble. Two other things make a soft band wobble and are fixed at their
+  source, not here: `refine_merge`'s edge veto holds only on a *ridge*
+  (`merge.boundary_ridges`, the partition's `NECK_RIDGE` test — a glow's own
+  slope is not a step), and a rescued band takes its parent's edge band up to
+  the outline (`engine.reach_the_edge`), or a strip of the parent runs on
+  between them and puts a node at every row of a diagonal.
 - Presets are measured, never described by hand: `bench.presets_eval
   --write-details` rewrites `engines/preset_details.json`. Auto (`auto.py`,
   `/vectorize auto=true`) traces the candidates concurrently and keeps the
   cleanest within the fidelity slack of the most faithful.
-- Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`.
+- The core is a port, not a fork, and stays wasm-clean: no filesystem, no
+  `Instant` outside `auto::trace_finished` (the core's one clock, which plan 3 must
+  hand a wasm clock; the engine's `vexel-rs/src/timing.rs` `Timer` reads one only
+  when `VEXEL_TIMING` is set, and must stay that way), no threads
+  outside `rayon` in `auto.rs`, no C dependencies. Change the Python scorecard, Auto, intake, presets or API
+  and you change the core; `export_core_fixtures` regenerates what its tests hold
+  and `diffcheck scorecard` (a default stage) proves the scorecard end to end.
+  The preset bundles are `engines/presets.json`, one file both read, and
+  `preset_details.json` is embedded in the core too: `presets_eval --write-details`
+  changes what the core answers, so re-export the fixtures after it.
+- Python env: `backend/.venv` via `uv`. Docker image: `backend/Dockerfile`, which builds vexel-rs alone
+  (context `backend/`, no workspace): it reads `backend/vexel-rs/Cargo.lock`, never touched by cargo inside
+  the workspace (`--locked`), and carries the root `[profile.release]` as `CARGO_PROFILE_RELEASE_*`
+  variables. Both are held by `tests/test_vexel_lock_matches_workspace.py`; after the workspace's
+  dependencies move, `cd backend && .venv/bin/python -m tools.sync_vexel_lock` refreshes the lock.
 - Frontend follows the Studi0 design system (semantic HSL tokens, Poppins,
   `.dark` on `<html>`, `h-10 rounded-md` buttons, sticky blurred header). Never
   use a one-sided coloured border as a highlight; use the yellow dot, a

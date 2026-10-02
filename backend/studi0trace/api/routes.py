@@ -61,7 +61,8 @@ async def presets() -> list[Preset]:
 
 def _intake(data: bytes, settings: Settings) -> TraceInput:
     try:
-        return load_upload(data, max_bytes=settings.max_upload_bytes, max_pixels=settings.max_image_pixels)
+        return load_upload(data, max_bytes=settings.max_upload_bytes, max_pixels=settings.max_image_pixels,
+                           max_side=settings.max_image_side)
     except IntakeError as exc:
         raise HTTPException(400, {"code": exc.code, "message": exc.message})
 

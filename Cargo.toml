@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["backend/vexel-rs", "crates/studi0trace-core"]
+
+# MIRRORED in backend/Dockerfile as CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS (its build context, backend/, has no
+# root manifest, so it carries this profile in environment variables). Change one, change the other; the pytest
+# backend/tests/test_vexel_lock_matches_workspace.py compares them. The same file holds the other half of that
+# duplication: backend/vexel-rs/Cargo.lock is read only by the Docker build, and `cd backend && .venv/bin/python -m
+# tools.sync_vexel_lock` refreshes it from this workspace's Cargo.lock.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

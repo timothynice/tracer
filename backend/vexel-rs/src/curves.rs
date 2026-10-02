@@ -2220,8 +2220,16 @@ pub fn fit_closed_smooth(poly: &[P], tol: f64) -> Vec<Segment> {
     fit_open(&pts, tol, Some(t), Some([-t[0], -t[1]]))
 }
 
+/// px. An axis snap may move a line's end this far and no further: the
+/// placement knows an edge to a tenth of a pixel, so a line that would have to
+/// move more than that to lie on the axis is not on the axis — it is drawn a
+/// degree off, like the sides of a glyph's bar — and stays where its pixels
+/// are (the Python's `curves.SNAP_END_MOVE`; `regularity::END_MOVE_MAX` is the
+/// same bound for the cross-graph snaps).
+pub const SNAP_END_MOVE: f64 = 0.15;
+
 /// Make nearly horizontal / vertical lines exactly so, moving shared endpoints
-/// with them.
+/// with them — where that moves an end no further than SNAP_END_MOVE.
 pub fn snap_axis_lines(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment> {
     let n = segments.len();
     if n == 0 {
@@ -2233,15 +2241,20 @@ pub fn snap_axis_lines(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment
             _ => continue,
         };
         let ang = angle_deg(p0, p1).rem_euclid(180.0);
-        let (new0, new1) = if ang.min(180.0 - ang) <= snap_deg {
-            let y = (p0[1] + p1[1]) / 2.0;
-            ([p0[0], y], [p1[0], y])
+        let axis = if ang.min(180.0 - ang) <= snap_deg {
+            1
         } else if (ang - 90.0).abs() <= snap_deg {
-            let x = (p0[0] + p1[0]) / 2.0;
-            ([x, p0[1]], [x, p1[1]])
+            0
         } else {
             continue;
         };
+        let value = (p0[axis] + p1[axis]) / 2.0;
+        if (p0[axis] - value).abs() > SNAP_END_MOVE {
+            continue;
+        }
+        let (mut new0, mut new1) = (p0, p1);
+        new0[axis] = value;
+        new1[axis] = value;
         segments[i] = Segment::Line { p0: new0, p1: new1 };
         let prev = (i + n - 1) % n;
         let next = (i + 1) % n;

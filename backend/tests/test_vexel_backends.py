@@ -254,3 +254,17 @@ def test_the_wordmark_has_no_halo_fills_or_halo_regions(preset):
     assert _rim_stops(svg) == []
     assert svg.count('fill="none"') == 0
     assert len(re.findall(r"<(?:path|rect|circle|ellipse|use)\b", svg)) <= 20
+
+
+def test_both_backends_read_a_faint_noise_halo_the_same_way():
+    """The colour under alpha 1–2 is inpainted in both, from the same nearest
+    pixel, so the partition and the trace of a shape ringed by such a halo
+    agree: one opaque shape, the same elements and colours."""
+    from tests.conftest import noisy_halo_disc
+
+    rgba = noisy_halo_disc()
+    params = VexelParams()
+    py, rs = trace_rgba(rgba, params), _rust(rgba, params)
+    assert _elements(py) == _elements(rs)
+    assert _colours(py) == _colours(rs)
+    assert "stop-opacity" not in py and "stop-opacity" not in rs

@@ -9,7 +9,20 @@ FROM python:3.12-slim AS vexel
 ENV PIP_NO_CACHE_DIR=1 \
     CARGO_HOME=/usr/local/cargo \
     RUSTUP_HOME=/usr/local/rustup \
-    PATH=/usr/local/cargo/bin:$PATH
+    PATH=/usr/local/cargo/bin:$PATH \
+    CARGO_PROFILE_RELEASE_LTO=fat \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+# The release profile lives in the repo-root Cargo.toml (the workspace), which
+# this image's build context (backend/) does not contain; the two variables
+# above carry it here (opt-level 3 is already the release default). KEEP THEM
+# THE SAME AS [profile.release] THERE: the root Cargo.toml has the mirror of this
+# comment, and backend/tests/test_vexel_lock_matches_workspace.py compares them.
+#
+# The same goes for the lockfile. Inside the workspace cargo reads the ROOT
+# Cargo.lock; vexel-rs/Cargo.lock is read only here (--locked below), so it
+# must be refreshed whenever the workspace's dependencies move:
+#     cd backend && .venv/bin/python -m tools.sync_vexel_lock
+# (the same test fails, with that command, when it has fallen behind).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -18,7 +31,7 @@ RUN apt-get update \
     && pip install 'maturin>=1.7,<2'
 WORKDIR /src
 COPY vexel-rs ./vexel-rs
-RUN maturin build --release --out /wheels -m vexel-rs/Cargo.toml
+RUN maturin build --release --locked --out /wheels -m vexel-rs/Cargo.toml
 
 # --- the service -------------------------------------------------------------
 FROM python:3.12-slim

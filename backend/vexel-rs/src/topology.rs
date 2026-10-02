@@ -27,6 +27,7 @@ use crate::curves::{
     CurveParams,
     Shape,
     MERGE_DEG,
+    SNAP_END_MOVE,
     P,
     Segment,
     corners_from_runs,
@@ -577,7 +578,7 @@ fn crossing(
     b: i32,
     fill_at: FillAt,
     local: Option<&LocalFills>,
-) -> (Vec<f64>, Vec<i8>) {
+) -> (Vec<f64>, Vec<i8>, Vec<f64>) {
     let n = p_in.len();
     let here_raw = coverage(rgb, alpha, p_in, a, b, fill_at, local);
     let there_raw = coverage(rgb, alpha, p_out, a, b, fill_at, local);
@@ -585,8 +586,9 @@ fn crossing(
     let there: Vec<f64> = there_raw.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
 
     // One step further out on each side, when that pixel still belongs to the
-    // same region; otherwise fall back to the near sample.
-    let outward = |from: &[Pixel], towards: &[Pixel], want: i32, near: &[f64]| -> Vec<f64> {
+    // same region: the sample read there, and whether it was usable (the
+    // caller falls back to the near sample where it was not).
+    let outward = |from: &[Pixel], towards: &[Pixel], want: i32| -> (Vec<f64>, Vec<bool>) {
         let mut pix = Vec::with_capacity(n);
         let mut valid = Vec::with_capacity(n);
         for k in 0..n {
@@ -599,13 +601,22 @@ fn crossing(
             pix.push(if ok { (r as usize, c as usize) } else { from[k] });
         }
         let cov = coverage(rgb, alpha, &pix, a, b, fill_at, local);
-        (0..n).map(|k| if valid[k] && cov[k].is_finite() { cov[k] } else { near[k] }).collect()
+        let ok: Vec<bool> = (0..n).map(|k| valid[k] && cov[k].is_finite()).collect();
+        (cov, ok)
     };
-    let before = outward(p_in, p_out, a, &here);
-    let after = outward(p_out, p_in, b, &there);
+    let (outer_in, ok_in) = outward(p_in, p_out, a);
+    let (outer_out, ok_out) = outward(p_out, p_in, b);
+    let before: Vec<f64> = (0..n).map(|k| if ok_in[k] { outer_in[k] } else { here[k] }).collect();
+    let after: Vec<f64> = (0..n).map(|k| if ok_out[k] { outer_out[k] } else { there[k] }).collect();
+    // How much coverage drops from the pixel before the label edge to the pixel
+    // after it, three pixels apart: the edge's softness (`soften`). A sample
+    // that fell back to its neighbour says nothing about that.
+    let drop: Vec<f64> = (0..n)
+        .map(|k| if ok_in[k] && ok_out[k] { outer_in[k] - outer_out[k] } else { f64::NAN })
+        .collect();
 
     let at = [-1.0, 0.0, 1.0, 2.0];
-    (0..n)
+    let (placed, side): (Vec<f64>, Vec<i8>) = (0..n)
         .map(|k| {
             let level = [before[k], here[k], there[k], after[k]];
             // Of the crossings on offer, the one nearest the label edge wins.
@@ -643,7 +654,90 @@ fn crossing(
             };
             (placed, side)
         })
-        .unzip()
+        .unzip();
+    (placed, side, drop)
+}
+
+// --- soft edges ----------------------------------------------------------------
+//
+// An edge's blur width is read from how far coverage drops across the three
+// pixels the placement samples: a crisp anti-aliased edge drops the whole way,
+// a Gaussian ramp of σ px drops erf(1.5 / (σ√2)), which SOFT_WIDTH / drop −
+// SOFT_BIAS inverts within 8 % for σ between 1 and 8 px. Across a soft edge the
+// samples seldom cross a half, every vertex falls to the lattice edge and the
+// arc is the label staircase; the edge has no position finer than its blur, so
+// the vertices are smoothed along the arc by a Gaussian of that width, from
+// SOFT_SIGMA up and capped at SOFT_SIGMA_MAX. See the Python for the survey.
+pub const SOFT_WIDTH: f64 = 1.2;
+pub const SOFT_BIAS: f64 = 0.35;
+pub const SOFT_SIGMA: f64 = 1.0;
+pub const SOFT_SIGMA_MAX: f64 = 4.0;
+pub const SOFT_REACH: f64 = 3.0;
+
+/// The smoothing sigma an arc's coverage drops ask for, 0 for a crisp edge:
+/// the median drop over the vertices whose two outer samples were both read
+/// (an even count averages the two middle values, as numpy does).
+fn softness(drop: &[f64]) -> f64 {
+    let mut drops: Vec<f64> = drop.iter().copied().filter(|v| v.is_finite()).collect();
+    if drops.is_empty() {
+        return 0.0;
+    }
+    drops.sort_by(|p, q| p.total_cmp(q));
+    let n = drops.len();
+    let d = if n % 2 == 1 { drops[n / 2] } else { (drops[n / 2 - 1] + drops[n / 2]) / 2.0 };
+    if d <= 0.0 {
+        return SOFT_SIGMA_MAX;
+    }
+    let sigma = SOFT_WIDTH / d - SOFT_BIAS;
+    if sigma < SOFT_SIGMA {
+        return 0.0;
+    }
+    sigma.min(SOFT_SIGMA_MAX)
+}
+
+/// Gaussian smoothing of the vertices along the arc, by index. An open arc
+/// keeps its two ends; where the kernel runs off an end it is renormalised
+/// over what is there. `topology._soften` in the Python.
+fn soften(pts: &[P], sigma: f64, closed: bool) -> Vec<P> {
+    let n = pts.len();
+    if sigma <= 0.0 || n < 3 {
+        return pts.to_vec();
+    }
+    let r = (SOFT_REACH * sigma).ceil() as i64;
+    if (n as i64) < 2 * r + 1 {
+        // A chain shorter than the kernel is a feature the size of the blur,
+        // not an edge with a position along it: see the Python.
+        return pts.to_vec();
+    }
+    let w: Vec<f64> = (-r..=r).map(|k| (-0.5 * (k as f64 / sigma).powi(2)).exp()).collect();
+    let mut out = pts.to_vec();
+    if closed {
+        let wsum: f64 = w.iter().sum();
+        for i in 0..n {
+            let mut acc = [0.0, 0.0];
+            for (j, k) in (-r..=r).enumerate() {
+                let p = pts[((i as i64 + k).rem_euclid(n as i64)) as usize];
+                acc[0] += p[0] * w[j];
+                acc[1] += p[1] * w[j];
+            }
+            out[i] = [acc[0] / wsum, acc[1] / wsum];
+        }
+        return out;
+    }
+    for i in 1..n - 1 {
+        let lo = (i as i64 - r).max(0);
+        let hi = (i as i64 + r).min(n as i64 - 1);
+        let mut acc = [0.0, 0.0];
+        let mut wsum = 0.0;
+        for j in lo..=hi {
+            let wk = w[(j - i as i64 + r) as usize];
+            acc[0] += pts[j as usize][0] * wk;
+            acc[1] += pts[j as usize][1] * wk;
+            wsum += wk;
+        }
+        out[i] = [acc[0] / wsum, acc[1] / wsum];
+    }
+    out
 }
 
 /// A vertex whose four samples all sit on one side of a half has no crossing
@@ -704,10 +798,12 @@ fn place(
                     p_out.push(pa);
                 }
             }
-            let (mut t, mut side) = if a != 0 && b != 0 {
-                crossing(padded, rgb, alpha, &p_in, &p_out, a, b, fill_at, local)
+            let (mut t, mut side, mut sigma) = if a != 0 && b != 0 {
+                let (t, side, drop) = crossing(padded, rgb, alpha, &p_in, &p_out, a, b, fill_at, local);
+                let sigma = softness(&drop);
+                (t, side, sigma)
             } else {
-                (vec![0.5; ch.edges.len()], vec![0i8; ch.edges.len()])
+                (vec![0.5; ch.edges.len()], vec![0i8; ch.edges.len()], 0.0)
             };
             // Between two bands of one posterised ramp the edge is where the
             // ramp crosses their level, not where colour says: see the Python.
@@ -718,6 +814,7 @@ fn place(
                     if let Some(s) = lv.crossing(a, b, c_in, c_out).filter(|s| s.is_finite()) {
                         t[k] = s;
                         side[k] = 0;
+                        sigma = 0.0; // placed on the ramp's level line exactly
                     }
                 }
             }
@@ -747,6 +844,7 @@ fn place(
             if !handed_back.is_empty() {
                 pts = settle(&pts, &crowded);
             }
+            pts = soften(&pts, sigma, ch.n0.is_none());
             (pts, normal, crowded)
         })
         .collect()
@@ -2550,6 +2648,11 @@ fn snap_axis(mut segments: Vec<Segment>, snap_deg: f64) -> Vec<Segment> {
         } else {
             (p0[axis] + p1[axis]) / 2.0
         };
+        // a line that would have to move an end further than the placement
+        // knows the edge is not on the axis (`curves::SNAP_END_MOVE`)
+        if (p0[axis] - value).abs().max((p1[axis] - value).abs()) > SNAP_END_MOVE {
+            continue;
+        }
         let (mut a, mut b) = (p0, p1);
         if !head {
             a[axis] = value;
@@ -2701,10 +2804,210 @@ pub fn build_opt(
         crate::regularity::regularize(&mut lists, params.snap_axis_deg);
     }
 
+    // A ring that is a circle or a rectangle draws as that primitive: its
+    // arcs, and the neighbours that share them, carry the primitive's outline.
+    let mut whole = Boundary { arcs, padded, edge_arc, later_is_b: Vec::new(), rank: None };
+    imprint(&mut whole, params, &rect_arcs);
+    let Boundary { mut arcs, padded, edge_arc, .. } = whole;
+    timer.lap("topology: imprint");
+
     let later_is_b = bleed_arcs(&mut arcs, params, rank, BLEED, &underlay.see_through, &underlay.painted_by);
     timer.lap("topology: bleed");
 
     Boundary { arcs, padded, edge_arc, later_is_b, rank: rank.cloned() }
+}
+
+/// px; an axis-aligned line this close to a pixel boundary sits on it.
+const GRID_TOL: f64 = 0.02;
+
+/// Is every segment an axis-aligned line lying on a pixel boundary? Such an
+/// edge anti-aliases to nothing and needs no bleed (`topology._on_grid`).
+fn on_grid(segments: &[Segment]) -> bool {
+    if segments.is_empty() {
+        return false;
+    }
+    segments.iter().all(|seg| match seg {
+        Segment::Line { p0, p1 } => {
+            let (dx, dy) = ((p1[0] - p0[0]).abs(), (p1[1] - p0[1]).abs());
+            if dx <= GRID_TOL && dy > GRID_TOL {
+                (p0[0] - p0[0].round()).abs() <= GRID_TOL
+            } else if dy <= GRID_TOL && dx > GRID_TOL {
+                (p0[1] - p0[1].round()).abs() <= GRID_TOL
+            } else {
+                false
+            }
+        }
+        _ => false,
+    })
+}
+
+/// The whole-shape primitive `curves::fit_shape` would read a ring as, when
+/// it is one whose outline can be written back (an ellipse is not).
+fn whole_primitive(poly: &[P], params: &CurveParams) -> Option<Shape> {
+    let corners = crate::curves::find_corners(poly, params.corner_threshold);
+    if corners.is_empty() && poly.len() >= 8 {
+        let (circle, dev) = crate::curves::fit_circle(poly);
+        if let Shape::Circle { r, .. } = circle {
+            if dev <= params.tol && r > 1.0 {
+                return Some(circle);
+            }
+        }
+    }
+    if let Some(rect) = crate::curves::try_rect(poly, &corners, params) {
+        return Some(rect);
+    }
+    if corners.is_empty() {
+        return crate::curves::try_rounded_rect(poly, params);
+    }
+    None
+}
+
+fn seg_p0(s: &Segment) -> P {
+    match s {
+        Segment::Line { p0, .. } | Segment::Cubic { p0, .. } | Segment::Arc { p0, .. } => *p0,
+    }
+}
+
+fn seg_p1(s: &Segment) -> P {
+    match s {
+        Segment::Line { p1, .. } | Segment::Cubic { p1, .. } | Segment::Arc { p1, .. } => *p1,
+    }
+}
+
+fn set_p0(s: &mut Segment, q: P) {
+    match s {
+        Segment::Line { p0, .. } | Segment::Cubic { p0, .. } | Segment::Arc { p0, .. } => *p0 = q,
+    }
+}
+
+fn set_p1(s: &mut Segment, q: P) {
+    match s {
+        Segment::Line { p1, .. } | Segment::Cubic { p1, .. } | Segment::Arc { p1, .. } => *p1 = q,
+    }
+}
+
+fn dist2p(a: P, b: P) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+/// The primitive's outline from the point nearest e0 to the point nearest e1,
+/// the way round that passes nearest `mid`; and those two points
+/// (`topology._outline_between`).
+/// The outline position a node goes to: its nearest point, or a sharp corner
+/// within `tol` of it (`topology._onto_rect`, which says why).
+fn onto_rect(m: &crate::rects::Model, e: P, tol: f64) -> f64 {
+    let (s, _) = crate::rects::project(m, e);
+    let corners = [[m.x0, m.y0], [m.x1, m.y0], [m.x1, m.y1], [m.x0, m.y1]];
+    for (k, c) in corners.iter().enumerate() {
+        if m.r[k] <= 1e-9 && dist2p(e, *c) <= tol {
+            return crate::rects::project(m, *c).0;
+        }
+    }
+    s
+}
+
+fn outline_between(shape: &Shape, e0: P, e1: P, mid: P, tol: f64) -> Option<(Vec<Segment>, P, P)> {
+    match shape {
+        Shape::Circle { cx, cy, r } => {
+            let c = [*cx, *cy];
+            let onto = |e: P| -> P {
+                let d = [e[0] - c[0], e[1] - c[1]];
+                let n = d[0].hypot(d[1]);
+                if n > 1e-9 { [c[0] + d[0] * (r / n), c[1] + d[1] * (r / n)] } else { [c[0] + r, c[1]] }
+            };
+            let (q0, q1) = (onto(e0), onto(e1));
+            let ang = |q: P| (q[1] - c[1]).atan2(q[0] - c[0]);
+            let (a0, a1, am) = (ang(q0), ang(q1), ang(mid));
+            let two_pi = 2.0 * std::f64::consts::PI;
+            let span = (a1 - a0).rem_euclid(two_pi);
+            let inside = (am - a0).rem_euclid(two_pi) < span;
+            let seg = if inside {
+                Segment::Arc { p0: q0, p1: q1, r: *r, large: span > std::f64::consts::PI, sweep: true }
+            } else {
+                let span = two_pi - span;
+                Segment::Arc { p0: q0, p1: q1, r: *r, large: span > std::f64::consts::PI, sweep: false }
+            };
+            Some((vec![seg], q0, q1))
+        }
+        Shape::Rect { x, y, w, h } | Shape::RoundedRect { x, y, w, h, .. } => {
+            let rx = if let Shape::RoundedRect { rx, .. } = shape { *rx } else { 0.0 };
+            let m = crate::rects::Model { x0: *x, y0: *y, x1: x + w, y1: y + h, r: [rx; 4], votes: [0.0; 4], gaps: [Vec::new(), Vec::new(), Vec::new(), Vec::new()] };
+            let total = crate::rects::perimeter(&m);
+            let s0 = onto_rect(&m, e0, tol);
+            let s1 = onto_rect(&m, e1, tol);
+            let (q0, q1) = (crate::rects::point_at(&m, s0), crate::rects::point_at(&m, s1));
+            let fwd = (s1 - s0).rem_euclid(total);
+            let back = (s0 - s1).rem_euclid(total);
+            let m_fwd = crate::rects::point_at(&m, s0 + 0.5 * fwd);
+            let m_back = crate::rects::point_at(&m, s1 + 0.5 * back);
+            let mut segs = if dist2p(m_fwd, mid) <= dist2p(m_back, mid) {
+                crate::rects::subpath(&m, s0, s1, false)
+            } else {
+                reverse_segments(&crate::rects::subpath(&m, s1, s0, false))
+            };
+            if let Some(first) = segs.first_mut() {
+                set_p0(first, q0);
+            }
+            if let Some(last) = segs.last_mut() {
+                set_p1(last, q1);
+            }
+            Some((segs, q0, q1))
+        }
+        _ => None,
+    }
+}
+
+/// Write every whole-shape primitive back into the arcs of its ring
+/// (`topology._imprint`, which says why). Returns the rings imprinted.
+pub fn imprint(bnd: &mut Boundary, params: &CurveParams, skip: &std::collections::HashSet<usize>) -> usize {
+    let mut labels: Vec<i32> = bnd.padded.data.iter().copied().filter(|v| *v != 0).collect();
+    labels.sort_unstable();
+    labels.dedup();
+    let mut done = 0usize;
+    for lab in labels {
+        let mut one = std::collections::HashSet::new();
+        one.insert(lab);
+        let rings = bnd.rings(&one);
+        if rings.len() != 1 {
+            continue;
+        }
+        let ring = &rings[0];
+        if ring.iter().any(|(idx, _)| skip.contains(idx)) || (ring.len() == 1 && bnd.arcs[ring[0].0].closed()) {
+            continue;
+        }
+        if ring.iter().any(|(idx, _)| bnd.arcs[*idx].segments.is_empty() || bnd.arcs[*idx].closed()) {
+            continue;
+        }
+        let Some(shape) = whole_primitive(&bnd.polyline(ring), params) else { continue };
+        let mut plan: Vec<(usize, Vec<Segment>, P, P, P, P)> = Vec::new();
+        let mut ok = true;
+        for (idx, _rev) in ring {
+            let arc = &bnd.arcs[*idx];
+            let e0 = seg_p0(&arc.segments[0]);
+            let e1 = seg_p1(&arc.segments[arc.segments.len() - 1]);
+            let mid = arc.pts[arc.pts.len() / 2];
+            match outline_between(&shape, e0, e1, mid, params.tol) {
+                Some((segs, q0, q1)) if !segs.is_empty() && dist2p(q0, e0).max(dist2p(q1, e1)) <= params.tol => {
+                    plan.push((*idx, segs, e0, e1, q0, q1));
+                }
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok || plan.is_empty() {
+            continue;
+        }
+        let ring_arcs: std::collections::HashSet<usize> = plan.iter().map(|p| p.0).collect();
+        for (idx, segs, e0, e1, q0, q1) in plan {
+            rectify::move_node(&mut bnd.arcs, e0, q0, &ring_arcs);
+            rectify::move_node(&mut bnd.arcs, e1, q1, &ring_arcs);
+            bnd.arcs[idx].segments = segs;
+        }
+        done += 1;
+    }
+    done
 }
 
 /// Closed rings of directed lattice edges with `inside` always on the left.
@@ -2868,6 +3171,25 @@ impl Boundary {
     /// shape runs past the node, under the later ones), and a gap between two
     /// pieces (an arc too short to carry both its nodes) is bridged with a
     /// line. See the Python `Boundary.segments`.
+    /// Does any arc of the ring reach under a neighbour painted later? Then
+    /// the shape's drawn outline (`segments`) is not its fitted one, and a
+    /// primitive drawn in its place needs that bled outline beneath it.
+    pub fn bleeds(&self, ring: &[(usize, bool)], member: Option<&std::collections::HashSet<i32>>) -> bool {
+        let rank_of = |lab: i32| -> i64 { self.rank.as_ref().and_then(|r| r.get(&lab)).map_or(-1, |v| *v as i64) };
+        let own: Option<i64> = match member {
+            Some(m) if !m.is_empty() && self.rank.is_some() => m.iter().map(|x| rank_of(*x)).min(),
+            _ => None,
+        };
+        let Some(member) = member else { return false };
+        ring.iter().any(|(idx, _)| {
+            let arc = &self.arcs[*idx];
+            !arc.under.is_empty()
+                && !arc.under_into.is_some_and(|u| member.contains(&u))
+                && own.is_none_or(|o| arc.under_into.map_or(-1, rank_of) > o)
+                && !on_grid(&arc.segments)
+        })
+    }
+
     pub fn segments(&self, ring: &[(usize, bool)], member: Option<&std::collections::HashSet<i32>>) -> Vec<Segment> {
         let rank_of = |lab: i32| -> i64 { self.rank.as_ref().and_then(|r| r.get(&lab)).map_or(-1, |v| *v as i64) };
         let own: Option<i64> = match member {

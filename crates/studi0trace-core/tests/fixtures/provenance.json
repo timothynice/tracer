@@ -1,0 +1,214 @@
+{
+ "exporters": {
+  "api": {
+   "commit": "415e0cb50a3fb3bc79179de79b758bf7ae1a7894",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "auto": {
+   "commit": "415e0cb50a3fb3bc79179de79b758bf7ae1a7894",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "color": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "drawing": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "edges": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "geometry": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "holes": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "intake": {
+   "commit": "415e0cb50a3fb3bc79179de79b758bf7ae1a7894",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "presets": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "render": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "resample": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "schema": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "scorecard": {
+   "commit": "415e0cb50a3fb3bc79179de79b758bf7ae1a7894",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  },
+  "svg": {
+   "commit": "4aa4307ffaef8fc7f2577eb06b85e35805105ecf",
+   "environment": {
+    "Pillow": "12.3.0",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "python": "3.13.3",
+    "resvg-py": "0.5.0",
+    "scikit-image": "0.26.0",
+    "scipy": "1.18.1",
+    "system": "Darwin",
+    "vexel_backend": "rust"
+   },
+   "sources_differ_from_commit": false
+  }
+ }
+}

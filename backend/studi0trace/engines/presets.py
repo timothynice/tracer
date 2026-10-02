@@ -7,6 +7,11 @@ preset and keeps the cleanest result that is as faithful as the best
 (`studi0trace.auto`). Flat & poster and Cut file are never candidates: one is
 a style, the other an output format, and only the user can want those.
 
+The bundles themselves are `presets.json` next to this file: one file that
+this module and the Rust core (`crates/studi0trace-core`, which embeds it and
+`preset_details.json`) both read, so change it there and re-export the core's
+fixtures (`tools.export_core_fixtures`).
+
 The `detail` line of every preset is measured, never written by hand: it is
 read from `preset_details.json` next to this file, which one command writes
 from a run over the whole bench corpus with the engine as built:
@@ -51,69 +56,13 @@ def _measured() -> dict[str, str]:
 _DETAIL = _measured()
 _UNMEASURED = "not measured yet"
 
-_PRESETS: list[dict[str, Any]] = [
-    dict(
-        id="auto",
-        label="Auto",
-        kind="auto",
-        # "{candidates}" is filled from the candidates' own labels below, so it cannot drift from them.
-        description="Traces your image with {candidates}, and keeps the cleanest result that is as faithful "
-                    "as the best. Start here.",
-        sample="auto.png",
-        params={},
-    ),
-    dict(
-        id="balanced",
-        label="Balanced",
-        auto_candidate=True,
-        description="Gradients, shadows, strokes and overlaps all reconstructed. The most faithful all-rounder.",
-        sample="balanced.png",
-        params={},
-    ),
-    dict(
-        id="logo",
-        label="Logo & icon",
-        auto_candidate=True,
-        description="Merges harder and fits whole shapes, for a small, clean, hand-editable file. Best where "
-                    "the mark matters more than the last half-pixel.",
-        sample="logo.png",
-        params={"detail": 10.0, "min_region": 16, "curve_tolerance": 0.6, "corner_threshold": 70.0},
-    ),
-    dict(
-        id="detailed",
-        label="Detailed illustration",
-        auto_candidate=True,
-        description="Keeps subtler colour steps and more gradient stops, and fits a little tighter. For "
-                    "illustration where soft shading matters.",
-        sample="detailed.png",
-        params={"detail": 3.5, "min_region": 6, "max_stops": 6, "curve_tolerance": 0.4},
-    ),
-    dict(
-        id="dense",
-        label="Simplified",
-        auto_candidate=True,
-        description="Fewest shapes; the cleanest on busy art and soft shadows. Skips stroke, overlap and "
-                    "shadow recovery and merges hard.",
-        sample="dense.png",
-        params={"detail": 14.0, "min_region": 24, "strokes": False, "overlaps": False, "shadows": False},
-    ),
-    dict(
-        id="flat",
-        label="Flat & poster",
-        description="A style choice, not a quality setting: solid colours only, no gradients and no filters. "
-                    "Also the safest file for an old importer. Auto never picks it.",
-        sample="flat.png",
-        params={"gradients": False, "shadows": False, "detail": 14.0, "min_region": 16},
-    ),
-    dict(
-        id="cutfile",
-        label="Cut file",
-        description="An output format, not a quality setting: shapes that never overlap and no filters, for "
-                    "plotters and cutting machines. Auto never picks it.",
-        sample="cutfile.png",
-        params={"shadows": False, "strokes": False, "layering": "cutout", "detail": 10.0},
-    ),
-]
+# The bundles themselves are data, not code: `presets.json` is read here and embedded by the
+# Rust core (`crates/studi0trace-core/src/presets.rs`), so the two cannot list different presets.
+# "{candidates}" in Auto's description is filled from the candidates' own labels below, so it
+# cannot drift from them.
+BUNDLES_FILE = Path(__file__).with_name("presets.json")
+_PRESETS: list[dict[str, Any]] = json.loads(BUNDLES_FILE.read_text(encoding="utf-8"))
+
 
 def _and(words: list[str]) -> str:
     return words[0] if len(words) < 2 else f"{', '.join(words[:-1])} and {words[-1]}"

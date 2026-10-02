@@ -138,23 +138,36 @@ class Linear:
 
 @dataclass(frozen=True)
 class Radial:
+    """A radial gradient; with a focal point (`fx`, `fy`) inside the circle it
+    is SVG's focal radial: the colour at P is the stop at the t for which P
+    lies on the circle of radius t·r centred at F + t·(C − F). A lit sphere's
+    highlight sits off its centre, and a concentric radial fitted to one puts
+    its brightest ring in the wrong place."""
+
     cx: float
     cy: float
     r: float
     stops: list[Stop] = field(default_factory=list)
+    fx: float | None = None
+    fy: float | None = None
 
     def param(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
         """The ramp position t at (xs, ys), unclamped: distance from the centre over r."""
-        return np.asarray(np.hypot(xs - self.cx, ys - self.cy) / max(self.r, 1e-9), dtype=float).ravel()
+        xs = np.asarray(xs, dtype=float).ravel()
+        ys = np.asarray(ys, dtype=float).ravel()
+        if self.fx is None or self.fy is None:
+            return np.hypot(xs - self.cx, ys - self.cy) / max(self.r, 1e-9)
+        return focal_param(xs, ys, self.cx, self.cy, self.fx, self.fy, self.r)
 
     def evaluate(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
         return _interp_stops(self.param(xs, ys), self.stops)
 
     def svg(self, gid: str, precision: int) -> tuple[str, str]:
         p = precision
+        focal = "" if self.fx is None or self.fy is None else f' fx="{_fmt(self.fx, p)}" fy="{_fmt(self.fy, p)}"'
         defs = (
             f'<radialGradient id="{gid}" gradientUnits="userSpaceOnUse" '
-            f'cx="{_fmt(self.cx, p)}" cy="{_fmt(self.cy, p)}" r="{_fmt(self.r, p)}">'
+            f'cx="{_fmt(self.cx, p)}" cy="{_fmt(self.cy, p)}" r="{_fmt(self.r, p)}"{focal}>'
             f"{_stops_svg(self.stops, p)}</radialGradient>"
         )
         return defs, f'fill="url(#{gid})"'
@@ -165,6 +178,28 @@ class Radial:
 
 
 Fill = Solid | Linear | Radial
+
+
+def focal_param(xs: np.ndarray, ys: np.ndarray, cx: float, cy: float, fx: float, fy: float, r: float) -> np.ndarray:
+    """SVG's focal radial parameter: with Q = P − F and D = C − F, the t with
+    |Q − t·D| = t·r, the positive root of (r² − |D|²)·t² − 2(Q·D)·t − |Q|² = 0
+    (the focal point is held inside the circle, so r² − |D|² > 0)."""
+    qx, qy = xs - fx, ys - fy
+    dx, dy = cx - fx, cy - fy
+    a = max(r * r - (dx * dx + dy * dy), 1e-9)
+    qd = qx * dx + qy * dy
+    return (np.sqrt(qd * qd + a * (qx * qx + qy * qy)) - qd) / a
+
+
+# A focal radial is searched only when the concentric one leaves more than this
+# many tolerances of error, over regions of at least FOCAL_MIN_PIXELS, and has
+# to beat it by FOCAL_MARGIN tolerances: four free parameters find a little
+# improvement on any region. The focal point stays within FOCAL_REACH of the
+# radius from the centre, where the parameter is well conditioned.
+FOCAL_MIN_RMS = 0.5
+FOCAL_MIN_PIXELS = 400
+FOCAL_MARGIN = 0.25
+FOCAL_REACH = 0.85
 
 
 # --- fitting ------------------------------------------------------------------------
@@ -392,6 +427,41 @@ def fit_fill(xs: np.ndarray, ys: np.ndarray, rgba255: np.ndarray, params: FitPar
                                         options={"maxiter": 80, "xatol": 0.05, "fatol": 0.01})
                 rms_rad, rad = radial_for(res.x)
                 candidates.append((rms_rad, rad))
+
+                # --- focal radial: the same search with the focal point free ----
+                if rms_rad > FOCAL_MIN_RMS * params.tol and X.size >= FOCAL_MIN_PIXELS:
+                    span = max(span_x, span_y, 1.0)
+
+                    def focal_objective(v: np.ndarray) -> float:
+                        r_all = np.hypot(xr - v[0], yr - v[1])
+                        rmax = max(float(r_all.max()), 1e-9)
+                        if np.hypot(v[2] - v[0], v[3] - v[1]) > FOCAL_REACH * rmax:
+                            return np.inf
+                        tn = focal_param(xr, yr, v[0], v[1], v[2], v[3], rmax)
+                        tn = tn / max(float(tn.max()), 1e-9)
+                        basis = np.stack([np.ones_like(tn), tn, tn * tn, tn**3], axis=1)
+                        coef, *_ = np.linalg.lstsq(basis * sw, C * sw, rcond=None)
+                        return _rms(basis @ coef, C, W)
+
+                    def focal_for(v: np.ndarray) -> tuple[float, Radial]:
+                        r_all = np.hypot(xr - v[0], yr - v[1])
+                        rmax = max(float(r_all.max()), 1e-9)
+                        t_all = focal_param(xr, yr, v[0], v[1], v[2], v[3], rmax)
+                        t_core = t_all if full is None else focal_param(x - gx0, y - gy0, v[0], v[1], v[2], v[3], rmax)
+                        chk = None if full is None else (t_all, C, W)
+                        stops = ramp_fit(t_core, c, w, params.max_stops, params.tol, span=rmax, check=chk)
+                        foc = Radial(cx=float(v[0] + gx0), cy=float(v[1] + gy0), r=rmax, stops=stops,
+                                     fx=float(v[2] + gx0), fy=float(v[3] + gy0))
+                        return _rms(foc.evaluate(x, y), c, w), foc
+
+                    x0 = np.array([res.x[0], res.x[1], res.x[0], res.x[1]])
+                    simplex = np.vstack([x0] + [x0 + 0.1 * span * np.eye(4)[i] for i in range(4)])
+                    resf = optimize.minimize(focal_objective, x0, method="Nelder-Mead",
+                                             options={"maxiter": 200, "xatol": 0.05, "fatol": 0.01, "initial_simplex": simplex})
+                    if np.isfinite(resf.fun):
+                        rms_foc, foc = focal_for(resf.x)
+                        if rms_foc < rms_rad - FOCAL_MARGIN * params.tol:
+                            candidates.append((rms_foc, foc))
 
     # --- choose: a gradient must buy a real improvement over solid ---------------------
     penalty = {"solid": 0.0, "linear": 0.35 * params.tol, "radial": 0.5 * params.tol}

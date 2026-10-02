@@ -1,0 +1,82 @@
+[
+  {
+    "id": "auto",
+    "label": "Auto",
+    "kind": "auto",
+    "description": "Traces your image with {candidates}, and keeps the cleanest result that is as faithful as the best. Start here.",
+    "sample": "auto.png",
+    "params": {}
+  },
+  {
+    "id": "balanced",
+    "label": "Balanced",
+    "auto_candidate": true,
+    "description": "Gradients, shadows, strokes and overlaps all reconstructed. The most faithful all-rounder.",
+    "sample": "balanced.png",
+    "params": {}
+  },
+  {
+    "id": "logo",
+    "label": "Logo & icon",
+    "auto_candidate": true,
+    "description": "Merges harder and fits whole shapes, for a small, clean, hand-editable file. Best where the mark matters more than the last half-pixel.",
+    "sample": "logo.png",
+    "params": {
+      "detail": 10.0,
+      "min_region": 16,
+      "curve_tolerance": 0.6,
+      "corner_threshold": 70.0
+    }
+  },
+  {
+    "id": "detailed",
+    "label": "Detailed illustration",
+    "auto_candidate": true,
+    "description": "Keeps subtler colour steps and more gradient stops, and fits a little tighter. For illustration where soft shading matters.",
+    "sample": "detailed.png",
+    "params": {
+      "detail": 3.5,
+      "min_region": 6,
+      "max_stops": 6,
+      "curve_tolerance": 0.4
+    }
+  },
+  {
+    "id": "dense",
+    "label": "Simplified",
+    "auto_candidate": true,
+    "description": "Fewest shapes; the cleanest on busy art and soft shadows. Skips stroke, overlap and shadow recovery and merges hard.",
+    "sample": "dense.png",
+    "params": {
+      "detail": 14.0,
+      "min_region": 24,
+      "strokes": false,
+      "overlaps": false,
+      "shadows": false
+    }
+  },
+  {
+    "id": "flat",
+    "label": "Flat & poster",
+    "description": "A style choice, not a quality setting: solid colours only, no gradients and no filters. Also the safest file for an old importer. Auto never picks it.",
+    "sample": "flat.png",
+    "params": {
+      "gradients": false,
+      "shadows": false,
+      "detail": 14.0,
+      "min_region": 16
+    }
+  },
+  {
+    "id": "cutfile",
+    "label": "Cut file",
+    "description": "An output format, not a quality setting: shapes that never overlap and no filters, for plotters and cutting machines. Auto never picks it.",
+    "sample": "cutfile.png",
+    "params": {
+      "shadows": false,
+      "strokes": false,
+      "layering": "cutout",
+      "detail": 10.0
+    }
+  }
+]

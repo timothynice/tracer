@@ -148,7 +148,11 @@ class Levels:
                 return out
             out[along] += (level - t) * float(d @ d) / float(d[along])
             return out
+        # a focal radial's level line is the circle of radius level·r centred
+        # at F + level·(C − F); a concentric one's is centred at C
         centre = np.array([ramp.cx, ramp.cy])
+        if ramp.fx is not None and ramp.fy is not None:
+            centre = np.array([ramp.fx + level * (ramp.cx - ramp.fx), ramp.fy + level * (ramp.cy - ramp.fy)])
         radius = level * ramp.r
         off = out - centre
         if along is None:

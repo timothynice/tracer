@@ -70,6 +70,30 @@ def test_radial_gradient_centre_and_fit():
     assert "<radialGradient" in defs
 
 
+def test_focal_radial_gradient_recovers_its_focal_point():
+    """A lit sphere's highlight sits off its centre: SVG's focal radial. The
+    concentric fit put the brightest ring in the wrong place (gradient/
+    radial-focal-512: ΔE 2.6 against VTracer's 1.5); with the focal point
+    free the fit recovers it and writes `fx`/`fy`."""
+    from studi0trace.engines.vexel.fills import focal_param
+
+    xs, ys = grid(96, 96)
+    t = np.clip(focal_param(xs, ys, 48.0, 48.0, 30.0, 32.0, 60.0), 0, 1)
+    col = opaque(np.stack([245 - 180 * t, 200 - 120 * t, 30 + 200 * t], axis=1))
+    fill = fit_fill(xs, ys, col, P)
+    assert isinstance(fill, Radial) and fill.fx is not None, fill
+    assert abs(fill.fx - 30.0) < 3.0 and abs(fill.fy - 32.0) < 3.0, (fill.fx, fill.fy)
+    assert np.sqrt(((fill.evaluate(xs, ys) - col) ** 2).mean()) < 5.0
+    defs, _ = fill.svg("g3", 2)
+    assert ' fx="' in defs and ' fy="' in defs, defs
+    # a concentric radial stays one: no focal point is written for it
+    r = np.hypot(xs - 48.0, ys - 48.0)
+    t = np.clip(r / 60.0, 0, 1)
+    col = opaque(np.stack([245 - 180 * t, 200 - 120 * t, 30 + 200 * t], axis=1))
+    fill = fit_fill(xs, ys, col, P)
+    assert isinstance(fill, Radial) and fill.fx is None, fill
+
+
 def test_alpha_ramp_becomes_stop_opacity():
     xs, ys = grid(64, 16)
     t = (xs - 0.5) / 63.0

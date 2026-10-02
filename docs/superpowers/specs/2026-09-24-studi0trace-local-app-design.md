@@ -13,7 +13,7 @@ The UI is refined afterwards, by hand, once the app runs locally.
 | Engines in the product | Vexel only | Potrace and VTracer stay only as optional bench adapters, so the published comparison can be re-run |
 | Mac shell | Tauri 2 | the engine is already Rust and links in-process; the existing React UI runs unchanged in the webview; a ~20–30 MB app instead of a 300 MB Python bundle |
 | Web version | the same Rust core compiled to WebAssembly, running in a Web Worker; a static site with no server | parity by construction (one engine, two targets), no hosting to run, images never leave the browser |
-| Distribution | signed with the maintainer's Developer ID and notarized in GitHub Actions; published on GitHub Releases; the app updates itself through Tauri's updater | since macOS 15 an unsigned app cannot be opened with right-click → Open; open source does not preclude signing, and anyone can still build unsigned from source |
+| Distribution | open source on GitHub, not the App Store: GitHub Actions builds the app and attaches it to a GitHub Release; **not signed or notarized** (decided 2026-09-30: no Developer ID); the app updates itself through Tauri's updater, which has its own minisign key pair and needs no Apple certificate | the app is free and open source, distributed through GitHub; anyone can also build it from source. The README tells users how to open an unsigned app (macOS 15 removed right-click → Open: System Settings → Privacy & Security → Open Anyway, or `xattr -dr com.apple.quarantine`) |
 
 ## Architecture
 
@@ -63,9 +63,9 @@ JSON shapes those calls return today, so the UI changes only at the transport.
    `parallel` feature, on for native, off for wasm); a Web Worker hosting `Core`; the `wasm`
    transport; the corpus traced natively and in wasm with SVG bytes compared; a static deploy
    (`render.yaml` reduced to the static site). Deliverable: the web version with no server.
-4. **Release and retirement**: GitHub Actions building a universal (arm64 + x86_64) app,
-   signing (Developer ID Application), notarizing (`notarytool`), stapling, publishing to
-   GitHub Releases with an updater manifest; third-party licence notices (`cargo about`);
+4. **Release and retirement**: GitHub Actions building a universal (arm64 + x86_64) app
+   (unsigned, no notarization: see Distribution above) and publishing it to GitHub Releases
+   with an updater manifest; third-party licence notices (`cargo about`);
    the FastAPI app, `Dockerfile`, the Potrace/VTracer runtime engines and the Python backend
    deploy removed; README and CONTRIBUTING rewritten for the app.
 
@@ -80,7 +80,9 @@ frontend is shared.
   served cross-origin isolated (COOP/COEP) with `wasm-bindgen-rayon`. Expect about twice the
   native time; Auto's four candidates may need a progress indicator.
 - **Renderer version.** The scorecard's numbers depend on the renderer; the Rust core pins the
-  `resvg` release that `resvg-py` 0.5.0 bundles, so the Python and Rust scorecards render alike.
+  `resvg` release that `resvg-py` 0.5.0 bundles (`=0.48.1`, over tiny-skia 0.12.0), so the Python
+  and Rust scorecards render alike. Bumping `resvg-py` means bumping the pin, re-exporting the
+  core's fixtures and running `diffcheck scorecard`.
 
 ## Open questions (none block plan 1)
 
