@@ -1,20 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AppShell } from "./components/AppShell";
-import { Canvas } from "./components/Canvas";
 import { EmptyState } from "./components/EmptyState";
 import { Inspector, InspectorOverlay } from "./components/Inspector";
 import { ParamPanel } from "./components/ParamPanel";
 import { Presets } from "./components/Presets";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
+import { Viewer, type ViewerHandle } from "./components/Viewer";
 import { useLayerInspector } from "./hooks/useLayerInspector";
 import { useWindowDrop } from "./hooks/useWindowDrop";
 import { specsFor } from "./lib/schema";
 import { applyTheme, watchSystemTheme } from "./lib/theme";
-import { DEFAULT_SETTINGS, platform, type OpenOutcome, type Settings } from "./platform";
+import { DEFAULT_SETTINGS, platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
 import { createLibrary, ENGINE, shownAnswer, type Catalog } from "./state/library";
 import { useLibrary } from "./state/useLibrary";
 
@@ -59,6 +59,9 @@ export default function App() {
   return <Workspace catalog={catalog} settings={settings} />;
 }
 
+const VIEW_KEY = "studi0trace.view";
+const MODES: ViewMode[] = ["split", "side", "overlay", "vector"];
+
 function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings }) {
   // one library for the window's life; the settings reach it as they change
   const lib = useMemo(() => createLibrary(platform, catalog, settings), [catalog]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -69,6 +72,19 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
   const [sidebar, setSidebar] = useState(true);
   const [inspectorPane, setInspectorPane] = useState(true);
   const [dragging, setDragging] = useState(false);
+  const [mode, setModeState] = useState<ViewMode>(() => {
+    const saved = localStorage.getItem(VIEW_KEY) as ViewMode | null;
+    return saved && MODES.includes(saved) ? saved : "split";
+  });
+  const setMode = useCallback((m: ViewMode) => {
+    setModeState(m);
+    try {
+      localStorage.setItem(VIEW_KEY, m);
+    } catch {
+      /* a remembered convenience, nothing more */
+    }
+  }, []);
+  const viewerRef = useRef<ViewerHandle>(null);
   const specs = useMemo(() => specsFor(catalog.engine), [catalog.engine]);
 
   const open = useCallback(
@@ -88,25 +104,25 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
 
   const layers = useLayerInspector(answer?.svg);
 
-  // ── the viewer (Task 9 replaces this with <Viewer>)
+  const busy = item?.job ? (item.job.phase === "queued" ? "Queued…" : item.job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
   const viewer = item ? (
-    <Canvas
+    <Viewer
+      ref={viewerRef}
       sourceUrl={item.image.previewUrl}
       svg={layers.exportSvg}
       width={item.image.width}
       height={item.image.height}
-      updating={!!item.job}
-      busyLabel={item.job?.phase === "queued" ? "Queued…" : item.job?.key === "auto" ? "Trying presets…" : "Tracing…"}
+      mode={mode}
+      onModeChange={setMode}
+      busy={busy}
       errorMessage={item.error?.message}
       onRetry={() => lib.generate(item.image.id)}
       display={{ points: layers.state.points, outlines: layers.state.outlines }}
       onDisplayChange={layers.patch}
+      layersOpen={layers.state.open}
+      onToggleLayers={() => layers.patch({ open: !layers.state.open })}
       marks={layers.doc ? (scale) => <InspectorOverlay doc={layers.doc!} state={layers.liveState} scale={scale} /> : undefined}
-      panel={
-        layers.doc && layers.state.open ? (
-          <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} />
-        ) : undefined
-      }
+      panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} /> : undefined}
     />
   ) : (
     <EmptyState onOpen={() => void open(platform.pickImages())} onSample={(f) => openFiles([f])} />

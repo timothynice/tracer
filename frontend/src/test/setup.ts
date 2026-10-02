@@ -34,3 +34,17 @@ if (!URL.createObjectURL) {
   URL.createObjectURL = () => "blob:mock";
   URL.revokeObjectURL = () => {};
 }
+// jsdom 26 has no PointerEvent, so testing-library falls back to a bare Event and drops button, clientX and the
+// rest of the init. A MouseEvent that also carries pointerId is enough for the components' handlers.
+if (!("PointerEvent" in window)) {
+  class PointerEventPolyfill extends MouseEvent {
+    readonly pointerId: number;
+    readonly pointerType: string;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 0;
+      this.pointerType = init.pointerType ?? "mouse";
+    }
+  }
+  (window as unknown as { PointerEvent: unknown }).PointerEvent = PointerEventPolyfill;
+}
