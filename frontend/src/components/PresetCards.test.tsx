@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AutoResult } from "@/lib/api";
+import type { AutoResult, Preset } from "@/lib/api";
 import { VEXEL, VEXEL_PRESETS } from "@/test/server";
 import { activePreset, autoChoice, firstSentence, PresetCards } from "./PresetCards";
 
@@ -16,7 +17,26 @@ const auto: AutoResult = {
   ],
 };
 
+function Controlled({ onPick }: { onPick: (p: Preset) => void }) {
+  const [active, setActive] = useState("auto");
+  return <PresetCards presets={VEXEL_PRESETS} defaults={defaults} values={defaults} active={active} auto={null} autoRunning={false} onPick={(p) => { onPick(p); setActive(p.id); }} />;
+}
+
 describe("PresetCards", () => {
+  it("the arrow keys carry the focus with the pick, so a second press goes on to the next card", () => {
+    const onPick = vi.fn();
+    render(<Controlled onPick={onPick} />);
+    const auto = screen.getByRole("radio", { name: /^Auto/ });
+    auto.focus();
+    fireEvent.keyDown(auto, { key: "ArrowDown" });
+    expect(onPick).toHaveBeenLastCalledWith(VEXEL_PRESETS[1]);
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /^Balanced/ }));
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(onPick).toHaveBeenLastCalledWith(VEXEL_PRESETS[2]);
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /^Logo & icon/ }));
+    expect(document.activeElement).toHaveAttribute("aria-checked", "true");
+  });
+
   it("is a radio group, Auto first, the styles Auto never picks folded away", () => {
     render(<PresetCards presets={VEXEL_PRESETS} defaults={defaults} values={defaults} active="auto" auto={null} autoRunning={false} onPick={vi.fn()} />);
     const group = screen.getByRole("radiogroup", { name: "Preset" });

@@ -1,5 +1,5 @@
 import { ChevronRight, Wand2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { Preset } from "@/lib/api";
 import { formatBytes, formatInt, formatMs } from "@/lib/format";
@@ -24,6 +24,9 @@ export interface VectorizePanelProps {
 
 export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onParam, onGenerate, onCancel, exportMenu }: VectorizePanelProps) {
   const [advanced, setAdvanced] = useState(invalidField !== null);
+  useEffect(() => {
+    if (invalidField !== null) setAdvanced(true); // a field the server refused is in there
+  }, [invalidField]);
   const answer = shownAnswer(item);
   const candidates = catalog.presets.filter((p) => p.auto_candidate).length;
   return (

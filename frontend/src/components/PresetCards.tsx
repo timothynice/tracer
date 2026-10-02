@@ -1,5 +1,5 @@
 import { ChevronRight, Circle, Layers, LayoutGrid, Mountain, Scissors, Shapes, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 
 import type { AutoResult, ParamValues, Preset } from "@/lib/api";
 
@@ -42,6 +42,7 @@ export interface PresetCardsProps {
 
 export function PresetCards({ presets, defaults, values, active, auto, autoRunning, onPick, disabled }: PresetCardsProps) {
   const [more, setMore] = useState(false);
+  const cards = useRef(new Map<string, HTMLElement>());
   const on = active ?? activePreset(presets, values, defaults);
   const hasAuto = presets.some((p) => p.kind === "auto");
   const leading = presets.filter((p) => !hasAuto || p.kind === "auto" || p.auto_candidate);
@@ -55,7 +56,10 @@ export function PresetCards({ presets, defaults, values, active, auto, autoRunni
     if (step) {
       e.preventDefault();
       const next = shown[Math.max(0, Math.min(shown.length - 1, at + step))];
-      if (next) onPick(next);
+      if (next) {
+        onPick(next);
+        cards.current.get(next.id)?.focus(); // the focus follows the pick, or a second arrow key starts from the old card
+      }
     } else if (e.key === " " || e.key === "Enter") {
       e.preventDefault();
       onPick(shown[at]);
@@ -82,6 +86,10 @@ export function PresetCards({ presets, defaults, values, active, auto, autoRunni
     return (
       <div
         key={p.id}
+        ref={(el) => {
+          if (el) cards.current.set(p.id, el);
+          else cards.current.delete(p.id);
+        }}
         role="radio"
         aria-checked={checked}
         aria-disabled={disabled || undefined}

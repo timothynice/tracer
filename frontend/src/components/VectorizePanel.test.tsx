@@ -31,4 +31,12 @@ describe("VectorizePanel", () => {
     expect(screen.getByText("Shapes")).toBeInTheDocument();
     expect(screen.getByText("export")).toBeInTheDocument();
   });
+
+  it("opens Advanced Options when the server refuses a field after the panel is up", () => {
+    const props = { item, catalog: { engine: VEXEL, presets: VEXEL_PRESETS }, specs: specsFor(VEXEL), onPick: vi.fn(), onParam: vi.fn(), onGenerate: vi.fn(), onCancel: vi.fn(), exportMenu: null };
+    const { rerender } = render(<VectorizePanel {...props} invalidField={null} />);
+    expect(screen.queryByText("Shapes")).toBeNull();
+    rerender(<VectorizePanel {...props} invalidField="detail" />);
+    expect(screen.getByText("Shapes")).toBeInTheDocument();
+  });
 });
