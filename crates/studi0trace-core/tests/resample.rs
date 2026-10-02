@@ -1,5 +1,6 @@
 mod common;
 use common::sha256_hex;
+use studi0trace_core::render::RenderError;
 use studi0trace_core::resample::{premultiply, resize_rgba, unpremultiply, Filter};
 
 /// `splitmix_bytes` of `tools/export_core_fixtures.py`: little-endian bytes of splitmix64's
@@ -95,9 +96,8 @@ fn an_output_over_the_render_cap_is_refused_before_anything_is_allocated() {
     for filter in [Filter::Nearest, Filter::Lanczos] {
         for (w, h) in [(20_000, 20_000), (1 << 28, 2), (u32::MAX, u32::MAX), (2, 1 << 28)] {
             let e = resize_rgba(&one, 1, 1, w, h, filter).unwrap_err();
-            // the cap, or (where the byte count itself overflows a usize) the older overflow check
-            assert!(e.contains("pixels allowed") || e.contains("too large"), "{w}x{h}: {e}");
-            assert!((w, h) == (u32::MAX, u32::MAX) || e.contains("pixels allowed"), "{w}x{h}: the cap's words: {e}");
+            // over the cap, or (u32::MAX squared) more bytes than a usize holds
+            assert_eq!(e, RenderError::TooLarge { width: w.into(), height: h.into() }, "{w}x{h}");
         }
         // at the cap it is allowed (and not allocated here: a thin strip of it)
         assert_eq!(resize_rgba(&one, 1, 1, 1 << 14, 1, filter).map(|v| v.len()), Ok((1 << 14) * 4));

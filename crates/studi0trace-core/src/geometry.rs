@@ -50,6 +50,7 @@
 use crate::drawing::{self, DrawingError};
 use crate::edges::pairwise_sum;
 use crate::py;
+use crate::render::RenderError;
 use serde_json::{Map, Value};
 use std::f64::consts::PI;
 use std::fmt;
@@ -124,7 +125,7 @@ pub enum CardError {
     /// More elements than an id map has colours for (the Python's `ValueError`).
     TooManyElements,
     /// The id map could not be rendered ([`crate::render::render`]).
-    Render(String),
+    Render(RenderError),
     /// What numpy or Python raises on the outlines: an index into no points (`IndexError`), a
     /// length that is infinite or NaN (`OverflowError`, `ValueError`), in the Python's words.
     Geometry(String),

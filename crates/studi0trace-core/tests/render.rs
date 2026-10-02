@@ -1,4 +1,5 @@
 mod common;
+use studi0trace_core::render::RenderError;
 use studi0trace_core::{intake, render};
 
 fn unhex(s: &str) -> Vec<u8> {
@@ -48,7 +49,7 @@ fn cases_match_resvg_py() {
             let what = format!("{name} ({tag})");
             if want.get("error").is_some() {
                 let e = render::render_fit(svg, w, h, crisp).expect_err(&what);
-                assert!(!e.is_empty(), "{what}: an empty error");
+                assert!(!e.to_string().is_empty(), "{what}: an empty error");
                 assert!(render::render(svg, w, h, crisp).is_err(), "{what}");
                 refusals += 1;
                 continue;
@@ -88,7 +89,7 @@ fn the_sizes_and_units_behave_as_resvg_py_does() {
     // Absolute units are zero lengths, as they are under resvg-py (which leaves dpi at 0).
     for unit in ["10pt", "1in", "10mm", "1cm", "1pc"] {
         let e = size(&rect(&format!(r#"width="{unit}" height="{unit}""#)), 10, 10).unwrap_err();
-        assert!(e.contains("invalid size"), "{unit}: {e}");
+        assert!(matches!(&e, RenderError::Svg(m) if m.contains("invalid size")), "{unit}: {e}");
     }
     assert_eq!(size(&rect(r#"width="2em" height="2em""#), 32, 32), Ok((32, 32)));
 }
@@ -212,7 +213,7 @@ fn a_size_that_cannot_be_allocated_is_an_error_not_an_allocation() {
     // The cap is on what is asked for as well as on what resvg draws, and it comes before
     // anything is allocated. Each of these boxes is over it, for a square SVG whose fit is
     // the box or far smaller than it.
-    let cap = |e: String| assert!(e.contains("pixels allowed"), "{e}");
+    let cap = |e: RenderError| assert!(matches!(e, RenderError::TooLarge { .. }) && e.to_string().contains("pixels allowed"), "{e}");
     for (w, h) in [(100_000, 100_000), (u32::MAX, u32::MAX), (16_385, 16_385), (1 << 28, 2), (2, 1 << 28), (u32::MAX, 3)] {
         cap(render::render(SQUARE, w, h, false).unwrap_err());
         cap(render::render(SQUARE, w, h, true).unwrap_err());
@@ -227,18 +228,20 @@ fn a_size_that_cannot_be_allocated_is_an_error_not_an_allocation() {
     // Inside the cap, a box much wider than the fit is a resize, and it is allowed.
     assert_eq!(render::render(SQUARE, 1 << 14, 1, false).map(|v| v.len()), Ok((1 << 14) * 4));
     for (w, h) in [(0, 0), (0, 5), (5, 0)] {
-        assert!(render::render(SQUARE, w, h, false).unwrap_err().contains("positive integer"), "{w}x{h}");
+        assert!(matches!(render::render(SQUARE, w, h, false).unwrap_err(), RenderError::ZeroSide(_)), "{w}x{h}");
         assert!(render::render_fit(SQUARE, w, h, true).is_err(), "{w}x{h}");
     }
 }
 
 #[test]
 fn refusals_carry_the_renderers_words() {
-    assert!(render::render("not svg", 10, 10, false).unwrap_err().contains("unknown token"));
+    assert!(matches!(render::render("not svg", 10, 10, false).unwrap_err(), RenderError::Svg(m) if m.contains("unknown token")));
     assert!(render::render("", 10, 10, false).is_err());
     assert!(render::render("<svg", 10, 10, true).is_err());
-    assert!(render::render(SQUARE, 0, 10, false).unwrap_err().contains("width"));
-    assert!(render::render(SQUARE, 10, 0, false).unwrap_err().contains("height"));
+    assert_eq!(render::render(SQUARE, 0, 10, false).unwrap_err(), RenderError::ZeroSide("width"));
+    assert_eq!(render::render(SQUARE, 10, 0, false).unwrap_err(), RenderError::ZeroSide("height"));
+    // resvg-py's words
+    assert_eq!(RenderError::ZeroSide("width").to_string(), "The value of 'width' must be a positive integer");
 }
 
 /// `levels` nested groups around one square.
@@ -265,7 +268,7 @@ fn an_svg_nested_beyond_reach_is_refused_by_every_way_into_the_renderer_before_i
         .expect("a refusal, not an overflow");
     let (a, b, c, took) = answer;
     for e in [a.unwrap_err(), b.unwrap_err(), c.unwrap_err()] {
-        assert!(e.contains("nested more than 988"), "{e}");
+        assert!(e == RenderError::TooDeep && e.to_string().contains("nested more than 988"), "{e}");
     }
     assert!(took.as_secs() < 5, "{took:?}");
     // the limit is the drawing's: 987 levels draw, 988 are refused, as the Python's recursion would

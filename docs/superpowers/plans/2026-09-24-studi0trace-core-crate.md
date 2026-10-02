@@ -1616,6 +1616,10 @@ this is the list a later plan needs.
     lazy (read the clock only when `VEXEL_TIMING` is set) or give it a wasm clock, and hand `trace_finished` one.
     *Done after the review (2026-10-02):* the `Timer` reads the clock only when `VEXEL_TIMING` is set; plan 3 still
     has to give `trace_finished` a clock.
+  - *Follow-ups done after the review (2026-10-02):* Python's builtins (`max`/`min` with their NaN rule, `round`,
+    `int(round())`, `math.ceil`, float `%`, `repr`) are one module, `crate::py`, instead of copies in six files; the
+    renderer and the resampler refuse with `render::RenderError` and the hole count with `holes::HolesError`
+    (`ScoreError` and `CardError` carry them) instead of `String`, with the Python's words kept as their `Display`.
   - *The engine's cost is far above the intake limit's.* On a 2048 x 2048 (4.2 MP) upscaled badge a plain Balanced
     trace took 97 s and 7.5 GB resident; Auto 120 s and 10.8 GB (14.9 GB peak footprint). The 40 MP intake limit admits
     ten times that, a wasm build has 4 GB of address space, and `vectorize` can be neither cancelled nor observed. Plans 2

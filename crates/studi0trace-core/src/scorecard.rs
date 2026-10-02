@@ -51,8 +51,8 @@ use crate::color::{delta_e_lab, lab, rgb_on_white};
 use crate::drawing::{self, DrawingError};
 use crate::edges;
 use crate::geometry::{self, CardError, ID_SCALE};
-use crate::holes::{self, HOLE_SCALE};
-use crate::render;
+use crate::holes::{self, HolesError, HOLE_SCALE};
+use crate::render::{self, RenderError};
 use serde_json::{Map, Value};
 use std::fmt;
 
@@ -82,10 +82,10 @@ pub enum ScoreError {
     /// The source pixels or the rendered ones are not an `h x w x 4` image of at least one pixel.
     Source(String),
     /// The SVG did not render ([`render::render`]).
-    Render(String),
+    Render(RenderError),
     /// The hole count failed ([`holes::holes`]): a render that did not come out, or a hole
     /// scale of 0.
-    Holes(String),
+    Holes(HolesError),
     /// The outline measures failed, or the SVG nests too deep to be read at all.
     Card(CardError),
 }

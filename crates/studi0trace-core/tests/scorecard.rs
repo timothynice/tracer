@@ -396,7 +396,7 @@ fn a_size_whose_bytes_overflow_is_refused_by_scorecard_and_holes_not_wrapped_int
         assert!(matches!(scorecard::scorecard("<svg/>", &[], side, side, &ScoreOptions::default()), Err(ScoreError::Source(_))));
         assert!(matches!(scorecard::scorecard("<svg/>", &[], side, 1usize << 33, &ScoreOptions::default()), Err(ScoreError::Source(_))));
         let e = studi0trace_core::holes::holes("<svg/>", &[], side, side, 2, None).unwrap_err();
-        assert!(e.contains("too large"), "{e}");
+        assert!(matches!(&e, studi0trace_core::holes::HolesError::Shape(m) if m.contains("too large")), "{e}");
     }
     // a source of no pixels is still the Python's: zeros, whatever the SVG
     let card = scorecard::scorecard("<svg/>", &[], 0, 0, &ScoreOptions::default());

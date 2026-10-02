@@ -60,7 +60,7 @@
 //! recurses with the SVG's nesting, and refuses what nests deeper than
 //! [`crate::drawing::MAX_DEPTH`] before it parses.
 use crate::edges::pairwise_sum;
-use crate::render;
+use crate::render::{self, RenderError};
 use serde_json::{Map, Value};
 use vexel_rs::core::grid::Grid;
 use vexel_rs::core::labels::label_mask;
@@ -153,6 +153,33 @@ pub fn opaque(src_rgba: &[u8], h: usize, w: usize) -> Opaque {
     erode_square(&Grid::from_vec(h, w, solid), false).data
 }
 
+/// Why the holes could not be counted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HolesError {
+    /// The source or the mask is not `h x w` (or too large to be): what numpy refuses by its shapes.
+    Shape(String),
+    /// The render at `scale` was refused: a scale of 0, an SVG that does not render, a size over
+    /// [`render::MAX_PIXELS`].
+    Render(RenderError),
+}
+
+impl std::fmt::Display for HolesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HolesError::Shape(e) => write!(f, "{e}"),
+            HolesError::Render(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for HolesError {}
+
+impl From<RenderError> for HolesError {
+    fn from(e: RenderError) -> Self {
+        HolesError::Render(e)
+    }
+}
+
 /// `quality.holes(svg, src_rgba, scale, opaque)`: render `svg` at `scale` times the source's
 /// size and count the clusters of sub-pixels it leaves under-covered where the source is
 /// opaque. `src_rgba` is the source, `h x w x 4` bytes; `opaque` is its [`opaque`] interior if
@@ -163,14 +190,15 @@ pub fn opaque(src_rgba: &[u8], h: usize, w: usize) -> Opaque {
 /// positive integer`) or an SVG that does not render, but only for a source that has an opaque
 /// pixel; the others are answered with zeros first. The port adds what numpy would refuse by its
 /// shapes: a source or a mask of another size than `h x w`.
-pub fn holes(svg: &str, src_rgba: &[u8], h: usize, w: usize, scale: u32, opaque: Option<&[bool]>) -> Result<Holes, String> {
-    let pixels = h.checked_mul(w).filter(|p| p.checked_mul(4).is_some()).ok_or_else(|| format!("holes: a {h}x{w} source is too large"))?;
+pub fn holes(svg: &str, src_rgba: &[u8], h: usize, w: usize, scale: u32, opaque: Option<&[bool]>) -> Result<Holes, HolesError> {
+    let shape = |e: String| HolesError::Shape(e);
+    let pixels = h.checked_mul(w).filter(|p| p.checked_mul(4).is_some()).ok_or_else(|| shape(format!("holes: a {h}x{w} source is too large")))?;
     let computed;
     let mask: &[bool] = match opaque {
-        Some(m) if m.len() != pixels => return Err(format!("holes: a mask of {} flags for a {h}x{w} source, which has {pixels}", m.len())),
+        Some(m) if m.len() != pixels => return Err(shape(format!("holes: a mask of {} flags for a {h}x{w} source, which has {pixels}", m.len()))),
         Some(m) => m,
         None if src_rgba.len() != pixels * 4 => {
-            return Err(format!("holes: {} bytes of RGBA for a {h}x{w} source, which has {}", src_rgba.len(), pixels * 4))
+            return Err(shape(format!("holes: {} bytes of RGBA for a {h}x{w} source, which has {}", src_rgba.len(), pixels * 4)))
         }
         None => {
             computed = self::opaque(src_rgba, h, w);
@@ -182,11 +210,14 @@ pub fn holes(svg: &str, src_rgba: &[u8], h: usize, w: usize, scale: u32, opaque:
     }
 
     let s = scale as usize;
-    let too_large = || format!("holes: a {w}x{h} source at {scale}x is too large to render");
+    let too_large = || {
+        let side = |n: usize| (n as u64).saturating_mul(scale.into());
+        HolesError::Render(RenderError::TooLarge { width: side(w), height: side(h) })
+    };
     let (bw, bh) = (w.checked_mul(s).ok_or_else(too_large)?, h.checked_mul(s).ok_or_else(too_large)?);
     let rgba = render::render(svg, u32::try_from(bw).map_err(|_| too_large())?, u32::try_from(bh).map_err(|_| too_large())?, false)?;
     if rgba.len() != bw * bh * 4 {
-        return Err(format!("holes: a {bw}x{bh} render came back with {} bytes", rgba.len()));
+        return Err(shape(format!("holes: a {bw}x{bh} render came back with {} bytes", rgba.len())));
     }
 
     // Every sub-pixel under the cover, where the source is opaque, in row-major order (what

@@ -75,6 +75,42 @@ use resvg::{tiny_skia, usvg};
 /// without the side cap does, at 160 MP).
 pub const MAX_PIXELS: u64 = 1 << 28;
 
+/// Why a render, or a resize, was refused. `Display` is the words the Python (resvg-py, Pillow)
+/// would raise where it raises, and the port's own where it refuses what the Python would try.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenderError {
+    /// A render asked for at a width (`"width"`) or a height (`"height"`) of 0, in resvg-py's words.
+    ZeroSide(&'static str),
+    /// A resize from or to no pixels, in Pillow's words.
+    ZeroResize,
+    /// An image buffer that is not `width * height * 4` bytes.
+    Buffer { width: u32, height: u32, len: usize },
+    /// More than [`MAX_PIXELS`] pixels, asked for or fitted, or more than a `usize` of bytes.
+    TooLarge { width: u64, height: u64 },
+    /// Elements nested deeper than [`drawing::MAX_DEPTH`], refused from the text alone.
+    TooDeep,
+    /// The SVG does not parse (usvg's message).
+    Svg(String),
+    /// tiny-skia would not make the pixmap.
+    Pixmap,
+}
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenderError::ZeroSide(side) => write!(f, "The value of '{side}' must be a positive integer"),
+            RenderError::ZeroResize => write!(f, "height and width must be > 0"),
+            RenderError::Buffer { width, height, len } => write!(f, "a {width}x{height} RGBA image is not {len} bytes"),
+            RenderError::TooLarge { width, height } => write!(f, "a {width}x{height} render is more than the {MAX_PIXELS} pixels allowed"),
+            RenderError::TooDeep => write!(f, "{}", drawing::DrawingError::TooDeep),
+            RenderError::Svg(e) => write!(f, "{e}"),
+            RenderError::Pixmap => write!(f, "cannot create pixmap"),
+        }
+    }
+}
+
+impl std::error::Error for RenderError {}
+
 /// A finished render: straight-alpha RGBA8, `width * height * 4` bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rendered {
@@ -86,7 +122,7 @@ pub struct Rendered {
 /// `svg` at exactly `width x height`, straight-alpha RGBA8, anti-aliased or (`crisp`) not:
 /// `quality.render`. The render is [`render_fit`]'s; if that is another size it is resized
 /// to this one as Pillow does (nearest for crisp, Lanczos otherwise), whatever the reason.
-pub fn render(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Vec<u8>, String> {
+pub fn render(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Vec<u8>, RenderError> {
     check_box(width, height)?;
     check_pixels(width, height)?;
     let r = render_fit(svg, width, height, crisp)?;
@@ -97,20 +133,21 @@ pub fn render(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Vec<u8>
     resample::resize_rgba(&r.rgba, r.width, r.height, width, height, filter)
 }
 
-fn check_box(width: u32, height: u32) -> Result<(), String> {
+fn check_box(width: u32, height: u32) -> Result<(), RenderError> {
     if width == 0 {
-        return Err("The value of 'width' must be a positive integer".into());
+        return Err(RenderError::ZeroSide("width"));
     }
     if height == 0 {
-        return Err("The value of 'height' must be a positive integer".into());
+        return Err(RenderError::ZeroSide("height"));
     }
     Ok(())
 }
 
 /// A `width x height` image of more than [`MAX_PIXELS`] is refused, before anything is allocated.
-pub(crate) fn check_pixels(width: u32, height: u32) -> Result<(), String> {
-    if u64::from(width) * u64::from(height) > MAX_PIXELS {
-        return Err(format!("a {width}x{height} render is more than the {MAX_PIXELS} pixels allowed"));
+pub(crate) fn check_pixels(width: u32, height: u32) -> Result<(), RenderError> {
+    let (width, height) = (u64::from(width), u64::from(height));
+    if width * height > MAX_PIXELS {
+        return Err(RenderError::TooLarge { width, height });
     }
     Ok(())
 }
@@ -118,12 +155,12 @@ pub(crate) fn check_pixels(width: u32, height: u32) -> Result<(), String> {
 /// What `resvg_py.svg_to_bytes(svg_string=svg, width=width, height=height,
 /// skip_system_fonts=True[, shape_rendering="crisp_edges"])` returns, decoded: the SVG
 /// fitted inside `width x height` (so its size may be smaller on one side), as straight alpha.
-pub fn render_fit(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Rendered, String> {
+pub fn render_fit(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Rendered, RenderError> {
     check_box(width, height)?;
     // resvg's parser recurses a level of nesting at a time (about 3.5 KB of stack a level in all, so a
     // few hundred levels overflow a 2 MiB thread, and 100 000 any thread): every way into it, `render`
     // and the scorecard's, is refused here from the text alone, before anything parses it
-    drawing::check_nesting(svg).map_err(|e| e.to_string())?;
+    drawing::check_nesting(svg).map_err(|_| RenderError::TooDeep)?;
 
     let mut opt = usvg::Options::default();
     opt.dpi = 0.0;
@@ -133,15 +170,15 @@ pub fn render_fit(svg: &str, width: u32, height: u32, crisp: bool) -> Result<Ren
         opt.shape_rendering = usvg::ShapeRendering::CrispEdges;
     }
     opt.image_href_resolver.resolve_string = Box::new(|_, _| None);
-    let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| e.to_string())?;
+    let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| RenderError::Svg(e.to_string()))?;
 
     // resvg's `FitTo::Size`: the rounded size scaled into the box, and a transform that
     // maps the rounded size onto the result.
     let natural = tree.size().to_int_size();
-    let target = tiny_skia::IntSize::from_wh(width, height).ok_or("target size is zero")?;
+    let target = tiny_skia::IntSize::from_wh(width, height).ok_or(RenderError::Pixmap)?;
     let fit = natural.scale_to(target);
     check_pixels(fit.width(), fit.height())?;
-    let mut pixmap = tiny_skia::Pixmap::new(fit.width(), fit.height()).ok_or("cannot create pixmap")?;
+    let mut pixmap = tiny_skia::Pixmap::new(fit.width(), fit.height()).ok_or(RenderError::Pixmap)?;
     let (from, to) = (natural.to_size(), fit.to_size());
     let ts = tiny_skia::Transform::from_scale(to.width() / from.width(), to.height() / from.height());
     resvg::render(&tree, ts, &mut pixmap.as_mut());

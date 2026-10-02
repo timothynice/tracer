@@ -1,7 +1,8 @@
 mod common;
 use serde_json::Value;
-use studi0trace_core::holes::{self, Holes};
+use studi0trace_core::holes::{self, Holes, HolesError};
 use studi0trace_core::intake;
+use studi0trace_core::render::RenderError;
 use vexel_rs::core::{grid::Grid, labels::label_mask};
 
 fn unhex(s: &str) -> Vec<u8> {
@@ -189,10 +190,11 @@ fn nothing_to_look_at_is_nothing() {
 fn what_cannot_be_looked_at_is_refused() {
     let solid = vec![255u8; 8 * 8 * 4];
     let ok = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"/>"#;
-    assert!(holes::holes(ok, &solid, 8, 8, 0, None).unwrap_err().contains("width"));
+    assert_eq!(holes::holes(ok, &solid, 8, 8, 0, None).unwrap_err(), HolesError::Render(RenderError::ZeroSide("width")));
     assert!(holes::holes("<svg", &solid, 8, 8, 2, None).is_err());
-    assert!(holes::holes(ok, &solid[1..], 8, 8, 2, None).unwrap_err().contains("255"), "bytes for another size");
-    assert!(holes::holes(ok, &[], 8, 8, 2, Some(&vec![true; 63])).unwrap_err().contains("63"), "a mask of another size");
+    let shape = |e: HolesError, n: &str| matches!(e, HolesError::Shape(m) if m.contains(n));
+    assert!(shape(holes::holes(ok, &solid[1..], 8, 8, 2, None).unwrap_err(), "255"), "bytes for another size");
+    assert!(shape(holes::holes(ok, &[], 8, 8, 2, Some(&vec![true; 63])).unwrap_err(), "63"), "a mask of another size");
     // with a mask in hand the source itself is not read
     assert_eq!(holes::holes(ok, &[], 8, 8, 2, Some(&vec![true; 64])).unwrap().hole_clusters, 1);
 }

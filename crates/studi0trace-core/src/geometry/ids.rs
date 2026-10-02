@@ -3,7 +3,7 @@
 use super::{CardError, VIS_OFFSET};
 use crate::drawing::{Contour, Drawing};
 use crate::py;
-use crate::render;
+use crate::render::{self, RenderError};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -92,7 +92,8 @@ pub(super) fn id_map(drawing: &Drawing, size: (u32, u32), scale: u32) -> Result<
     }
     let (w, h) = size;
     let (Some(ww), Some(hh)) = (w.checked_mul(scale), h.checked_mul(scale)) else {
-        return Err(CardError::Render(format!("an id map of {w}x{h} at {scale}x is too large")));
+        let side = |n: u32| u64::from(n) * u64::from(scale);
+        return Err(CardError::Render(RenderError::TooLarge { width: side(w), height: side(h) }));
     };
     let rgba = render::render(&id_svg(drawing, size), ww, hh, true).map_err(CardError::Render)?;
     let ids = rgba

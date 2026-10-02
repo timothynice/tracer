@@ -31,6 +31,7 @@
 //!   column, in `f64`; it is accumulated, not computed as `(i + 0.5) * scale`, and the two
 //!   differ at the exact integers, where the running sum is sometimes a hair below. Rows the
 //!   same. Found by experiment: no closed form matched all 4761 pairs of (in, out) up to 69.
+use crate::render::RenderError;
 use std::f64::consts::PI;
 
 /// The two filters `quality.render` uses: `NEAREST` for a crisp (id map) render, `LANCZOS`
@@ -45,15 +46,15 @@ pub enum Filter {
 /// `Err` for a zero size, a buffer that is not `width * height * 4` bytes, or an output of more
 /// than [`crate::render::MAX_PIXELS`] pixels (checked before anything is allocated: the Python
 /// would try, and this is public).
-pub fn resize_rgba(src: &[u8], width: u32, height: u32, out_width: u32, out_height: u32, filter: Filter) -> Result<Vec<u8>, String> {
+pub fn resize_rgba(src: &[u8], width: u32, height: u32, out_width: u32, out_height: u32, filter: Filter) -> Result<Vec<u8>, RenderError> {
     let bytes = |w: u32, h: u32| (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4));
     if width == 0 || height == 0 || out_width == 0 || out_height == 0 {
-        return Err("height and width must be > 0".into());
+        return Err(RenderError::ZeroResize);
     }
     if bytes(width, height) != Some(src.len()) {
-        return Err(format!("a {width}x{height} RGBA image is not {} bytes", src.len()));
+        return Err(RenderError::Buffer { width, height, len: src.len() });
     }
-    bytes(out_width, out_height).ok_or("the resized image is too large")?;
+    bytes(out_width, out_height).ok_or(RenderError::TooLarge { width: out_width.into(), height: out_height.into() })?;
     crate::render::check_pixels(out_width, out_height)?;
     let (w, h, ow, oh) = (width as usize, height as usize, out_width as usize, out_height as usize);
     if (w, h) == (ow, oh) {
