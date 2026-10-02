@@ -167,6 +167,28 @@ function withTimeout(signal: AbortSignal | undefined, ms: number | undefined): {
   };
 }
 
+/**
+ * The UI's error for a failed answer, whoever sent it: the Python server's HTTP body, or the Mac app's command
+ * error, which carries the same `{"detail": …}` (a `{code, message}`, or the 422's list).
+ */
+export function apiErrorFromBody(status: number, body: unknown, statusText = ""): ApiError {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (Array.isArray(detail)) {
+    const first = detail[0] as { msg?: string; loc?: unknown[] } | undefined;
+    const where = first?.loc?.join(".") ?? "";
+    return new ApiError("validation_error", first?.msg ? `${where}: ${first.msg}` : "Invalid parameters", status, detail);
+  }
+  if (detail && typeof detail === "object" && "code" in detail) {
+    const d = detail as { code: string; message?: string };
+    return new ApiError(d.code, d.message ?? d.code, status, detail);
+  }
+  if (status >= 500) {
+    // A bare gateway error carries no body; say what it usually means here.
+    return new ApiError(`http_${status}`, `The server didn't finish the trace (${status}). Large or highly detailed images can exhaust it — try a smaller image.`, status, body);
+  }
+  return new ApiError(`http_${status}`, typeof detail === "string" ? detail : statusText || "Request failed", status, body);
+}
+
 async function toApiError(res: Response): Promise<ApiError> {
   let body: unknown = null;
   try {
@@ -174,21 +196,7 @@ async function toApiError(res: Response): Promise<ApiError> {
   } catch {
     /* non-JSON error body */
   }
-  const detail = (body as { detail?: unknown } | null)?.detail;
-  if (Array.isArray(detail)) {
-    const first = detail[0] as { msg?: string; loc?: unknown[] } | undefined;
-    const where = first?.loc?.join(".") ?? "";
-    return new ApiError("validation_error", first?.msg ? `${where}: ${first.msg}` : "Invalid parameters", res.status, detail);
-  }
-  if (detail && typeof detail === "object" && "code" in detail) {
-    const d = detail as { code: string; message?: string };
-    return new ApiError(d.code, d.message ?? d.code, res.status, detail);
-  }
-  if (res.status >= 500) {
-    // A bare gateway error carries no body; say what it usually means here.
-    return new ApiError(`http_${res.status}`, `The server didn't finish the trace (${res.status}). Large or highly detailed images can exhaust it — try a smaller image.`, res.status, body);
-  }
-  return new ApiError(`http_${res.status}`, typeof detail === "string" ? detail : res.statusText || "Request failed", res.status, body);
+  return apiErrorFromBody(res.status, body, res.statusText);
 }
 
 async function request<T>(path: string, init: RequestInit = {}, signal?: AbortSignal, timeoutMs?: number): Promise<T> {

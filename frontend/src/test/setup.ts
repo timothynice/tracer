@@ -4,6 +4,13 @@ import { afterEach } from "vitest";
 
 afterEach(() => cleanup());
 
+// Node 25+ has a `localStorage` global of its own (backed by --localstorage-file, and useless without it). It
+// shadows jsdom's on globalThis; the tests mean jsdom's.
+const jsdomStorage = (globalThis as { jsdom?: { window: Window } }).jsdom?.window.localStorage ?? window.localStorage;
+if (globalThis.localStorage !== jsdomStorage) {
+  Object.defineProperty(globalThis, "localStorage", { value: jsdomStorage, configurable: true, writable: true });
+}
+
 // jsdom lacks these; components only need them to exist.
 if (!window.matchMedia) {
   window.matchMedia = ((query: string) => ({
