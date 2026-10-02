@@ -36,6 +36,16 @@ export default function App() {
     return watchSystemTheme(() => settings.appearance);
   }, [settings.appearance]);
 
+  // in the app, the web's context menu (Reload, Inspect Element) never shows; text fields keep theirs
+  useEffect(() => {
+    if (platform.kind !== "native") return;
+    const block = (e: MouseEvent) => {
+      if (!isTyping(e.target)) e.preventDefault();
+    };
+    document.addEventListener("contextmenu", block);
+    return () => document.removeEventListener("contextmenu", block);
+  }, []);
+
   const engine = engines.data?.find((e) => e.id === ENGINE);
   const catalog = useMemo<Catalog | null>(() => (engine && presets.data ? { engine, presets: presets.data.filter((p) => p.engine === ENGINE) } : null), [engine, presets.data]);
   const failure = engines.error ?? presets.error;
@@ -63,6 +73,8 @@ export default function App() {
 }
 
 const VIEW_KEY = "studi0trace.view";
+// the commands that read the parameters or the traced SVG, which a number field still being typed in has not yet committed
+const READS_SETTINGS = new Set<Command>(["generate", "export-svg", "export-png-1", "export-png-2", "export-png-4", "export-all", "copy-svg"]);
 const MODES: ViewMode[] = ["split", "side", "overlay", "vector"];
 
 function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings }) {
@@ -137,7 +149,8 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
 
   const exports = useExports(state, item, layers.exportSvg, settings);
   const anyVector = state.items.some((i) => i.shown !== null);
-  const [, setSettingsOpen] = useState(false); // Task 12 adds the sheet this opens
+  // TODO(Task 12): the settings sheet reads this; until then it is set and never shown
+  const [, setSettingsOpen] = useState(false);
   const openSettings = useCallback(() => {
     if (!platform.openSettingsWindow()) setSettingsOpen(true);
   }, []);
@@ -200,41 +213,45 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
   // the listeners subscribe once and call whatever `run` is now
   const runRef = useRef(run);
   runRef.current = run;
-  useEffect(() => platform.onMenu((cmd) => runRef.current(cmd)), []);
+  // Both roads in (the menu bar, the keys of a browser) pass here. ⌘⌫ in a text field deletes text, it does not remove
+  // the image; and what reads the settings (a trace, an export) waits for the field's own blur to commit its value.
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const dispatch = useCallback((cmd: Command) => {
+    const active = document.activeElement;
+    if (isTyping(active)) {
+      if (cmd === "remove") return;
+      if (READS_SETTINGS.has(cmd)) {
+        (active as HTMLElement).blur();
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => runRef.current(cmd), 0);
+        return;
+      }
+    }
+    runRef.current(cmd);
+  }, []);
+  useEffect(() => platform.onMenu(dispatch), [dispatch]);
   useEffect(() => {
     if (platform.kind !== "web") return;
     const onKey = (e: KeyboardEvent) => {
       const cmd = commandForKey(e);
-      if (!cmd || (cmd === "remove" && isTyping(e.target))) return;
+      if (!cmd) return;
+      if (cmd === "remove" && (e.repeat || isTyping(e.target))) return;
       e.preventDefault();
-      runRef.current(cmd);
+      dispatch(cmd);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
-  // in the app, the web's context menu (Reload, Inspect Element) never shows; text fields keep theirs
-  useEffect(() => {
-    if (platform.kind !== "native") return;
-    const block = (e: MouseEvent) => {
-      if (!isTyping(e.target)) e.preventDefault();
-    };
-    document.addEventListener("contextmenu", block);
-    return () => document.removeEventListener("contextmenu", block);
-  }, []);
+  }, [dispatch]);
 
+  const hasItems = state.items.length > 0 || state.failed.length > 0;
+  const hasImage = !!item;
+  const hasVector = !!layers.exportSvg;
+  const hasPath = !!item?.image.path;
+  const tracing = !!item?.job;
   useEffect(() => {
-    platform.setMenuState({
-      hasItems: state.items.length > 0 || state.failed.length > 0,
-      hasImage: !!item,
-      hasVector: !!layers.exportSvg,
-      anyVector,
-      hasPath: !!item?.image.path,
-      tracing: !!item?.job,
-      mode,
-      sidebar,
-      inspector: inspectorPane,
-    });
-  }, [state.items.length, state.failed.length, item, layers.exportSvg, anyVector, mode, sidebar, inspectorPane]);
+    platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, mode, sidebar, inspector: inspectorPane });
+  }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, mode, sidebar, inspectorPane]);
   const invalidField = item?.error?.code === "validation_error" ? (((item.error.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
 
   const panel = item ? (

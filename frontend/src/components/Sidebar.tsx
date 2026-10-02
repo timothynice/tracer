@@ -49,12 +49,12 @@ export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd,
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div role="listbox" aria-label="Image list" tabIndex={items.length ? 0 : -1} aria-activedescendant={selected ? `image-${selected}` : undefined} onKeyDown={onKeyDown} className="space-y-3 px-3 pb-3">
+        <div role="listbox" aria-label="Image list" tabIndex={items.length ? 0 : -1} aria-activedescendant={selected ? `image-${selected}` : undefined} onKeyDown={onKeyDown} className={`space-y-3 px-3 ${items.length ? "pb-3" : ""}`}>
           {items.map((item) => (
             <Fragment key={item.image.id}>{wrapCard(item, <ImageCard item={item} selected={item.image.id === selected} onSelect={() => onSelect(item.image.id)} />)}</Fragment>
           ))}
         </div>
-        <div className="space-y-3 px-3 pb-3">
+        <div className={`space-y-3 px-3 ${failed.length ? "pb-3" : ""}`}>
           {failed.map((f, i) => (
             <div key={`${f.path ?? f.name}-${i}`} role="group" aria-label={`${f.name} could not be opened`} className="rounded-lg bg-background/60 p-2.5">
               <div className="flex items-start gap-2">

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { VEXEL, VEXEL_PRESETS } from "@/test/server";
@@ -42,6 +42,7 @@ vi.mock("@/platform", async () => {
 });
 
 const { default: App } = await import("./App");
+const { platform } = await import("@/platform");
 
 describe("the Mac app's wiring", () => {
   it("opens what Finder sends, follows the menu, and keeps the menu bar told", async () => {
@@ -84,5 +85,42 @@ describe("the Mac app's wiring", () => {
     field.dispatchEvent(inField);
     expect(inField.defaultPrevented).toBe(false);
     field.remove();
+  });
+
+  async function withImageAndAdvanced() {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <App />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Drop images here");
+    await waitFor(() => expect(hooks.opens).not.toBeNull());
+    act(() => hooks.opens!(["/pics/logo.png"]));
+    await screen.findByRole("option", { name: /logo\.png/ });
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced Options" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Shapes/ }));
+  }
+
+  it("leaves ⌘⌫ to a focused text field: the menu's Remove Image does not remove the image", async () => {
+    await withImageAndAdvanced();
+    const field = screen.getByRole("spinbutton", { name: "Smallest shape" });
+    field.focus();
+    act(() => hooks.menu!("remove"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByRole("option", { name: /logo\.png/ })).toBeInTheDocument();
+    field.blur();
+    act(() => hooks.menu!("remove"));
+    await waitFor(() => expect(screen.queryByRole("option", { name: /logo\.png/ })).toBeNull());
+  });
+
+  it("commits a number being typed before the menu's Generate traces with it", async () => {
+    await withImageAndAdvanced();
+    vi.mocked(platform.vectorize).mockClear();
+    const field = screen.getByRole("spinbutton", { name: "Detail" });
+    field.focus();
+    fireEvent.change(field, { target: { value: "13" } }); // typed, not yet committed (that happens on blur)
+    act(() => hooks.menu!("generate"));
+    await waitFor(() => expect(platform.vectorize).toHaveBeenCalledOnce());
+    expect(vi.mocked(platform.vectorize).mock.calls[0][0].parameters).toMatchObject({ detail: 13 });
   });
 });

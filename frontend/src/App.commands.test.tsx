@@ -48,4 +48,16 @@ describe("commands in a browser", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remove" }));
     await waitFor(() => expect(screen.queryByRole("option", { name: /logo\.png/ })).toBeNull());
   });
+
+  it("⌘⌫ held down (a repeat) removes nothing more, and in a text field it is left to the field", async () => {
+    await withImage();
+    fireEvent.keyDown(window, { code: "Backspace", metaKey: true, repeat: true });
+    expect(screen.getByRole("option", { name: /logo\.png/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Advanced Options" }));
+    fireEvent.click(screen.getByRole("button", { name: /Shapes/ }));
+    const field = screen.getByRole("spinbutton", { name: "Smallest shape" });
+    field.focus();
+    fireEvent.keyDown(field, { code: "Backspace", metaKey: true });
+    expect(screen.getByRole("option", { name: /logo\.png/ })).toBeInTheDocument();
+  });
 });
