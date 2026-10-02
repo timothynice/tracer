@@ -4,12 +4,13 @@ import { toast } from "sonner";
 
 import { AppShell } from "./components/AppShell";
 import { EmptyState } from "./components/EmptyState";
+import { ExportMenu } from "./components/ExportMenu";
 import { Inspector, InspectorOverlay } from "./components/Inspector";
-import { ParamPanel } from "./components/ParamPanel";
-import { Presets } from "./components/Presets";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
+import { VectorizePanel } from "./components/VectorizePanel";
 import { Viewer, type ViewerHandle } from "./components/Viewer";
+import { useExports } from "./hooks/useExports";
 import { useLayerInspector } from "./hooks/useLayerInspector";
 import { useWindowDrop } from "./hooks/useWindowDrop";
 import { specsFor } from "./lib/schema";
@@ -132,29 +133,24 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
     <EmptyState onOpen={() => void open(platform.pickImages())} onSample={(f) => openFiles([f])} />
   );
 
-  // ── the right panel (Task 10 replaces this with <VectorizePanel>)
+  const exports = useExports(state, item, layers.exportSvg, settings);
+  const anyVector = state.items.some((i) => i.shown !== null);
+  const invalidField = item?.error?.code === "validation_error" ? (((item.error.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
+
   const panel = item ? (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
-        <Presets
-          presets={catalog.presets}
-          defaults={catalog.engine.defaults}
-          values={item.params}
-          onPick={(p) => lib.pickPreset(item.image.id, p)}
-          active={item.preset === "auto" ? "auto" : (item.preset ?? undefined)}
-          auto={item.auto}
-          autoRunning={item.job?.key === "auto"}
-        />
-        <ParamPanel engine={ENGINE} specs={specs} values={item.params} onChange={(name, value) => lib.setParam(item.image.id, name, value)} />
-      </div>
-      <div className="border-t p-3">
-        <button type="button" className="mac-primary" onClick={() => lib.generate(item.image.id)} disabled={!!item.job}>
-          Generate Vector
-        </button>
-      </div>
-    </div>
+    <VectorizePanel
+      item={item}
+      catalog={catalog}
+      specs={specs}
+      invalidField={invalidField}
+      onPick={(p) => lib.pickPreset(item.image.id, p)}
+      onParam={(name, value) => lib.setParam(item.image.id, name, value)}
+      onGenerate={() => lib.generate(item.image.id)}
+      onCancel={() => lib.cancel(item.image.id)}
+      exportMenu={<ExportMenu canExport={!!layers.exportSvg} anyVector={anyVector} onExport={(k, s) => void exports.exportImage(k, s)} onCopy={() => void exports.copySvg()} onExportAll={() => void exports.exportAll()} />}
+    />
   ) : (
-    <p className="p-4 text-muted-foreground">Open an image to vectorize it.</p>
+    <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground">Open an image to vectorize it.</div>
   );
 
   return (

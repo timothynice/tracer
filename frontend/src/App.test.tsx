@@ -46,7 +46,7 @@ describe("App", () => {
     expect(option).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("region", { name: "Canvas" })).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "Vector result" })).toBeNull();
-    expect(screen.getByRole("button", { name: /Auto/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("radio", { name: /^Auto/ })).toHaveAttribute("aria-checked", "true");
   });
 
   it("Generate traces with Auto and shows the pick", async () => {
@@ -54,9 +54,21 @@ describe("App", () => {
     await screen.findByText("Drop images here");
     drop([png()]);
     await screen.findByRole("option", { name: /logo\.png/ });
-    fireEvent.click(screen.getByRole("button", { name: "Generate Vector" }));
+    fireEvent.click(screen.getByRole("button", { name: /Generate Vector/ }));
     expect(await screen.findByRole("img", { name: "Vector result" })).toBeInTheDocument();
     expect(within(screen.getByRole("complementary", { name: "Vectorize" })).getByLabelText(/Auto chose Logo & icon/)).toBeInTheDocument();
+  });
+
+  it("picking a candidate after Auto shows its trace at once", async () => {
+    renderApp();
+    await screen.findByText("Drop images here");
+    drop([png()]);
+    await screen.findByRole("option", { name: /logo\.png/ });
+    fireEvent.click(screen.getByRole("button", { name: /Generate Vector/ }));
+    await screen.findByRole("img", { name: "Vector result" });
+    fireEvent.click(screen.getByRole("radio", { name: /^Balanced/ }));
+    await waitFor(() => expect(document.querySelector('[data-trace="balanced"]')).not.toBeNull());
+    expect(screen.getByText("Up to date")).toBeInTheDocument();
   });
 
   it("hides and shows the panes from the title bar", async () => {
