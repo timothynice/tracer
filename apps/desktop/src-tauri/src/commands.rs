@@ -21,9 +21,12 @@ pub enum Outcome {
 
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "tif", "tiff"];
 
-pub(crate) fn open_one(state: &AppState, path: PathBuf, downscale: bool) -> Outcome {
+pub(crate) fn open_one<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &AppState, path: PathBuf, downscale: bool) -> Outcome {
     match intake::open_path(&state.core, &path, downscale) {
-        Ok(image) => Outcome::Ok(state.images.insert(image)),
+        Ok(image) => {
+            crate::settings::note_recent(app, &path.display().to_string());
+            Outcome::Ok(state.images.insert(image))
+        }
         Err(error) => Outcome::Failed {
             name: intake::file_name(&path),
             path: Some(path.display().to_string()),
@@ -48,14 +51,14 @@ pub fn presets(state: State<'_, AppState>) -> Value {
 }
 
 #[tauri::command]
-pub async fn open_paths(state: State<'_, AppState>, paths: Vec<String>, downscale: bool) -> Result<Vec<Outcome>, CommandError> {
-    Ok(paths.into_iter().map(|p| open_one(&state, PathBuf::from(p), downscale)).collect())
+pub async fn open_paths(app: tauri::AppHandle, state: State<'_, AppState>, paths: Vec<String>, downscale: bool) -> Result<Vec<Outcome>, CommandError> {
+    Ok(paths.into_iter().map(|p| open_one(&app, &state, PathBuf::from(p), downscale)).collect())
 }
 
 #[tauri::command]
 pub async fn pick_images(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<Outcome>, CommandError> {
     let picked = app.dialog().file().set_title("Open Images").add_filter("Images", IMAGE_EXTENSIONS).blocking_pick_files().unwrap_or_default();
-    Ok(picked.into_iter().filter_map(|f| f.into_path().ok()).map(|p| open_one(&state, p, false)).collect())
+    Ok(picked.into_iter().filter_map(|f| f.into_path().ok()).map(|p| open_one(&app, &state, p, false)).collect())
 }
 
 #[tauri::command]
@@ -182,4 +185,51 @@ pub async fn reveal(app: tauri::AppHandle, path: String) -> Result<(), CommandEr
 #[tauri::command]
 pub fn copy_text(app: tauri::AppHandle, text: String) -> Result<(), CommandError> {
     app.clipboard().write_text(text).map_err(|e| CommandError::new(500, "io_error", e.to_string()))
+}
+
+use crate::menu::MenuState;
+use crate::settings::{self, Settings};
+use std::sync::Mutex;
+
+#[tauri::command]
+pub fn load_settings(app: tauri::AppHandle) -> Settings {
+    settings::load(&app)
+}
+
+#[tauri::command]
+pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<Settings, CommandError> {
+    let next = settings::load(&app).merged(settings);
+    settings::save(&app, &next)?;
+    Ok(next)
+}
+
+#[tauri::command]
+pub fn set_menu_state(app: tauri::AppHandle, state: MenuState) {
+    crate::menu::apply_state(&app, &state);
+}
+
+#[tauri::command]
+pub fn take_pending_opens(opens: State<'_, Mutex<crate::opens::Opens>>) -> Vec<String> {
+    opens.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+}
+
+pub(crate) fn show_settings_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("settings") {
+        w.show()?;
+        return w.set_focus();
+    }
+    tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
+        .title("Settings")
+        .inner_size(520.0, 400.0)
+        .resizable(false)
+        .minimizable(false)
+        .maximizable(false)
+        .build()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), CommandError> {
+    show_settings_window(&app).map_err(|e| CommandError::new(500, "io_error", e.to_string()))
 }
