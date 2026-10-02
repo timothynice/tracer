@@ -1,7 +1,9 @@
 //! The app's side of the trace worker. One worker runs at a time (Auto at 2048 px peaks near 11 GB; two at
 //! once is a Mac swapping). A newer job for an image replaces its queued job, or kills its running one; `cancel`
 //! kills or dequeues. A worker that exits without an answer is `engine_crashed`, or `cancelled` where this side
-//! killed it. The running job is registered before its worker is spawned, so a cancel never misses it.
+//! killed it. The running job is registered before its worker is spawned, so a cancel never misses it; a cancel
+//! that arrives before its job was submitted (the webview aborts within milliseconds of calling) is remembered,
+//! and the job is refused when it comes.
 use crate::error::CommandError;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -41,7 +43,11 @@ struct Running {
 struct State {
     waiting: VecDeque<Job>,
     running: Option<Running>,
+    /// Ids cancelled before they were submitted, oldest first; at most `TOMBSTONES`.
+    cancelled_early: VecDeque<String>,
 }
+
+const TOMBSTONES: usize = 64;
 
 struct Shared {
     state: Mutex<State>,
@@ -88,6 +94,11 @@ impl TraceQueue {
     pub fn submit(&self, spec: JobSpec, on_start: impl FnOnce() + Send + 'static) -> mpsc::Receiver<Reply> {
         let (tx, rx) = mpsc::channel();
         let mut st = lock(&self.shared.state);
+        if let Some(i) = st.cancelled_early.iter().position(|id| *id == spec.id) {
+            st.cancelled_early.remove(i);
+            let _ = tx.send(Err(CommandError::cancelled()));
+            return rx;
+        }
         st.waiting.retain(|j| {
             let same = j.spec.image_id == spec.image_id;
             if same {
@@ -103,7 +114,8 @@ impl TraceQueue {
         rx
     }
 
-    /// Cancel the job `id`, running or queued; false when there is no such job.
+    /// Cancel the job `id`, running or queued; false when there is no such job (the id is then remembered, and the
+    /// job is refused if it is submitted after all).
     pub fn cancel(&self, id: &str) -> bool {
         let mut st = lock(&self.shared.state);
         if let Some(r) = st.running.as_ref().filter(|r| r.id == id) {
@@ -118,7 +130,14 @@ impl TraceQueue {
             }
             !hit
         });
-        st.waiting.len() != before
+        if st.waiting.len() != before {
+            return true;
+        }
+        if st.cancelled_early.len() == TOMBSTONES {
+            st.cancelled_early.pop_front();
+        }
+        st.cancelled_early.push_back(id.to_string());
+        false
     }
 
     /// Kill the running worker and drop every queued job (the app is quitting).

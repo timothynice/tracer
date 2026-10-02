@@ -106,6 +106,20 @@ fn cancel_kills_a_running_job_and_drops_a_queued_one() {
 }
 
 #[test]
+fn a_cancel_that_arrives_before_its_job_refuses_it_and_runs_no_worker() {
+    let q = hooked();
+    assert!(!q.cancel("x"));
+    let started = Arc::new(Mutex::new(false));
+    let flag = started.clone();
+    let early = q.submit(job("x", "img", None), move || *flag.lock().unwrap() = true);
+    assert_eq!(early.recv_timeout(WAIT).unwrap().unwrap_err().code(), Some("cancelled"));
+    assert!(!*started.lock().unwrap(), "a worker ran");
+    // the tombstone is consumed: the same id traces normally the next time
+    let again = q.submit(job("x", "img", None), || {});
+    assert!(again.recv_timeout(WAIT).unwrap().is_ok());
+}
+
+#[test]
 fn a_worker_that_dies_or_babbles_is_a_crashed_trace() {
     let q = hooked();
     for hook in [json!("die"), json!("garbage")] {

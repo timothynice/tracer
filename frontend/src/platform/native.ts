@@ -51,12 +51,25 @@ function on<T>(event: string, cb: (payload: T) => void): () => void {
   };
 }
 
-// Paths taken from the app after their listener had gone (React StrictMode mounts, unmounts and mounts again):
-// the next listener gets them.
-let unclaimed: string[] = [];
+/** Listen to an app event and resolve once the listener is registered, so nothing sent after this returns is missed. */
+async function listening<T>(event: string, cb: (payload: T) => void): Promise<() => void> {
+  return listen<T>(event, (e) => cb(e.payload));
+}
 
 export function nativePlatform(): Platform {
   const previews = new Map<string, string>();
+
+  // Paths from outside the page. The app holds the ones that came before the page listened; they are taken once
+  // per page load, after the first listener is registered, and go to whichever listener is current when they
+  // arrive, or wait in `buffer` for the next one, so delivery never depends on when a mount comes or goes.
+  let current: ((paths: string[]) => void) | null = null;
+  let buffer: string[] = [];
+  let taken = false;
+  const deliver = (paths: string[]) => {
+    if (!paths.length) return;
+    if (current) current(paths);
+    else buffer.push(...paths);
+  };
 
   async function outcomes(dtos: OutcomeDto[]): Promise<OpenOutcome[]> {
     return Promise.all(
@@ -90,12 +103,15 @@ export function nativePlatform(): Platform {
     },
     async vectorize(req, { signal, onPhase }) {
       if (signal.aborted) throw new ApiError("cancelled", "The trace was cancelled", 499);
-      const offPhase = on<{ job: string; phase: "tracing" }>("trace-phase", (p) => {
+      // listening before the command is sent: a phase the app reports at once must not be missed
+      const offPhase = await listening<{ job: string; phase: "tracing" }>("trace-phase", (p) => {
         if (p.job === req.job) onPhase?.(p.phase);
-      });
+      }).catch(() => () => {});
       const abort = () => void invoke("cancel_trace", { job: req.job }).catch(() => {});
-      signal.addEventListener("abort", abort, { once: true });
       try {
+        if (signal.aborted) throw new ApiError("cancelled", "The trace was cancelled", 499);
+        // an abort that lands before the app has the job is remembered there (the queue's tombstones)
+        signal.addEventListener("abort", abort, { once: true });
         return await call<VectorizeResponse>("vectorize", { imageId: req.imageId, parameters: req.parameters, auto: req.auto, job: req.job });
       } finally {
         offPhase();
@@ -120,21 +136,25 @@ export function nativePlatform(): Platform {
     onOpenPaths(cb) {
       let off: UnlistenFn | null = null;
       let done = false;
-      if (unclaimed.length) cb(unclaimed.splice(0));
-      void listen<string[]>("open-paths", (e) => cb(e.payload)).then((f) => {
+      current = cb;
+      if (buffer.length) cb(buffer.splice(0));
+      void listen<string[]>("open-paths", (e) => {
+        if (!done) cb(e.payload);
+      }).then((f) => {
         if (done) {
           f();
           return;
         }
         off = f;
-        void call<string[]>("take_pending_opens").then((pending) => {
-          if (!pending.length) return;
-          if (done) unclaimed.push(...pending);
-          else cb(pending);
+        if (taken) return;
+        taken = true;
+        void call<string[]>("take_pending_opens").then(deliver, () => {
+          taken = false;
         });
       });
       return () => {
         done = true;
+        if (current === cb) current = null;
         off?.();
       };
     },

@@ -1,6 +1,6 @@
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { nativePlatform } from "./native";
 import { DEFAULT_SETTINGS } from "./types";
@@ -88,6 +88,9 @@ describe("native platform", () => {
   });
 
   it("hands over paths that arrived before the page listened, then new ones", async () => {
+    // the mock keeps a listener its unlisten should have dropped (it reads `id` where the API sends `eventId`), and
+    // the API has already forgotten the callback: the warning is the mock's, nothing is delivered
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     ipc((cmd) => (cmd === "take_pending_opens" ? ["/early.png"] : null));
     const got: string[][] = [];
     const off = nativePlatform().onOpenPaths((paths) => got.push(paths));
@@ -96,6 +99,78 @@ describe("native platform", () => {
     off();
     await emit("open-paths", ["/after-off.png"]);
     expect(got).toEqual([["/early.png"], ["/later.png"]]);
+    warn.mockRestore();
+  });
+
+  it("keeps early paths for the listener that is there when they are taken, across a remount", async () => {
+    let release: (v: string[]) => void = () => {};
+    ipc((cmd) => (cmd === "take_pending_opens" ? new Promise<string[]>((r) => (release = r)) : null));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const p = nativePlatform();
+    const first: string[][] = [];
+    const second: string[][] = [];
+    const off1 = p.onOpenPaths((paths) => first.push(paths));
+    await new Promise((r) => setTimeout(r, 10));
+    off1();
+    const off2 = p.onOpenPaths((paths) => second.push(paths));
+    await new Promise((r) => setTimeout(r, 10));
+    release(["/early.png"]);
+    await new Promise((r) => setTimeout(r, 10));
+    off2();
+    expect(first).toEqual([]);
+    expect(second).toEqual([["/early.png"]]);
+    expect(calls.filter((c) => c.cmd === "take_pending_opens")).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it("holds early paths that are taken between listeners until the next one subscribes, once", async () => {
+    let release: (v: string[]) => void = () => {};
+    ipc((cmd) => (cmd === "take_pending_opens" ? new Promise<string[]>((r) => (release = r)) : null));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const p = nativePlatform();
+    const off1 = p.onOpenPaths(() => {});
+    await new Promise((r) => setTimeout(r, 10));
+    off1();
+    release(["/early.png"]);
+    await new Promise((r) => setTimeout(r, 10));
+    const got: string[][] = [];
+    const off2 = p.onOpenPaths((paths) => got.push(paths));
+    await new Promise((r) => setTimeout(r, 10));
+    off2();
+    const again: string[][] = [];
+    p.onOpenPaths((paths) => again.push(paths))();
+    expect(got).toEqual([["/early.png"]]);
+    expect(again).toEqual([]);
+    expect(calls.filter((c) => c.cmd === "take_pending_opens")).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it("hears a phase the app reports the moment the trace starts", async () => {
+    ipc(async (cmd) => {
+      if (cmd === "vectorize") {
+        await emit("trace-phase", { job: "j3", phase: "tracing" });
+        return { success: true };
+      }
+      return null;
+    });
+    // a real listen crosses a process boundary and settles later than the next command: make the mock's slow
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, ...rest: unknown[]) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const fast = internals.invoke;
+    internals.invoke = async (cmd, ...rest) => {
+      if (cmd === "plugin:event|listen") await new Promise((r) => setTimeout(r, 20));
+      return fast(cmd, ...rest);
+    };
+    const phases: string[] = [];
+    await nativePlatform().vectorize({ imageId: "i", parameters: {}, auto: false, job: "j3" }, { signal: new AbortController().signal, onPhase: (ph) => phases.push(ph) });
+    expect(phases).toEqual(["tracing"]);
+  });
+
+  it("does not start a trace whose signal is already aborted, and leaves no listener behind", async () => {
+    ipc(() => null);
+    const ctl = new AbortController();
+    ctl.abort();
+    await expect(nativePlatform().vectorize({ imageId: "i", parameters: {}, auto: false, job: "j4" }, { signal: ctl.signal })).rejects.toMatchObject({ code: "cancelled" });
+    expect(calls.filter((c) => c.cmd === "vectorize")).toEqual([]);
   });
 
   it("routes menu items and settings changes", async () => {
