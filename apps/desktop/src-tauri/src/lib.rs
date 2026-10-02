@@ -1,6 +1,7 @@
 //! Studi0Trace for Mac: the Tauri shell around `studi0trace_core::api::Core`.
 pub mod commands;
 pub mod error;
+pub mod export;
 pub mod intake;
 pub mod queue;
 pub mod store;
@@ -36,6 +37,10 @@ pub fn run() {
             commands::close_image,
             commands::vectorize,
             commands::cancel_trace,
+            commands::export_file,
+            commands::export_all,
+            commands::reveal,
+            commands::copy_text,
         ])
         .build(tauri::generate_context!())
         .expect("Studi0Trace failed to start")

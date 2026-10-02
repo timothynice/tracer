@@ -100,3 +100,86 @@ pub async fn vectorize(app: tauri::AppHandle, state: State<'_, AppState>, image_
 pub fn cancel_trace(state: State<'_, AppState>, job: String) -> bool {
     state.queue.cancel(&job)
 }
+
+use crate::export;
+use serde::Deserialize;
+use std::path::Path;
+use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_opener::OpenerExt;
+
+fn header(request: &Request<'_>, key: &str) -> Option<String> {
+    request.headers().get(key).and_then(|v| v.to_str().ok()).map(intake::decode_header_name)
+}
+
+fn panel_path(fp: tauri_plugin_dialog::FilePath) -> Result<PathBuf, CommandError> {
+    fp.into_path().map_err(|e| CommandError::bad_request(format!("not a file path: {e}")))
+}
+
+#[tauri::command]
+pub async fn export_file(app: tauri::AppHandle, state: State<'_, AppState>, request: Request<'_>) -> Result<Option<String>, CommandError> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err(CommandError::bad_request("export_file takes the file's bytes"));
+    };
+    let ext = if header(&request, "x-kind").as_deref() == Some("png") { "png" } else { "svg" };
+    let name = export::safe_name(&header(&request, "x-name").unwrap_or_default(), ext);
+    let original = header(&request, "x-image").and_then(|id| state.images.get(&id)).and_then(|i| i.path);
+    let destination = export::Destination::parse(&header(&request, "x-destination").unwrap_or_default());
+    let path = match export::beside(original.as_deref(), destination, &name) {
+        Some(p) => p,
+        None => {
+            let mut panel = app.dialog().file().set_title(if ext == "png" { "Export PNG" } else { "Export SVG" }).set_file_name(&name).add_filter(if ext == "png" { "PNG image" } else { "SVG image" }, &[ext]);
+            if let Some(dir) = original.as_deref().and_then(Path::parent) {
+                panel = panel.set_directory(dir);
+            }
+            match panel.blocking_save_file() {
+                Some(fp) => panel_path(fp)?,
+                None => return Ok(None),
+            }
+        }
+    };
+    export::write_file(&path, bytes)?;
+    if header(&request, "x-reveal").as_deref() == Some("1") {
+        let _ = app.opener().reveal_item_in_dir(&path);
+    }
+    Ok(Some(path.display().to_string()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportItem {
+    pub name: String,
+    pub svg: String,
+}
+
+#[tauri::command]
+pub async fn export_all(app: tauri::AppHandle, items: Vec<ExportItem>, reveal: bool) -> Result<Option<Vec<String>>, CommandError> {
+    let Some(dir) = app.dialog().file().set_title("Export All").blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let dir = panel_path(dir)?;
+    let mut written = Vec::new();
+    for item in items {
+        let path = export::unique_path(&dir, &export::safe_name(&item.name, "svg"));
+        export::write_file(&path, item.svg.as_bytes())?;
+        written.push(path.display().to_string());
+    }
+    if reveal {
+        if let Some(first) = written.first() {
+            let _ = app.opener().reveal_item_in_dir(first);
+        }
+    }
+    Ok(Some(written))
+}
+
+#[tauri::command]
+pub async fn reveal(app: tauri::AppHandle, path: String) -> Result<(), CommandError> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(CommandError::io(&p, &std::io::Error::from(std::io::ErrorKind::NotFound)));
+    }
+    app.opener().reveal_item_in_dir(&p).map_err(|e| CommandError::new(500, "io_error", e.to_string()))
+}
+
+#[tauri::command]
+pub fn copy_text(app: tauri::AppHandle, text: String) -> Result<(), CommandError> {
+    app.clipboard().write_text(text).map_err(|e| CommandError::new(500, "io_error", e.to_string()))
+}
