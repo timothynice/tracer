@@ -59,7 +59,8 @@ use std::sync::OnceLock;
 
 pub mod path;
 
-use path::{cos_sin, first_num, nums, polylines, py_ceil, py_cos_sin, py_max, re, Budget};
+use crate::py;
+use path::{cos_sin, first_num, nums, polylines, py_cos_sin, re, Budget};
 pub use path::{arc, cubic, path_polylines, quad, segments_in, Subpath};
 
 /// `quality.STEP`: the sampling step along every outline, px.
@@ -108,6 +109,12 @@ fn geometry(e: impl Into<String>) -> DrawingError {
     DrawingError::Geometry(e.into())
 }
 
+impl From<py::NotIntegral> for DrawingError {
+    fn from(e: py::NotIntegral) -> Self {
+        geometry(e.0)
+    }
+}
+
 // ---------------------------------------------------------------- Python's text handling
 
 /// Python's `\w` and `\s` in a str pattern: `str.isalnum()` or `_`, and `str.isspace()`,
@@ -115,30 +122,9 @@ fn geometry(e: impl Into<String>) -> DrawingError {
 const PY_W: &str = r"[\p{L}\p{N}_]";
 const PY_S: &str = r"[\s\x1C-\x1F]";
 
-/// `str(x)` for a float, as the Python formats numbers into path data and transforms and
-/// reads them back: a finite value round-trips either way, and `inf` or `nan` hold no number.
-fn py_repr(x: f64) -> String {
-    if x.is_nan() {
-        "nan".into()
-    } else if x.is_infinite() {
-        (if x > 0.0 { "inf" } else { "-inf" }).into()
-    } else {
-        format!("{x}")
-    }
-}
-
 /// `str.strip()`
 fn py_strip(s: &str) -> &str {
     s.trim_matches(|c: char| c.is_whitespace() || ('\x1c'..='\x1f').contains(&c))
-}
-
-/// Python's `min(a, b)`: `a` unless `b` is below it, so a NaN survives only as `a`.
-fn py_min(a: f64, b: f64) -> f64 {
-    if b < a {
-        b
-    } else {
-        a
-    }
 }
 
 // ---------------------------------------------------------------- transforms
@@ -249,16 +235,16 @@ fn det2(m: &Matrix) -> f64 {
 // ---------------------------------------------------------------- shapes
 
 fn rect_in(x: f64, y: f64, w: f64, h: f64, rx: f64, ry: f64, budget: &mut Budget) -> Result<Subpath, DrawingError> {
-    let (rx, ry) = (py_min(rx, w / 2.0), py_min(ry, h / 2.0));
+    let (rx, ry) = (py::min(rx, w / 2.0), py::min(ry, h / 2.0));
     if rx <= 0.0 || ry <= 0.0 {
         budget.take(5)?;
         let pts = vec![[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]];
         return Ok(Subpath { pts, closed: true, columns: 2 });
     }
     // the Python writes the outline as path data and reads it back, NaN and all
-    let [x0, x1, x2, x3] = [x, x + rx, x + w - rx, x + w].map(py_repr);
-    let [y0, y1, y2, y3] = [y, y + ry, y + h - ry, y + h].map(py_repr);
-    let arc = format!("A{} {} 0 0 1", py_repr(rx), py_repr(ry));
+    let [x0, x1, x2, x3] = [x, x + rx, x + w - rx, x + w].map(py::repr);
+    let [y0, y1, y2, y3] = [y, y + ry, y + h - ry, y + h].map(py::repr);
+    let arc = format!("A{} {} 0 0 1", py::repr(rx), py::repr(ry));
     let d = format!("M{x1} {y0}L{x2} {y0}{arc} {x3} {y1}L{x3} {y2}{arc} {x2} {y3}L{x1} {y3}{arc} {x0} {y2}L{x0} {y1}{arc} {x1} {y0}Z");
     let first = polylines(&d, budget)?.into_iter().next();
     first.map(|s| Subpath { closed: true, ..s }).ok_or_else(|| geometry("list index out of range"))
@@ -272,7 +258,7 @@ pub fn rect(x: f64, y: f64, w: f64, h: f64, rx: f64, ry: f64) -> Result<Vec<[f64
 }
 
 fn ellipse_in(cx: f64, cy: f64, rx: f64, ry: f64, budget: &mut Budget) -> Result<Subpath, DrawingError> {
-    let n = py_ceil(2.0 * PI * py_max(rx, ry) / STEP)?.max(16.0).min(MAX_POINTS as f64) as usize;
+    let n = py::ceil(2.0 * PI * py::max(rx, ry) / STEP)?.max(16.0).min(MAX_POINTS as f64) as usize;
     budget.take(n + 1)?;
     // `np.linspace(0, 2π, n + 1)`
     let step = 2.0 * PI / n as f64;
@@ -524,7 +510,7 @@ impl<'a, 'input> Walker<'a, 'input> {
             let Some(&target) = self.defs.get(href.trim_start_matches('#')) else {
                 return Ok(());
             };
-            let at = format!("translate({} {})", py_repr(number_attr(el, "x")), py_repr(number_attr(el, "y")));
+            let at = format!("translate({} {})", py::repr(number_attr(el, "x")), py::repr(number_attr(el, "y")));
             let mm = mat_mul(&mat_mul(m, &matrix(attr(el, "transform"))?), &matrix(Some(&at))?);
             return self.shape(target, &mm, &paint(el, inherited), alpha * opacity(el));
         }
@@ -657,7 +643,7 @@ pub fn parse(svg: &str, size: Option<(u32, u32)>) -> Result<Drawing, DrawingErro
     let mut base = IDENTITY;
     let vb = nums(attr(root, "viewBox").unwrap_or(""));
     if let Some((w, h)) = size.filter(|_| vb.len() == 4 && vb[2] > 0.0 && vb[3] > 0.0) {
-        let [sx, sy, tx, ty] = [w as f64 / vb[2], h as f64 / vb[3], -vb[0], -vb[1]].map(py_repr);
+        let [sx, sy, tx, ty] = [w as f64 / vb[2], h as f64 / vb[3], -vb[0], -vb[1]].map(py::repr);
         base = matrix(Some(&format!("scale({sx} {sy}) translate({tx} {ty})")))?;
     }
     let mut walker = Walker { defs, drawing: Drawing::default(), budget: Budget(MAX_POINTS) };

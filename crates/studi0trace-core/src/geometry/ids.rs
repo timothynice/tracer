@@ -2,41 +2,10 @@
 //! (`quality.id_svg`, `id_map`, `_lookup`, `visible_samples`).
 use super::{CardError, VIS_OFFSET};
 use crate::drawing::{Contour, Drawing};
+use crate::py;
 use crate::render;
 use std::collections::BTreeMap;
 use std::fmt::Write;
-
-/// `repr(x)` of a Python float: the shortest digits that read back as `x`, in fixed notation
-/// from 1e-4 to below 1e16 (with a `.0` when whole) and as `1.5e+16`, `1e-05` outside it.
-pub(super) fn py_float_repr(x: f64) -> String {
-    if x.is_nan() {
-        return "nan".into();
-    }
-    if x.is_infinite() {
-        return (if x > 0.0 { "inf" } else { "-inf" }).into();
-    }
-    // `{:e}` is the shortest round-trip digits too: "-1.2345e-7", "3e0"
-    let sci = format!("{x:e}");
-    let (mantissa, exp) = sci.split_once('e').unwrap();
-    let exp: i32 = exp.parse().unwrap();
-    let (sign, mantissa) = mantissa.strip_prefix('-').map_or(("", mantissa), |m| ("-", m));
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    if !(-4..16).contains(&exp) {
-        let (head, tail) = digits.split_at(1);
-        let dot = if tail.is_empty() { String::new() } else { format!(".{tail}") };
-        let esign = if exp < 0 { '-' } else { '+' };
-        return format!("{sign}{head}{dot}e{esign}{:02}", exp.abs());
-    }
-    if exp < 0 {
-        return format!("{sign}0.{}{digits}", "0".repeat((-exp - 1) as usize));
-    }
-    let point = exp as usize + 1;
-    if digits.len() <= point {
-        format!("{sign}{digits}{}.0", "0".repeat(point - digits.len()))
-    } else {
-        format!("{sign}{}.{}", &digits[..point], &digits[point..])
-    }
-}
 
 /// `f"{x:.4f}"`
 fn py_fixed4(x: f64) -> String {
@@ -61,7 +30,7 @@ fn path_d(pts: &[[f64; 2]], closed: bool, out: &mut String) {
             out.push(' ');
         }
         first = false;
-        out.push_str(&py_float_repr(round3(*v)));
+        out.push_str(&py::repr(round3(*v)));
     }
     if closed {
         out.push('Z');

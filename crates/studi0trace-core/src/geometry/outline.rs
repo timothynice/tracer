@@ -1,7 +1,8 @@
 //! An outline as the card walks it: resampled at [`STEP`], its turning at a chord of `k`
 //! samples, the turning that cancels inside a window, and the sign changes of its curvature
 //! (`quality._resample`, `_wrap`, `_turns`, `_cancelled`, `_flips`, `_dilate`, `_inflections`).
-use super::{py_round, radians, CardError, CORNER_GUARD, CORNER_SNAP, INFLECT_HYST, STEP};
+use super::{radians, CardError, CORNER_GUARD, CORNER_SNAP, INFLECT_HYST, STEP};
+use crate::py;
 use std::f64::consts::PI;
 
 fn geometry(e: &str) -> CardError {
@@ -143,7 +144,7 @@ pub(super) fn resample(pts: &[[f64; 2]], closed: bool, budget: &mut usize) -> Re
     }
     let count = (total / STEP).round_ties_even();
     let n = if count.is_nan() || count.is_infinite() {
-        py_round(total / STEP)? as usize // raises as round() does
+        py::round_int(total / STEP)? as usize // raises as round() does
     } else if count >= *budget as f64 {
         return Err(CardError::TooLarge);
     } else {
@@ -306,7 +307,7 @@ pub(super) fn inflections(q: &[[f64; 2]], closed: bool, k: usize) -> Result<Vec<
         return Ok(Vec::new());
     }
     let hyst = radians(INFLECT_HYST);
-    let m = py_round(2.0 / STEP)? as usize;
+    let m = py::round_int(2.0 / STEP)? as usize;
     let nd = d.len();
     let ext: Vec<f64> = if closed {
         d[nd - m / 2..].iter().chain(&d).chain(&d[..m - m / 2]).copied().collect()
@@ -316,7 +317,7 @@ pub(super) fn inflections(q: &[[f64; 2]], closed: bool, k: usize) -> Result<Vec<
     let cs = cumsum(ext.into_iter());
     let snap = radians(CORNER_SNAP);
     let near: Vec<bool> = (0..nd).map(|i| (cs[m + i] - cs[i]).abs() >= snap).collect();
-    let corner = dilate(&near, py_round(CORNER_GUARD / STEP)? as usize, closed);
+    let corner = dilate(&near, py::round_int(CORNER_GUARD / STEP)? as usize, closed);
     let t = turns(q, closed, k);
     if !corner.iter().any(|&c| c) {
         let at = flips(&t, closed, hyst);

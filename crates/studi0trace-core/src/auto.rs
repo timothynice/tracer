@@ -39,6 +39,7 @@ use vexel_rs::engine::VexelParams;
 
 use crate::intake::Image;
 use crate::params;
+use crate::py;
 use crate::presets::{self, Preset};
 use crate::scorecard::{self, Reference};
 use crate::svg::{self, Stats};
@@ -55,21 +56,7 @@ const ENGINE: &str = "vexel";
 
 // ---------------------------------------------------------------- Python's round
 
-/// Python's `round(x, ndigits)` for a float: the exact value of `x` rounded correctly to
-/// `ndigits` decimals (a tie goes to the even digit), read back as the nearest double. NaN and
-/// the infinities are themselves, and a negative that rounds to nothing is `-0.0`.
-///
-/// Rust formats a float exactly (its decimal expansion is not truncated at 17 digits) and rounds
-/// that to even, which is what CPython's `dtoa` does; the string is parsed back correctly rounded.
-/// `tests/auto.rs` holds it to the Python's over a thousand numbers (decimals as typed, exact
-/// ties, the doubles either side of them, both signs, tiny and huge), and it was compared with a
-/// million more when it was written.
-pub fn py_round(x: f64, ndigits: u32) -> f64 {
-    if !x.is_finite() {
-        return x;
-    }
-    format!("{:.*}", ndigits as usize, x).parse().unwrap_or(x)
-}
+pub use crate::py::round as py_round;
 
 // ---------------------------------------------------------------- the rule
 
@@ -85,32 +72,8 @@ pub struct Scored {
 
 /// The ΔE a candidate may have and still be as faithful as one at `best`.
 pub fn de_limit(best: f64) -> f64 {
-    // Python's `max(DE_SLACK, DE_SHARE * best)`: the share only when it is greater
-    let share = DE_SHARE * best;
-    best + if share > DE_SLACK { share } else { DE_SLACK }
-}
-
-/// Python's `min(floats)`: the first, replaced by each later one that is less (NaN is never
-/// less, and nothing is less than NaN).
-fn py_min(mut values: impl Iterator<Item = f64>) -> Option<f64> {
-    let mut best = values.next()?;
-    for v in values {
-        if v < best {
-            best = v;
-        }
-    }
-    Some(best)
-}
-
-/// Python's `max(floats)`.
-fn py_max(mut values: impl Iterator<Item = f64>) -> Option<f64> {
-    let mut best = values.next()?;
-    for v in values {
-        if v > best {
-            best = v;
-        }
-    }
-    Some(best)
+    // the share only when it is greater
+    best + py::max(DE_SLACK, DE_SHARE * best)
 }
 
 /// A tuple key of Python: a float, an integer and a position.
@@ -147,13 +110,13 @@ fn py_min_by(mut items: impl Iterator<Item = usize>, key: impl Fn(usize) -> Key)
 
 /// The candidates as faithful as the best, as indices into `scored` in the order given.
 pub fn faithful(scored: &[Scored]) -> Vec<usize> {
-    let Some(best) = py_min(scored.iter().map(|s| s.delta_e)) else {
+    let Some(best) = py::min_of(scored.iter().map(|s| s.delta_e)) else {
         return vec![];
     };
     let limit = de_limit(best);
     let ok: Vec<usize> = (0..scored.len()).filter(|&i| scored[i].delta_e <= limit).collect();
     // the Python's `max()` of nothing raises (a ΔE of NaN first leaves no one); here no one is faithful
-    let Some(best_edge) = py_max(ok.iter().map(|&i| scored[i].edge_f1)) else {
+    let Some(best_edge) = py::max_of(ok.iter().map(|&i| scored[i].edge_f1)) else {
         return vec![];
     };
     ok.into_iter().filter(|&i| scored[i].edge_f1 >= best_edge - EDGE_SLACK).collect()

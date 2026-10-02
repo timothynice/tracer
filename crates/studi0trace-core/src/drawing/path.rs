@@ -7,6 +7,7 @@
 //! adds to both coordinates) or refuses. `Pt` keeps that length, so the Rust draws and
 //! raises exactly where the Python does; `tests/drawing.rs` checks every prefix of a path.
 use super::{geometry, DrawingError, MAX_POINTS, STEP};
+use crate::py;
 use regex::Regex;
 use std::borrow::Cow;
 use std::f64::consts::PI;
@@ -68,26 +69,6 @@ pub(super) fn nums(s: &str) -> Vec<f64> {
 /// `float(_NUM.search(s).group(0))`, if it finds one.
 pub(super) fn first_num(s: &str) -> Option<f64> {
     num_re().find(s).map(|m| py_float(m.as_str()))
-}
-
-/// Python's `max(a, b)`: `a` unless `b` beats it, so a NaN survives only as `a`.
-pub(super) fn py_max(a: f64, b: f64) -> f64 {
-    if b > a {
-        b
-    } else {
-        a
-    }
-}
-
-/// `math.ceil`, which raises on NaN (`ValueError`) and infinity (`OverflowError`).
-pub(super) fn py_ceil(x: f64) -> Result<f64, DrawingError> {
-    if x.is_nan() {
-        Err(geometry("cannot convert float NaN to integer"))
-    } else if x.is_infinite() {
-        Err(geometry("cannot convert float infinity to integer"))
-    } else {
-        Ok(x.ceil())
-    }
 }
 
 /// `cos(a)` and `sin(a)` as numpy and CPython get them: two separate calls to libm's `cos` and
@@ -269,7 +250,7 @@ fn unit_steps(n: usize) -> impl Iterator<Item = f64> {
 
 fn cubic_pt(p0: Pt, c1: Pt, c2: Pt, p1: Pt, budget: &mut Budget) -> Result<Vec<[f64; 2]>, DrawingError> {
     let length = c1.sub(p0)?.norm() + c2.sub(c1)?.norm() + p1.sub(c2)?.norm();
-    let n = py_ceil(length / STEP)?.clamp(4.0, 400.0) as usize;
+    let n = py::ceil(length / STEP)?.clamp(4.0, 400.0) as usize;
     budget.take(n)?;
     Ok(unit_steps(n)
         .map(|t| {
@@ -306,7 +287,7 @@ fn arc_pt(p0: Pt, rx: f64, ry: f64, phi_deg: f64, large: bool, sweep: bool, p1: 
     }
     let num = rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1;
     let den = rx * rx * y1 * y1 + ry * ry * x1 * x1;
-    let mut co = if den > 0.0 { py_max(0.0, num / den).sqrt() } else { 0.0 };
+    let mut co = if den > 0.0 { py::max(0.0, num / den).sqrt() } else { 0.0 };
     if large == sweep {
         co = -co;
     }
@@ -323,7 +304,7 @@ fn arc_pt(p0: Pt, rx: f64, ry: f64, phi_deg: f64, large: bool, sweep: bool, p1: 
     } else if sweep && dt < 0.0 {
         dt += 2.0 * PI;
     }
-    let n = py_ceil(dt.abs() * py_max(rx, ry) / STEP)?.clamp(4.0, 2000.0) as usize;
+    let n = py::ceil(dt.abs() * py::max(rx, ry) / STEP)?.clamp(4.0, 2000.0) as usize;
     budget.take(n)?;
     let mut pts: Vec<[f64; 2]> = unit_steps(n)
         .map(|s| {

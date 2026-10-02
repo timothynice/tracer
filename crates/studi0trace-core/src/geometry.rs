@@ -49,6 +49,7 @@
 //! the renderer's recursion is refused first.
 use crate::drawing::{self, DrawingError};
 use crate::edges::pairwise_sum;
+use crate::py;
 use serde_json::{Map, Value};
 use std::f64::consts::PI;
 use std::fmt;
@@ -158,14 +159,9 @@ impl From<DrawingError> for CardError {
     }
 }
 
-/// `int(round(x))`: ties to even; NaN and infinity raise.
-fn py_round(x: f64) -> Result<i64, CardError> {
-    if x.is_nan() {
-        Err(CardError::Geometry("cannot convert float NaN to integer".into()))
-    } else if x.is_infinite() {
-        Err(CardError::Geometry("cannot convert float infinity to integer".into()))
-    } else {
-        Ok(x.round_ties_even() as i64)
+impl From<py::NotIntegral> for CardError {
+    fn from(e: py::NotIntegral) -> Self {
+        CardError::Geometry(e.0.into())
     }
 }
 
@@ -177,24 +173,6 @@ fn degrees(x: f64) -> f64 {
 /// `math.radians`
 fn radians(x: f64) -> f64 {
     x * (PI / 180.0)
-}
-
-/// `round(x, 2)`: the exact value rounded to two decimals, ties to even, read back.
-fn round2(x: f64) -> f64 {
-    if x.is_finite() {
-        format!("{x:.2}").parse().unwrap()
-    } else {
-        x
-    }
-}
-
-/// Python's `max(a, b)`: `b` only when it is greater.
-fn py_max(a: f64, b: f64) -> f64 {
-    if b > a {
-        b
-    } else {
-        a
-    }
 }
 
 /// `q.mean(axis=0)`: each column added in order and divided by the count.
@@ -229,8 +207,8 @@ pub fn card(svg: &str, size: Option<(u32, u32)>, visibility: bool, id_scale: u32
     let (mut inflections, mut slivers, mut degenerate, mut thin_strokes) = (0u64, 0u64, 0u64, 0u64);
     let (mut radius_bad, mut rects, mut bowed, mut skewed) = (0u64, 0u64, 0u64, 0u64);
     let (mut loc_wobble, mut loc_flip, mut loc_sliver, mut loc_radius) = (vec![], vec![], vec![], vec![]);
-    let kw = py_round(WOBBLE_SCALE / STEP)?.max(1) as usize;
-    let ki = py_round(INFLECT_SCALE / STEP)?.max(1) as usize;
+    let kw = py::round_int(WOBBLE_SCALE / STEP)?.max(1) as usize;
+    let ki = py::round_int(INFLECT_SCALE / STEP)?.max(1) as usize;
     let mut budget = MAX_SAMPLES;
     for c in &drawing.contours {
         let q = outline::resample(&c.pts, c.closed, &mut budget)?;
@@ -262,7 +240,7 @@ pub fn card(svg: &str, size: Option<(u32, u32)>, visibility: bool, id_scale: u32
                 degenerate += 1;
                 continue;
             }
-            let thick = 2.0 * area / py_max(per, 1e-9);
+            let thick = 2.0 * area / py::max(per, 1e-9);
             if area < SLIVER_AREA || thick < SLIVER_THICK {
                 if any_visible {
                     slivers += 1;
@@ -290,7 +268,7 @@ pub fn card(svg: &str, size: Option<(u32, u32)>, visibility: bool, id_scale: u32
             std::iter::repeat_n(vis[0], h).chain(vis.iter().copied()).chain(std::iter::repeat_n(vis[n - 1], h)).collect()
         };
         let on_screen: Vec<f64> = excess_at.iter().zip(&vis_at).filter(|(_, &v)| v).map(|(&e, _)| e).collect();
-        let excess = py_max(0.0, pairwise_sum(&on_screen));
+        let excess = py::max(0.0, pairwise_sum(&on_screen));
         wobble += degrees(excess);
         // where: cancelled turning summed over a 2L window, reported on screen only
         if excess > radians(5.0) {
@@ -323,13 +301,13 @@ pub fn card(svg: &str, size: Option<(u32, u32)>, visibility: bool, id_scale: u32
                 skewed += (rect.skew > RECT_SKEW) as u64;
                 if bad || rect.bow > RECT_BOW || rect.skew > RECT_SKEW {
                     let cen = centre(&q);
-                    let radii: Vec<f64> = rect.radii.iter().map(|&r| round2(r)).collect();
+                    let radii: Vec<f64> = rect.radii.iter().map(|&r| py::round(r, 2)).collect();
                     loc_radius.push(Value::Array(vec![
                         float(cen[0]),
                         float(cen[1]),
                         floats(&radii),
-                        float(round2(rect.bow)),
-                        float(round2(rect.skew)),
+                        float(py::round(rect.bow, 2)),
+                        float(py::round(rect.skew, 2)),
                     ]));
                 }
             }

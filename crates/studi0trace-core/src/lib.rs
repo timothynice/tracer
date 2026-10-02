@@ -13,6 +13,7 @@ pub mod holes;
 pub mod intake;
 pub mod params;
 pub mod presets;
+mod py;
 pub mod render;
 pub mod resample;
 pub mod scorecard;

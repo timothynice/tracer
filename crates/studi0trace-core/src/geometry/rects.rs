@@ -2,11 +2,12 @@
 use super::accelerate::ddot_stride2;
 use super::outline::turns;
 use super::{
-    degrees, py_round, radians, CORNER_MAX_DEG, CORNER_MIN_DEG, CORNER_SEED_DEG, CORNER_WINDOW, CURVED, GROW_MAX,
+    degrees, radians, CORNER_MAX_DEG, CORNER_MIN_DEG, CORNER_SEED_DEG, CORNER_WINDOW, CURVED, GROW_MAX,
     RECT_GRID, RECT_SIDE_DEG, ROUND_R, SHARP_R, STEP,
 };
 use crate::drawing::path::cos_sin;
 use crate::edges::pairwise_sum;
+use crate::py;
 
 /// `quality.CornerInfo`: one convex corner of a closed outline.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,7 +38,7 @@ pub(super) fn corners(q: &[[f64; 2]], net_sign: f64) -> Result<Vec<CornerInfo>, 
     }
     let d = turns(q, true, 1); // d[i]: the turn at sample i + 1
     let n = d.len();
-    let w = (py_round(CORNER_WINDOW / STEP)? as usize).min(n - 1);
+    let w = (py::round_int(CORNER_WINDOW / STEP)? as usize).min(n - 1);
     let h = w / 2;
     let ext = d[n - h..].iter().chain(&d).chain(&d[..w - h + 1]);
     let mut ce = vec![0.0];
@@ -47,7 +48,7 @@ pub(super) fn corners(q: &[[f64; 2]], net_sign: f64) -> Result<Vec<CornerInfo>, 
     let conv: Vec<f64> = (0..n).map(|i| (ce[i + w] - ce[i]) * net_sign).collect();
     let signed: Vec<f64> = d.iter().map(|&v| v * net_sign).collect();
     let curved_all: Vec<bool> = signed.iter().map(|&v| v > CURVED * STEP).collect();
-    let grow = ((py_round(GROW_MAX / STEP)?) as usize).min(n - 1) as i64;
+    let grow = ((py::round_int(GROW_MAX / STEP)?) as usize).min(n - 1) as i64;
     let (seed, lo_rad, hi_rad) = (radians(CORNER_SEED_DEG), radians(CORNER_MIN_DEG), radians(CORNER_MAX_DEG));
     // np.argsort(-conv, kind="stable"): descending, ties in index order, NaN last
     let mut order: Vec<usize> = (0..n).collect();
@@ -95,7 +96,7 @@ pub(super) fn corners(q: &[[f64; 2]], net_sign: f64) -> Result<Vec<CornerInfo>, 
         // and turns in one or two samples; a chamfer turns in two separated spikes and reads as
         // sharp, which is how it looks.
         let length = turning.len() as f64 * STEP;
-        let radius = py_max(0.0, length - 2.0 * STEP) / turn;
+        let radius = py::max(0.0, length - 2.0 * STEP) / turn;
         let mid = wrap_index((a + b).div_euclid(2), n);
         out.push(CornerInfo {
             at: q[(mid + 1) % n],
@@ -108,25 +109,6 @@ pub(super) fn corners(q: &[[f64; 2]], net_sign: f64) -> Result<Vec<CornerInfo>, 
     }
     out.sort_by_key(|c| c.index);
     Ok(out)
-}
-
-/// Python's `max(a, b)` of two floats: `b` only when it is greater.
-fn py_max(a: f64, b: f64) -> f64 {
-    if b > a {
-        b
-    } else {
-        a
-    }
-}
-
-/// `max(list)` of Python floats, the first greatest.
-fn py_max_of(v: impl IntoIterator<Item = f64>) -> Option<f64> {
-    v.into_iter().reduce(py_max)
-}
-
-/// `min(list)`, the first least.
-fn py_min_of(v: impl IntoIterator<Item = f64>) -> Option<f64> {
-    v.into_iter().reduce(|a, b| if b < a { b } else { a })
 }
 
 /// What `_rect_like` returns for a (rounded) rectangle.
@@ -206,12 +188,12 @@ pub(super) fn rect_like(q: &[[f64; 2]], corners: &[CornerInfo], visible: Option<
         angles.push(degrees(direction[1].atan2(direction[0])));
     }
     let reference = angles[0];
-    let skew = py_max_of(angles.iter().map(|ang| (py_mod(ang - reference + 45.0, 90.0) - 45.0).abs())).unwrap();
+    let skew = py::max_of(angles.iter().map(|ang| (py::rem(ang - reference + 45.0, 90.0) - 45.0).abs())).unwrap();
     if skew > RECT_GRID {
         return None; // a trapezoid, a rhombus: drawn that way on purpose
     }
     let shown: Vec<f64> = corners.iter().filter(|c| visible.is_none_or(|v| v[c.index % n])).map(|c| c.radius).collect();
-    let (max, min) = (py_max_of(shown.iter().copied()), py_min_of(shown.iter().copied()));
+    let (max, min) = (py::max_of(shown.iter().copied()), py::min_of(shown.iter().copied()));
     let (spread, mixed) = match (max, min) {
         (Some(hi), Some(lo)) if shown.len() >= 2 => (hi - lo, hi >= ROUND_R && lo < SHARP_R),
         _ => (0.0, false),
@@ -220,23 +202,9 @@ pub(super) fn rect_like(q: &[[f64; 2]], corners: &[CornerInfo], visible: Option<
         radii: corners.iter().map(|c| c.radius).collect(),
         spread,
         mixed,
-        bow: py_max_of(bows).unwrap(),
+        bow: py::max_of(bows).unwrap(),
         skew,
     })
-}
-
-/// Python's float `%`: the remainder with the sign of the divisor.
-fn py_mod(a: f64, b: f64) -> f64 {
-    let m = a % b;
-    if m != 0.0 {
-        if (b < 0.0) != (m < 0.0) {
-            m + b
-        } else {
-            m
-        }
-    } else {
-        0.0f64.copysign(b)
-    }
 }
 
 /// `_area`: the shoelace sum, as numpy dots `x` with `y` rolled by one (Accelerate's strided
