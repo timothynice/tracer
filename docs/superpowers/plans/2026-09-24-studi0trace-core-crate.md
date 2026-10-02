@@ -1606,7 +1606,7 @@ this is the list a later plan needs.
   - *Engine changes now reach the core's tests.* The goldens `api.json`, `auto.json`, `auto_*.svg` embed the SVG the
     engine writes and are compared to the byte on macOS arm64, so a change to the engine that alters its output
     breaks `tests/api.rs` and `tests/auto.rs` until the fixtures are re-exported
-    (`tools.export_core_fixtures --only api,auto`). `CONTRIBUTING.md` and `CLAUDE.md` say so, and
+    (`tools.export_core_fixtures --only scorecard,api,auto`; `auto` checks the wordmark's trace against `scorecard`'s copy). `CONTRIBUTING.md` and `CLAUDE.md` say so, and
     `cargo test --workspace --release` (not `cd backend/vexel-rs && cargo test`, which in a workspace runs the engine
     alone) is on the pre-PR list.
   - *The core is not the only clock.* `auto::trace_finished` is the core's one `Instant::now()`, but the engine reads

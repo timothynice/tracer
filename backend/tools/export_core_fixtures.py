@@ -2261,7 +2261,9 @@ def _auto() -> None:
             card = A.assess(svg, ref)
             assert A.summary(card) == c["scores"], (name, p.id)
             if name == "wordmark":
-                assert (OUT / f"scorecard_auto_{p.id}.svg").read_text(encoding="utf-8") == svg
+                assert (OUT / f"scorecard_auto_{p.id}.svg").read_text(encoding="utf-8") == svg, (
+                    f"scorecard_auto_{p.id}.svg is not the engine's trace of the wordmark now: "
+                    "re-export scorecard with auto (--only scorecard,api,auto)")
                 svg_file = f"scorecard_auto_{p.id}.svg"
             else:
                 svg_file = f"auto_{name}_{p.id}.svg"

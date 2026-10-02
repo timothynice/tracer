@@ -34,8 +34,8 @@ pub fn exact() -> bool {
 /// embed the SVG it writes, and are exported from the Python reference running the Rust engine.
 pub const REEXPORT: &str = "if the engine's output changed on purpose, re-export the fixtures that hold it, on macOS arm64 with \
     the Rust `vexel_rs` built from this checkout (`maturin develop --release -m vexel-rs/Cargo.toml` in backend/): \
-    `cd backend && .venv/bin/python -m tools.export_core_fixtures --only api,auto` (add `svg,render,drawing,holes,\
-    geometry,scorecard` to refresh the traces the other fixtures keep as inputs), review the diff, then \
+    `cd backend && .venv/bin/python -m tools.export_core_fixtures --only scorecard,api,auto` (add `svg,render,drawing,\
+    holes,geometry` to refresh the traces the other fixtures keep as inputs), review the diff, then \
     `cargo test --workspace --release` (tests/fixtures/provenance.json says what the fixtures were made with)";
 
 /// Lower-case hex SHA-256, for fixtures too large to keep as bytes.

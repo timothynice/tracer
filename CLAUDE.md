@@ -15,9 +15,10 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   proves it landed. **And a third step** when the change alters what the engine
   writes: the core's tests compare that SVG to the byte on macOS arm64, so
   re-export its fixtures with the Rust `vexel_rs` built from your checkout
-  (`cd backend && .venv/bin/python -m tools.export_core_fixtures --only api,auto`
-  makes the tests pass again; `svg,render,drawing,holes,geometry,scorecard` also
-  hold a trace, as an input, and are worth re-exporting so they stay current) and
+  (`cd backend && .venv/bin/python -m tools.export_core_fixtures --only scorecard,api,auto`
+  makes the tests pass again — `auto` checks the wordmark's trace against the copy
+  `scorecard` keeps, so it cannot run without it; `svg,render,drawing,holes,geometry`
+  also hold a trace, as an input, and are worth re-exporting so they stay current) and
   run `cargo test --workspace --release`.
 - `crates/studi0trace-core/` — the Rust port of everything the Python server does
   around the engine: image intake, the parameters and their JSON schema, presets,

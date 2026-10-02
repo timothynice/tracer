@@ -96,14 +96,15 @@ macOS arm64. With the Rust `vexel_rs` built and installed from your checkout
 macOS arm64:
 
 ```bash
-cd backend && .venv/bin/python -m tools.export_core_fixtures --only api,auto
+cd backend && .venv/bin/python -m tools.export_core_fixtures --only scorecard,api,auto
 cargo test --workspace --release
 ```
 
 `api` and `auto` are the two fixtures the core's tests compare a live trace with
-(`tests/api.rs`, `tests/auto.rs`); they fail until they are re-exported. The
-other exporters that trace (`svg,render,drawing,holes,geometry,scorecard`) store
-the trace as an input, so their tests keep passing; re-export them too
+(`tests/api.rs`, `tests/auto.rs`); they fail until they are re-exported, and
+`auto` checks the wordmark's trace against the copy `scorecard` keeps, so the
+three go together. The other exporters that trace (`svg,render,drawing,holes,geometry`)
+store the trace as an input, so their tests keep passing; re-export them too
 (`.venv/bin/python -m tools.export_core_fixtures` is everything) so the fixtures
 stand for what the engine writes now, and review the diff as you would code.
 Off macOS arm64 the SVG bytes are not compared (the crate's README says what is),
