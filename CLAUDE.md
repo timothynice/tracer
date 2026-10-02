@@ -374,9 +374,9 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   `/vectorize auto=true`) traces the candidates concurrently and keeps the
   cleanest within the fidelity slack of the most faithful.
 - The core is a port, not a fork, and stays wasm-clean: no filesystem, no
-  `Instant` outside `auto::trace_finished` (the core's one clock; the engine reads
-  one too, in `vexel-rs/src/timing.rs`'s `Timer::new`, on every trace, which plan 3
-  must make lazy or replace before `wasm32-unknown-unknown` can run it), no threads
+  `Instant` outside `auto::trace_finished` (the core's one clock, which plan 3 must
+  hand a wasm clock; the engine's `vexel-rs/src/timing.rs` `Timer` reads one only
+  when `VEXEL_TIMING` is set, and must stay that way), no threads
   outside `rayon` in `auto.rs`, no C dependencies. Change the Python scorecard, Auto, intake, presets or API
   and you change the core; `export_core_fixtures` regenerates what its tests hold
   and `diffcheck scorecard` (a default stage) proves the scorecard end to end.

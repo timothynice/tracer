@@ -434,14 +434,12 @@ fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 /// not an `EngineError`, which Vexel never raises. [`run`] traces each candidate with it, and so
 /// does `api::Core` a plain trace.
 ///
-/// **The one clock in this crate** (the engine has its own, below). On
-/// `wasm32-unknown-unknown` `Instant::now()` panics, and with `panic=abort` (that target's
-/// default) the panic is a trap that ends the module: `catch_unwind` cannot catch it where
-/// panics abort, so it is not `engine_crashed`. A web build has to hand this function a clock
-/// (plan 3) before it traces, **and** the engine itself reads `Instant::now()` on every trace
-/// (`vexel_rs::timing::Timer::new`, called first thing in `engine::trace_rgba` whether or not
-/// `VEXEL_TIMING` is set), so plan 3 must also make that `Timer` lazy or give it a wasm clock;
-/// nothing else in this crate reads the time.
+/// **The one clock in this crate** (the engine's stage timer, `vexel_rs::timing::Timer`, reads
+/// one only when `VEXEL_TIMING` is set). On `wasm32-unknown-unknown` `Instant::now()` panics,
+/// and with `panic=abort` (that target's default) the panic is a trap that ends the module:
+/// `catch_unwind` cannot catch it where panics abort, so it is not `engine_crashed`. A web
+/// build has to hand this function a clock (plan 3) before it traces; nothing else in this
+/// crate reads the time.
 pub(crate) fn trace_finished(
     img: &Image,
     params: &VexelParams,

@@ -95,6 +95,7 @@
    "file": null,
    "max_bytes": 20971520,
    "max_pixels": 40000000,
+   "max_side": null,
    "message": "File is not a recognised image"
   },
   "header_bomb": {
@@ -102,13 +103,23 @@
    "file": "intake_bomb.png",
    "max_bytes": 20971520,
    "max_pixels": 40000000,
+   "max_side": null,
    "message": "Image exceeds the 40 megapixel limit"
+  },
+  "header_bomb_side": {
+   "code": "too_many_pixels",
+   "file": "intake_bomb.png",
+   "max_bytes": 20971520,
+   "max_pixels": 40000000,
+   "max_side": 4096,
+   "message": "Image exceeds the 4096x4096 pixel limit"
   },
   "too_large": {
    "code": "too_large",
    "file": "intake_png.png",
    "max_bytes": 10,
    "max_pixels": 1073741824,
+   "max_side": null,
    "message": "File exceeds the 0 MB limit"
   },
   "too_large_mb": {
@@ -116,6 +127,7 @@
    "file": null,
    "max_bytes": 3145728,
    "max_pixels": 1073741824,
+   "max_side": null,
    "message": "File exceeds the 3 MB limit"
   },
   "too_many_pixels": {
@@ -123,13 +135,23 @@
    "file": "intake_png.png",
    "max_bytes": 1073741824,
    "max_pixels": 100,
+   "max_side": null,
    "message": "Image exceeds the 0 megapixel limit"
+  },
+  "too_wide": {
+   "code": "too_many_pixels",
+   "file": "intake_png.png",
+   "max_bytes": 1073741824,
+   "max_pixels": 1073741824,
+   "max_side": 95,
+   "message": "Image exceeds the 95x95 pixel limit"
   },
   "truncated_jpg_after_sos": {
    "code": "corrupt_image",
    "file": "intake_jpg_sos.jpg",
    "max_bytes": 20971520,
    "max_pixels": 40000000,
+   "max_side": null,
    "message": "Image data is corrupt or truncated"
   },
   "truncated_jpg_half": {
@@ -137,6 +159,7 @@
    "file": "intake_jpg_half.jpg",
    "max_bytes": 20971520,
    "max_pixels": 40000000,
+   "max_side": null,
    "message": "Image data is corrupt or truncated"
   },
   "truncated_jpg_no_eoi": {
@@ -144,6 +167,7 @@
    "file": "intake_jpg_noeoi.jpg",
    "max_bytes": 20971520,
    "max_pixels": 40000000,
+   "max_side": null,
    "message": "Image data is corrupt or truncated"
   },
   "truncated_jpg_thumb_half": {
@@ -151,6 +175,7 @@
    "file": "intake_jpg_thumb_half.jpg",
    "max_bytes": 20971520,
    "max_pixels": 40000000,
+   "max_side": null,
    "message": "Image data is corrupt or truncated"
   },
   "truncated_png": {
@@ -158,6 +183,7 @@
    "file": null,
    "max_bytes": 20971520,
    "max_pixels": 40000000,
+   "max_side": null,
    "message": "Image data is corrupt or truncated"
   },
   "unsupported_tiff": {
@@ -165,6 +191,7 @@
    "file": "intake_tiff.tif",
    "max_bytes": 20971520,
    "max_pixels": 40000000,
+   "max_side": null,
    "message": "Unsupported image format: TIFF"
   }
  },

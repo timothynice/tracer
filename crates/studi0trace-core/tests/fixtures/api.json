@@ -464,7 +464,8 @@
    "source": "wordmark",
    "limits": {
     "max_bytes": 1000,
-    "max_pixels": 40000000
+    "max_pixels": 40000000,
+    "max_side": 4096
    },
    "status": 400,
    "body": {
@@ -480,13 +481,31 @@
    "source": "wordmark",
    "limits": {
     "max_bytes": 20971520,
-    "max_pixels": 100000
+    "max_pixels": 100000,
+    "max_side": 4096
    },
    "status": 400,
    "body": {
     "detail": {
      "code": "too_many_pixels",
      "message": "Image exceeds the 0 megapixel limit"
+    }
+   }
+  },
+  {
+   "name": "upload_too_wide",
+   "call": "upload",
+   "source": "wordmark",
+   "limits": {
+    "max_bytes": 20971520,
+    "max_pixels": 40000000,
+    "max_side": 100
+   },
+   "status": 400,
+   "body": {
+    "detail": {
+     "code": "too_many_pixels",
+     "message": "Image exceeds the 100x100 pixel limit"
     }
    }
   },

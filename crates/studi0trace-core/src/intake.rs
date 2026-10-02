@@ -2,8 +2,9 @@
 //!
 //! Ported from `backend/studi0trace/imaging/intake.py` (`load_upload`); the error codes
 //! and the words of the messages are its own, because the frontend shows them. The
-//! order of the checks is its order too: size, then format, then the pixel count from
-//! the header (so a decompression bomb is refused before a byte of it is decoded), then
+//! order of the checks is its order too: size, then format, then the longer side and the
+//! pixel count from the header (so a decompression bomb is refused before a byte of it is
+//! decoded), then
 //! the pixels, the EXIF orientation and RGBA8. Nothing here touches the filesystem.
 //!
 //! # Where the pixels agree with Pillow's
@@ -57,21 +58,25 @@ impl fmt::Display for IntakeError {
 
 impl std::error::Error for IntakeError {}
 
-/// What an upload may be. `max_pixels` above 2^26 (about 67.1 MP) lets through images that Auto
-/// cannot score (its renders at 2x would exceed [`crate::render::MAX_PIXELS`]); see
-/// [`crate::api::Core::with_limits`].
+/// What an upload may be. Without `max_side`, `max_pixels` above 2^26 (about 67.1 MP) lets
+/// through images that Auto cannot score (its renders at 2x would exceed
+/// [`crate::render::MAX_PIXELS`]); see [`crate::api::Core::with_limits`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// The file's size in bytes (20 MiB by default).
     pub max_bytes: usize,
     /// Width times height, checked from the header before the pixels are decoded (40 MP by default).
     pub max_pixels: u64,
+    /// The width and the height, checked from the header before the pixel count (4096 by
+    /// default, which keeps the default image at 16.8 MP; `None` is no cap on a side). The
+    /// engine's time and memory grow with the image: a 4.2 MP trace took 97 s and 7.5 GB.
+    pub max_side: Option<u32>,
 }
 
 impl Default for Limits {
-    // backend/studi0trace/settings.py: max_upload_bytes, max_image_pixels
+    // backend/studi0trace/settings.py: max_upload_bytes, max_image_pixels, max_image_side
     fn default() -> Self {
-        Limits { max_bytes: 20 * 1024 * 1024, max_pixels: 40_000_000 }
+        Limits { max_bytes: 20 * 1024 * 1024, max_pixels: 40_000_000, max_side: Some(4096) }
     }
 }
 
@@ -121,6 +126,9 @@ pub fn load(bytes: &[u8], limits: Limits) -> Result<Image, IntakeError> {
     // recognised image"; the decoder's constructor is the same step here.
     let mut decoder = reader.into_decoder().map_err(|_| unrecognised())?;
     let (w, h) = decoder.dimensions();
+    if let Some(side) = limits.max_side.filter(|&side| w.max(h) > side) {
+        return Err(err("too_many_pixels", format!("Image exceeds the {side}x{side} pixel limit")));
+    }
     if u64::from(w) * u64::from(h) > limits.max_pixels {
         return Err(err("too_many_pixels", format!("Image exceeds the {} megapixel limit", limits.max_pixels / 1_000_000)));
     }

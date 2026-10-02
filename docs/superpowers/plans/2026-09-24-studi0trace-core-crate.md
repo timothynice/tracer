@@ -1613,14 +1613,18 @@ this is the list a later plan needs.
     a clock on every trace: `vexel_rs::timing::Timer::new()` calls `Instant::now()` unconditionally (top of
     `engine::trace_rgba`, again in the partition, shadow and topology stages), whether or not `VEXEL_TIMING` is set.
     On `wasm32-unknown-unknown` that panics, which is a trap with `panic=abort`. Plan 3 must make the engine's `Timer`
-    lazy (read the clock only when `VEXEL_TIMING` is set) or give it a wasm clock, and hand `trace_finished` one. The
-    engine crate was not changed on this branch.
+    lazy (read the clock only when `VEXEL_TIMING` is set) or give it a wasm clock, and hand `trace_finished` one.
+    *Done after the review (2026-10-02):* the `Timer` reads the clock only when `VEXEL_TIMING` is set; plan 3 still
+    has to give `trace_finished` a clock.
   - *The engine's cost is far above the intake limit's.* On a 2048 x 2048 (4.2 MP) upscaled badge a plain Balanced
     trace took 97 s and 7.5 GB resident; Auto 120 s and 10.8 GB (14.9 GB peak footprint). The 40 MP intake limit admits
     ten times that, a wasm build has 4 GB of address space, and `vectorize` can be neither cancelled nor observed. Plans 2
     and 3 must measure and set their own pixel cap (or downscale before tracing), run it off the UI thread and plan
     for cancellation and progress. `Core::with_limits` with `max_pixels` over 2^26 (about 67.1 MP) makes Auto's 2x
     renders pass `render::MAX_PIXELS`, and Auto then degrades to "scoring was unavailable" (documented, not clamped).
+    *After the review (2026-10-02):* a side is capped at 4096 px in both intakes (`Limits::max_side`, the server's
+    `max_image_side` / `MAX_IMAGE_SIDE`, `too_many_pixels`, checked from the header before the pixel count), which
+    still admits four times the measured 4.2 MP; cancellation and progress remain plans 2 and 3's.
   - *Release profile and lockfile in the Docker build.* The image's build context is `backend/`, which has no root
     manifest, so the workspace's `[profile.release]` is carried by `CARGO_PROFILE_RELEASE_LTO` and
     `CARGO_PROFILE_RELEASE_CODEGEN_UNITS` in `backend/Dockerfile` (mirror comments in both places).

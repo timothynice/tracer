@@ -123,7 +123,11 @@ fn failed(e: &ApiError) -> (u16, Value) {
 
 fn limits_of(case: &Value) -> Limits {
     match case.get("limits") {
-        Some(l) => Limits { max_bytes: l["max_bytes"].as_u64().unwrap() as usize, max_pixels: l["max_pixels"].as_u64().unwrap() },
+        Some(l) => Limits {
+            max_bytes: l["max_bytes"].as_u64().unwrap() as usize,
+            max_pixels: l["max_pixels"].as_u64().unwrap(),
+            max_side: Some(u32::try_from(l["max_side"].as_u64().unwrap()).unwrap()),
+        },
         None => Limits::default(),
     }
 }
@@ -248,6 +252,10 @@ fn the_golden_covers_what_the_brief_lists() {
         "too_large".to_string(),
         "too_many_pixels".to_string()
     ));
+    assert_eq!(
+        by_name["upload_too_wide"]["body"]["detail"],
+        serde_json::json!({"code": "too_many_pixels", "message": "Image exceeds the 100x100 pixel limit"})
+    );
     assert_eq!((status("expired"), code("expired")), (404, "image_expired".to_string()));
     assert_eq!((status("no_image"), code("no_image")), (400, "no_image".to_string()));
     assert!(by_name.keys().filter(|n| n.starts_with("refused_")).count() >= 15);
@@ -369,7 +377,7 @@ fn an_image_larger_than_the_whole_cap_is_still_kept_and_alone() {
 
 #[test]
 fn a_refused_upload_is_not_kept() {
-    let core = Core::with_limits(Limits { max_bytes: 100, max_pixels: 40_000_000 }, 1 << 20);
+    let core = Core::with_limits(Limits { max_bytes: 100, ..Limits::default() }, 1 << 20);
     assert!(core.upload(&png(16, 1)).is_err());
     assert_eq!((core.cached_images(), core.cached_bytes()), (0, 0));
 }
@@ -459,10 +467,10 @@ fn the_parameters_are_checked_before_the_upload_is_looked_up_as_the_route_does()
 
 #[test]
 fn every_intake_refusal_is_a_400_with_the_intakes_code_and_words() {
-    let tiny = Core::with_limits(Limits { max_bytes: 40, max_pixels: 40_000_000 }, 1 << 20);
+    let tiny = Core::with_limits(Limits { max_bytes: 40, ..Limits::default() }, 1 << 20);
     let e = tiny.upload(&png(16, 1)).unwrap_err();
     assert_eq!((e.status, e.body.code.as_str(), e.body.message.as_str()), (400, "too_large", "File exceeds the 0 MB limit"));
-    let flat = Core::with_limits(Limits { max_bytes: 1 << 20, max_pixels: 100 }, 1 << 20);
+    let flat = Core::with_limits(Limits { max_bytes: 1 << 20, max_pixels: 100, ..Limits::default() }, 1 << 20);
     let e = flat.upload(&png(16, 1)).unwrap_err();
     assert_eq!((e.status, e.body.code.as_str()), (400, "too_many_pixels"));
     let e = Core::new().upload(b"definitely not an image").unwrap_err();

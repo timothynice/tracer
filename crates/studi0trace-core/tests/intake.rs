@@ -128,8 +128,8 @@ fn exif_orientation_is_applied_the_way_pillow_applies_it() {
 #[test]
 fn limits_and_garbage_give_the_pythons_codes() {
     let png = common::fixture_bytes("intake_png.png");
-    assert_eq!(load(&png, Limits { max_bytes: 10, max_pixels: 1 << 40 }).unwrap_err().code, "too_large");
-    assert_eq!(load(&png, Limits { max_bytes: BIG, max_pixels: 100 }).unwrap_err().code, "too_many_pixels");
+    assert_eq!(load(&png, Limits { max_bytes: 10, max_pixels: 1 << 40, max_side: None }).unwrap_err().code, "too_large");
+    assert_eq!(load(&png, Limits { max_bytes: BIG, max_pixels: 100, max_side: None }).unwrap_err().code, "too_many_pixels");
     assert_eq!(load(b"not an image", Limits::default()).unwrap_err().code, "unsupported_format");
     assert_eq!(load(&png[..png.len() / 2], Limits::default()).unwrap_err().code, "corrupt_image");
 }
@@ -149,7 +149,12 @@ fn every_rejection_carries_the_pythons_words() {
             }
             None => panic!("{name}: no bytes to replay"),
         };
-        let limits = Limits { max_bytes: case["max_bytes"].as_u64().unwrap() as usize, max_pixels: case["max_pixels"].as_u64().unwrap() };
+        let limits = Limits {
+            max_bytes: case["max_bytes"].as_u64().unwrap() as usize,
+            max_pixels: case["max_pixels"].as_u64().unwrap(),
+            // null where the Python was called without one
+            max_side: case["max_side"].as_u64().map(|side| u32::try_from(side).unwrap()),
+        };
         let err = refused(&bytes, limits, name);
         assert_eq!(err.code, case["code"].as_str().unwrap(), "{name}");
         assert_eq!(err.message, case["message"].as_str().unwrap(), "{name}");
@@ -163,10 +168,31 @@ fn the_pixel_limit_answers_from_the_header_before_any_decoding() {
     // decode would fail with `corrupt_image`; the limit must fire first.
     let bomb = common::fixture_bytes("intake_bomb.png");
     let err = load(&bomb, Limits::default()).unwrap_err();
+    assert_eq!((err.code, err.message.as_str()), ("too_many_pixels", "Image exceeds the 4096x4096 pixel limit"));
+    // The side is checked first; without it the pixel count fires, from the header as well.
+    let err = load(&bomb, Limits { max_side: None, ..Limits::default() }).unwrap_err();
     assert_eq!((err.code, err.message.as_str()), ("too_many_pixels", "Image exceeds the 40 megapixel limit"));
-    // Raise the limit and the same bytes are what they are: a truncated file.
-    let err = load(&bomb, Limits { max_bytes: BIG, max_pixels: 1 << 40 }).unwrap_err();
+    // Raise the limits and the same bytes are what they are: a truncated file.
+    let err = load(&bomb, Limits { max_bytes: BIG, max_pixels: 1 << 40, max_side: None }).unwrap_err();
     assert_eq!(err.code, "corrupt_image");
+}
+
+#[test]
+fn a_side_over_the_limit_is_refused_whatever_the_pixel_count() {
+    let png = |w: u32, h: u32| {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::new(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let at_64 = Limits { max_side: Some(64), ..Limits::default() };
+    for (w, h) in [(65, 1), (1, 65)] {
+        let err = load(&png(w, h), at_64).unwrap_err();
+        assert_eq!((err.code, err.message.as_str()), ("too_many_pixels", "Image exceeds the 64x64 pixel limit"), "{w}x{h}");
+    }
+    assert_eq!(load(&png(64, 64), at_64).unwrap().width, 64);
+    // no cap on a side, as the Python without `max_side`
+    assert_eq!(load(&png(65, 1), Limits { max_side: None, ..Limits::default() }).unwrap().width, 65);
+    assert_eq!(Limits::default().max_side, Some(4096));
 }
 
 fn unhex(hex: &str) -> Vec<u8> {

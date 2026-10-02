@@ -45,8 +45,8 @@
 //! thread with room, as `tests/scorecard.rs` does.
 //!
 //! A [`Reference`] holds about 34 bytes a pixel (the source, its composite on white, its Lab as
-//! three `f64`s, and three masks), 1.4 GB for the intake's largest image of 40 MP; the
-//! Python's holds the same arrays.
+//! three `f64`s, and three masks): about 570 MB for the default intake's largest image
+//! (4096 x 4096), 1.4 GB at 40 MP. The Python's holds the same arrays.
 use crate::color::{delta_e_lab, lab, rgb_on_white};
 use crate::drawing::{self, DrawingError};
 use crate::edges;

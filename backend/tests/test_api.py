@@ -130,6 +130,19 @@ def test_oversize_upload_is_400(client):
     assert r.json()["detail"]["code"] in {"too_large", "too_many_pixels"}
 
 
+def test_a_side_over_the_limit_is_400():
+    app = create_app(Settings(allowed_origins=[ORIGIN], max_image_side=32))
+    c = TestClient(app, headers={"Origin": ORIGIN})
+    r = c.post("/uploads", files={"file": ("x.png", make_png(33, 8), "image/png")})
+    assert r.status_code == 400
+    assert r.json()["detail"] == {"code": "too_many_pixels", "message": "Image exceeds the 32x32 pixel limit"}
+    assert c.post("/uploads", files={"file": ("x.png", make_png(32, 8), "image/png")}).status_code == 200
+
+
+def test_the_side_limit_defaults_to_4096():
+    assert Settings().max_image_side == 4096
+
+
 def test_engine_failure_is_isolated(client):
     class Boom:
         id, label, description = "boom", "Boom", "always fails"

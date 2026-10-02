@@ -23,7 +23,8 @@ class IntakeError(Exception):
         self.message = message
 
 
-def load_upload(data: bytes, *, max_bytes: int, max_pixels: int) -> TraceInput:
+def load_upload(data: bytes, *, max_bytes: int, max_pixels: int, max_side: int | None = None) -> TraceInput:
+    """`max_side` caps the width and the height (None: no cap, for the bench and the tools)."""
     if len(data) > max_bytes:
         raise IntakeError("too_large", f"File exceeds the {max_bytes // (1024 * 1024)} MB limit")
 
@@ -37,6 +38,8 @@ def load_upload(data: bytes, *, max_bytes: int, max_pixels: int) -> TraceInput:
         raise IntakeError("unsupported_format", f"Unsupported image format: {fmt or 'unknown'}")
 
     # Pillow's open() is lazy: header only. Check dimensions before decoding pixels.
+    if max_side is not None and max(img.width, img.height) > max_side:
+        raise IntakeError("too_many_pixels", f"Image exceeds the {max_side}x{max_side} pixel limit")
     if img.width * img.height > max_pixels:
         raise IntakeError("too_many_pixels", f"Image exceeds the {max_pixels // 1_000_000} megapixel limit")
 

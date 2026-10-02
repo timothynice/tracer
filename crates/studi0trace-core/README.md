@@ -241,25 +241,26 @@ HTTP half:
   on (and `preserve_order`), and cargo unifies features, so a shell that parses with
   `serde_json` inherits exact parsing and needs to do nothing. A shell that parses some
   other way (a different JSON crate, hand-made text) must parse correctly rounded.
-- On `wasm32-unknown-unknown`, give the trace a clock, in two places. `Instant::now()`
-  panics there, and with `panic=abort` (that target's default) the panic ends the
-  module, so `catch_unwind` cannot turn it into an `engine_crashed`. The core reads the
-  clock once, in `auto::trace_finished`; **the engine reads it too, on every trace**
-  (`vexel_rs`'s `timing::Timer::new` calls `Instant::now()` unconditionally, in
-  `engine::trace_rgba` and in the partition, shadow and topology stages, whether or not
-  `VEXEL_TIMING` is set). Plan 3 must make the engine's `Timer` lazy (read the clock only
-  when `VEXEL_TIMING` is set) or give it a wasm clock, and hand `trace_finished` one.
+- On `wasm32-unknown-unknown`, give the trace a clock. `Instant::now()` panics there,
+  and with `panic=abort` (that target's default) the panic ends the module, so
+  `catch_unwind` cannot turn it into an `engine_crashed`. The core reads the clock once,
+  in `auto::trace_finished`, and plan 3 must hand it one. The engine's stage timer
+  (`vexel_rs`'s `timing::Timer`) reads the clock only when `VEXEL_TIMING` is set, so
+  leave that unset in a web build.
 - Answer a refusal with `ApiError::status` and `ApiError::response_body()`.
 - **Cap the work, not only the upload, and keep it off the UI thread.** The engine's
   cost is far above what the intake limit suggests. Measured in the final review, on a
   2048 x 2048 (4.2 MP) upscaled badge: a plain Balanced trace took 97 s and peaked at
   7.5 GB of resident memory; Auto took 120 s and 10.8 GB (14.9 GB peak footprint). The
-  40 MP intake limit admits ten times that, a wasm build has 4 GB of address space, and
-  `vectorize` cannot be cancelled and reports no progress. Plans 2 and 3 must measure
-  and set their own pixel cap for tracing (or downscale before tracing), run `vectorize`
-  on a worker thread and never the UI's, and plan for cancellation and progress (a
-  cooperative flag in the engine's stages, or a worker the shell can drop).
-- `Core::with_limits` takes the intake's pixel cap: above 2^26 pixels (about 67.1 MP)
+  intake caps a side at 4096 px (`Limits::max_side`, the server's `MAX_IMAGE_SIDE`),
+  which admits 16.8 MP, four times that: if the cost grows with the pixels, a
+  4096 x 4096 trace takes six or seven minutes and about 30 GB. A wasm build has 4 GB of
+  address space, and `vectorize` cannot be cancelled and reports no progress. Plans 2
+  and 3 must measure what the cap costs on their targets (and lower it, or downscale
+  before tracing, where it is too much), run `vectorize` on a worker thread and never
+  the UI's, and plan for cancellation and progress (a cooperative flag in the engine's
+  stages, or a worker the shell can drop).
+- `Core::with_limits` takes the intake's limits. With `max_side` `None`, above 2^26 pixels (about 67.1 MP)
   Auto cannot score an upload (its renders at 2x would pass `render::MAX_PIXELS`), and
   degrades to "scoring was unavailable, so the first preset that traced" instead of
   failing. A plain trace is unaffected. Set the cap well under it (the engine's cost

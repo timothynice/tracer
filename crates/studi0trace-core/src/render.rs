@@ -60,7 +60,8 @@
 //! drawn at 6930 x 5399 is fitted as 6930 x 5400). Measured over random sizes, the first upload
 //! that does it is 16.8 MP at 1x, 2x and 4x and 5.6 MP at 3x; among sides of 4100 to 7000 px
 //! about 4% of sizes do at 1x, and among sides of 1000 to 2900 px about 1.4% do at 3x. The
-//! intake admits 40 MP and the scorecard renders at the source size and at 2x to 4x, so it meets
+//! intake admits 4096 x 4096 by default (more where a shell raises its limits) and the scorecard
+//! renders at the source size and at 2x to 4x, so it meets
 //! this on uploads the Python handles. [`render_fit`] gives the pixels resvg made at the size it
 //! made them, before any resize.
 //!
@@ -69,8 +70,9 @@ use crate::drawing;
 use crate::resample;
 use resvg::{tiny_skia, usvg};
 
-/// The most pixels a render may have: 2^28, a 1 GiB RGBA buffer. The intake admits 40 MP and
-/// the scorecard renders at 2x, which is 160 MP, so it fits with room.
+/// The most pixels a render may have: 2^28, a 1 GiB RGBA buffer. The intake admits 4096 x 4096
+/// by default and the scorecard renders at 2x, which is 67 MP, so it fits with room (as 40 MP
+/// without the side cap does, at 160 MP).
 pub const MAX_PIXELS: u64 = 1 << 28;
 
 /// A finished render: straight-alpha RGBA8, `width * height * 4` bytes.

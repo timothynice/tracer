@@ -154,7 +154,9 @@ fn a_render_that_misses_its_size_is_resized_as_quality_render_does() {
         let (w, h) = (case["width"].as_u64().unwrap() as u32, case["height"].as_u64().unwrap() as u32);
         for (crisp, tag) in [(false, "aa"), (true, "crisp")] {
             let what = format!("{name} ({tag})");
-            let want = intake::load(&unhex(case[tag]["png"].as_str().unwrap()), Default::default()).unwrap();
+            // a fixture, not an upload: the renders run past the intake's 4096 px a side
+            let unlimited = intake::Limits { max_side: None, ..Default::default() };
+            let want = intake::load(&unhex(case[tag]["png"].as_str().unwrap()), unlimited).unwrap();
             assert_eq!((want.width, want.height), (w, h), "{what}: the fixture");
 
             // The render resvg makes is another size than the box ...
