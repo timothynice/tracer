@@ -305,7 +305,7 @@ def _intake() -> None:
         "too_many_pixels": reject(png, "intake_png.png", big, 100),
         "header_bomb": reject(bomb, "intake_bomb.png", small, 40_000_000),
         # the server's limits: the side is checked first, from the header too
-        "header_bomb_side": reject(bomb, "intake_bomb.png", small, 40_000_000, 4096),
+        "header_bomb_side": reject(bomb, "intake_bomb.png", small, 40_000_000, 2048),
         "too_wide": reject(png, "intake_png.png", big, big, 95),
         "garbage": reject(b"not an image", None, small, 40_000_000),
         "unsupported_tiff": reject(tiff, "intake_tiff.tif", small, 40_000_000),
@@ -2426,8 +2426,8 @@ def _api() -> None:
 
     for key in ("wordmark", "mark128", "garbage", "empty", "corrupt_png", "tiff"):
         record(f"upload_{key}", "upload", post_upload(default_client, key), source=key)
-    small_bytes = {"max_bytes": 1000, "max_pixels": 40_000_000, "max_side": 4096}
-    small_pixels = {"max_bytes": 20 * 1024 * 1024, "max_pixels": 100_000, "max_side": 4096}
+    small_bytes = {"max_bytes": 1000, "max_pixels": 40_000_000, "max_side": 2048}
+    small_pixels = {"max_bytes": 20 * 1024 * 1024, "max_pixels": 100_000, "max_side": 2048}
     small_side = {"max_bytes": 20 * 1024 * 1024, "max_pixels": 40_000_000, "max_side": 100}
     record("upload_too_large", "upload", post_upload(make_client({"max_upload_bytes": 1000}), "wordmark"), source="wordmark", limits=small_bytes)
     record("upload_too_many_pixels", "upload", post_upload(make_client({"max_image_pixels": 100_000}), "wordmark"), source="wordmark", limits=small_pixels)

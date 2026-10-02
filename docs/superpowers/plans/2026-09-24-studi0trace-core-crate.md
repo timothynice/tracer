@@ -1626,9 +1626,9 @@ this is the list a later plan needs.
     and 3 must measure and set their own pixel cap (or downscale before tracing), run it off the UI thread and plan
     for cancellation and progress. `Core::with_limits` with `max_pixels` over 2^26 (about 67.1 MP) makes Auto's 2x
     renders pass `render::MAX_PIXELS`, and Auto then degrades to "scoring was unavailable" (documented, not clamped).
-    *After the review (2026-10-02):* a side is capped at 4096 px in both intakes (`Limits::max_side`, the server's
+    *After the review (2026-10-02):* a side is capped at 2048 px in both intakes (`Limits::max_side`, the server's
     `max_image_side` / `MAX_IMAGE_SIDE`, `too_many_pixels`, checked from the header before the pixel count), which
-    still admits four times the measured 4.2 MP; cancellation and progress remain plans 2 and 3's.
+    makes the measured 4.2 MP the largest upload; cancellation and progress remain plans 2 and 3's.
   - *Release profile and lockfile in the Docker build.* The image's build context is `backend/`, which has no root
     manifest, so the workspace's `[profile.release]` is carried by `CARGO_PROFILE_RELEASE_LTO` and
     `CARGO_PROFILE_RELEASE_CODEGEN_UNITS` in `backend/Dockerfile` (mirror comments in both places).

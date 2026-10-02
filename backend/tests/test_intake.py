@@ -62,7 +62,7 @@ def test_rejects_too_many_pixels():
 
 def test_rejects_a_side_over_the_limit():
     """The engine's cost grows with the image, and a side past `max_side` is refused
-    from the header (the server's default is 4096), whatever the pixel count."""
+    from the header (the server's default is 2048), whatever the pixel count."""
     for size in ((65, 1), (1, 65)):
         with pytest.raises(IntakeError) as exc:
             load_upload(make_png(*size), **LIMITS, max_side=64)

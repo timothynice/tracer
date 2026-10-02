@@ -139,8 +139,8 @@ def test_a_side_over_the_limit_is_400():
     assert c.post("/uploads", files={"file": ("x.png", make_png(32, 8), "image/png")}).status_code == 200
 
 
-def test_the_side_limit_defaults_to_4096():
-    assert Settings().max_image_side == 4096
+def test_the_side_limit_defaults_to_2048():
+    assert Settings().max_image_side == 2048
 
 
 def test_engine_failure_is_isolated(client):

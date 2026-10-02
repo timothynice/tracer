@@ -327,7 +327,7 @@ impl Default for Core {
 }
 
 impl Core {
-    /// A core with the server's settings: 20 MiB, 4096 px a side and 40 megapixels an upload
+    /// A core with the server's settings: 20 MiB, 2048 px a side and 40 megapixels an upload
     /// ([`Limits::default`]), [`MAX_UPLOAD_CACHE_BYTES`] of them kept.
     pub fn new() -> Core {
         Core::with_limits(Limits::default(), MAX_UPLOAD_CACHE_BYTES)
@@ -340,8 +340,8 @@ impl Core {
     /// a render of more: so a source of more than 2^26 pixels (about 67.1 MP) cannot be scored,
     /// and Auto does not fail on it, it degrades: every candidate keeps its SVG without scores
     /// and the pick is `"scoring was unavailable, so the first preset that traced"`. A plain
-    /// trace (`auto` false) is not scored and is not affected. The default (4096 x 4096 at most,
-    /// 16.8 MP) is well under it.
+    /// trace (`auto` false) is not scored and is not affected. The default (2048 x 2048 at most,
+    /// 4.2 MP) is well under it.
     /// This is not clamped or asserted, because a shell may want the larger cap for plain
     /// traces; it is documented here and in the crate's README. The engine's cost is the other
     /// limit, and a much lower one (the README's "What a shell must do").

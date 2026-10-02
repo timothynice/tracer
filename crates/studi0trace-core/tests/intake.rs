@@ -168,7 +168,7 @@ fn the_pixel_limit_answers_from_the_header_before_any_decoding() {
     // decode would fail with `corrupt_image`; the limit must fire first.
     let bomb = common::fixture_bytes("intake_bomb.png");
     let err = load(&bomb, Limits::default()).unwrap_err();
-    assert_eq!((err.code, err.message.as_str()), ("too_many_pixels", "Image exceeds the 4096x4096 pixel limit"));
+    assert_eq!((err.code, err.message.as_str()), ("too_many_pixels", "Image exceeds the 2048x2048 pixel limit"));
     // The side is checked first; without it the pixel count fires, from the header as well.
     let err = load(&bomb, Limits { max_side: None, ..Limits::default() }).unwrap_err();
     assert_eq!((err.code, err.message.as_str()), ("too_many_pixels", "Image exceeds the 40 megapixel limit"));
@@ -192,7 +192,7 @@ fn a_side_over_the_limit_is_refused_whatever_the_pixel_count() {
     assert_eq!(load(&png(64, 64), at_64).unwrap().width, 64);
     // no cap on a side, as the Python without `max_side`
     assert_eq!(load(&png(65, 1), Limits { max_side: None, ..Limits::default() }).unwrap().width, 65);
-    assert_eq!(Limits::default().max_side, Some(4096));
+    assert_eq!(Limits::default().max_side, Some(2048));
 }
 
 fn unhex(hex: &str) -> Vec<u8> {

@@ -111,8 +111,8 @@
    "file": "intake_bomb.png",
    "max_bytes": 20971520,
    "max_pixels": 40000000,
-   "max_side": 4096,
-   "message": "Image exceeds the 4096x4096 pixel limit"
+   "max_side": 2048,
+   "message": "Image exceeds the 2048x2048 pixel limit"
   },
   "too_large": {
    "code": "too_large",

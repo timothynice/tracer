@@ -252,9 +252,8 @@ HTTP half:
   cost is far above what the intake limit suggests. Measured in the final review, on a
   2048 x 2048 (4.2 MP) upscaled badge: a plain Balanced trace took 97 s and peaked at
   7.5 GB of resident memory; Auto took 120 s and 10.8 GB (14.9 GB peak footprint). The
-  intake caps a side at 4096 px (`Limits::max_side`, the server's `MAX_IMAGE_SIDE`),
-  which admits 16.8 MP, four times that: if the cost grows with the pixels, a
-  4096 x 4096 trace takes six or seven minutes and about 30 GB. A wasm build has 4 GB of
+  intake caps a side at 2048 px (`Limits::max_side`, the server's `MAX_IMAGE_SIDE`),
+  so the largest upload is that measured one. A wasm build has 4 GB of
   address space, and `vectorize` cannot be cancelled and reports no progress. Plans 2
   and 3 must measure what the cap costs on their targets (and lower it, or downscale
   before tracing, where it is too much), run `vectorize` on a worker thread and never

@@ -192,7 +192,7 @@ core's tests in `backend/tests/test_core_scorecard.py` are skipped.
 | `POST /vectorize` | multipart: `image_id` **or** `file`, `parameters` (JSON keyed by engine id), `engines` (comma list; default all). Returns `results.{engine}.{svg, elapsed_ms, stats | error}`, `image_id`, `width`, `height`. Expired id → 404 `image_expired`; the client re-uploads and retries once. With `auto=true`, each selected engine that has Auto candidates (Vexel: Balanced, Logo & icon, Detailed, Simplified) is traced once per candidate, concurrently, and each trace is scored against the source (`studi0trace/imaging/quality.py`: ΔE, edge F1, the artifact scorecard); `auto.{engine}` then holds every candidate's `svg`, `stats`, `parameters` and `scores`, the `pick` and a `reason`, and `results.{engine}` is the pick. The rule (`studi0trace/auto.py`): the lowest artifact index among candidates within ΔE +max(0.15, 30 %) and edge F1 −0.02 of the best, ties to fewer shapes. A failing candidate is reported and left out; `auto=true` with no engine that has candidates → 400 `auto_unavailable`. |
 
 Uploads are sniffed with Pillow (client `Content-Type` is ignored), limited by
-`MAX_UPLOAD_BYTES` (20 MB), `MAX_IMAGE_SIDE` (4096 px a side) and
+`MAX_UPLOAD_BYTES` (20 MB), `MAX_IMAGE_SIDE` (2048 px a side) and
 `MAX_IMAGE_PIXELS` (40 MP), and normalised to
 RGBA — transparency reaches every engine. Errors carry a stable `code`.
 Env: `ALLOWED_ORIGINS` (comma list), `MAX_UPLOAD_CACHE_BYTES` (256 MB),

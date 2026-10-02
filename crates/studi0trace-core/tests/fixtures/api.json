@@ -465,7 +465,7 @@
    "limits": {
     "max_bytes": 1000,
     "max_pixels": 40000000,
-    "max_side": 4096
+    "max_side": 2048
    },
    "status": 400,
    "body": {
@@ -482,7 +482,7 @@
    "limits": {
     "max_bytes": 20971520,
     "max_pixels": 100000,
-    "max_side": 4096
+    "max_side": 2048
    },
    "status": 400,
    "body": {

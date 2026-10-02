@@ -13,9 +13,10 @@ class Settings(BaseModel):
     allowed_origins: list[str] = Field(default_factory=lambda: [DEFAULT_ORIGINS])
     max_upload_bytes: int = 20 * 1024 * 1024
     max_image_pixels: int = 40_000_000
-    # A trace's time and memory grow with the image (a 4.2 MP trace took 97 s and
-    # 7.5 GB), so a side is capped too; the core's `intake::Limits` keeps the same.
-    max_image_side: int = 4096
+    # A trace's time and memory grow with the image (a 2048 x 2048 trace took 97 s
+    # and 7.5 GB, Auto 120 s and 10.8 GB), so a side is capped there too; the core's
+    # `intake::Limits` keeps the same.
+    max_image_side: int = 2048
     max_upload_cache_bytes: int = 256 * 1024 * 1024
     upload_ttl_seconds: int = 30 * 60
 

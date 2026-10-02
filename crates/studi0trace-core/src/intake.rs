@@ -67,8 +67,8 @@ pub struct Limits {
     pub max_bytes: usize,
     /// Width times height, checked from the header before the pixels are decoded (40 MP by default).
     pub max_pixels: u64,
-    /// The width and the height, checked from the header before the pixel count (4096 by
-    /// default, which keeps the default image at 16.8 MP; `None` is no cap on a side). The
+    /// The width and the height, checked from the header before the pixel count (2048 by
+    /// default, which keeps the default image at 4.2 MP; `None` is no cap on a side). The
     /// engine's time and memory grow with the image: a 4.2 MP trace took 97 s and 7.5 GB.
     pub max_side: Option<u32>,
 }
@@ -76,7 +76,7 @@ pub struct Limits {
 impl Default for Limits {
     // backend/studi0trace/settings.py: max_upload_bytes, max_image_pixels, max_image_side
     fn default() -> Self {
-        Limits { max_bytes: 20 * 1024 * 1024, max_pixels: 40_000_000, max_side: Some(4096) }
+        Limits { max_bytes: 20 * 1024 * 1024, max_pixels: 40_000_000, max_side: Some(2048) }
     }
 }
 
