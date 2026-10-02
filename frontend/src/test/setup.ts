@@ -48,3 +48,11 @@ if (!("PointerEvent" in window)) {
   }
   (window as unknown as { PointerEvent: unknown }).PointerEvent = PointerEventPolyfill;
 }
+
+// floating-ui (under every Radix menu) asks each element `matches(":modal")`, which jsdom's nwsapi answers by
+// scanning the document (about 175 ms a call here; a context menu made 20 s of it). Nothing in jsdom is in the top
+// layer, so the answer is no.
+const nativeMatches = Element.prototype.matches;
+Element.prototype.matches = function (this: Element, selector: string) {
+  return selector === ":modal" || selector === ":popover-open" ? false : nativeMatches.call(this, selector);
+};

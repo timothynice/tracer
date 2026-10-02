@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { AppShell } from "./components/AppShell";
 import { EmptyState } from "./components/EmptyState";
 import { ExportMenu } from "./components/ExportMenu";
+import { ImageMenu } from "./components/ImageMenu";
 import { Inspector, InspectorOverlay } from "./components/Inspector";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
@@ -14,6 +15,7 @@ import { useExports } from "./hooks/useExports";
 import { useLayerInspector } from "./hooks/useLayerInspector";
 import { useWindowDrop } from "./hooks/useWindowDrop";
 import { specsFor } from "./lib/schema";
+import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
 import { applyTheme, watchSystemTheme } from "./lib/theme";
 import { DEFAULT_SETTINGS, platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
 import { createLibrary, ENGINE, shownAnswer, type Catalog } from "./state/library";
@@ -135,6 +137,104 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
 
   const exports = useExports(state, item, layers.exportSvg, settings);
   const anyVector = state.items.some((i) => i.shown !== null);
+  const [, setSettingsOpen] = useState(false); // Task 12 adds the sheet this opens
+  const openSettings = useCallback(() => {
+    if (!platform.openSettingsWindow()) setSettingsOpen(true);
+  }, []);
+
+  const run = useCallback(
+    (cmd: Command) => {
+      const id = item?.image.id;
+      switch (cmd) {
+        case "open":
+          return void open(platform.pickImages());
+        case "settings":
+          return openSettings();
+        case "export-svg":
+          return void exports.exportImage("svg", 1);
+        case "export-png-1":
+          return void exports.exportImage("png", 1);
+        case "export-png-2":
+          return void exports.exportImage("png", 2);
+        case "export-png-4":
+          return void exports.exportImage("png", 4);
+        case "export-all":
+          return void exports.exportAll();
+        case "copy-svg":
+          return void exports.copySvg();
+        case "reveal":
+          if (item?.image.path) void platform.reveal(item.image.path);
+          return;
+        case "zoom-in":
+          return viewerRef.current?.zoomIn();
+        case "zoom-out":
+          return viewerRef.current?.zoomOut();
+        case "zoom-actual":
+          return viewerRef.current?.actualSize();
+        case "zoom-fit":
+          return viewerRef.current?.fit();
+        case "mode-split":
+        case "mode-side":
+        case "mode-overlay":
+        case "mode-vector":
+          return setMode(cmd.slice("mode-".length) as ViewMode);
+        case "toggle-sidebar":
+          return setSidebar((v) => !v);
+        case "toggle-inspector":
+          return setInspectorPane((v) => !v);
+        case "generate":
+          if (id) lib.generate(id);
+          return;
+        case "cancel":
+          if (id) lib.cancel(id);
+          return;
+        case "remove":
+          if (id) lib.remove(id);
+          return;
+        case "clear":
+          return lib.clear();
+      }
+    },
+    [item, open, openSettings, exports, setMode, lib],
+  );
+  // the listeners subscribe once and call whatever `run` is now
+  const runRef = useRef(run);
+  runRef.current = run;
+  useEffect(() => platform.onMenu((cmd) => runRef.current(cmd)), []);
+  useEffect(() => {
+    if (platform.kind !== "web") return;
+    const onKey = (e: KeyboardEvent) => {
+      const cmd = commandForKey(e);
+      if (!cmd || (cmd === "remove" && isTyping(e.target))) return;
+      e.preventDefault();
+      runRef.current(cmd);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // in the app, the web's context menu (Reload, Inspect Element) never shows; text fields keep theirs
+  useEffect(() => {
+    if (platform.kind !== "native") return;
+    const block = (e: MouseEvent) => {
+      if (!isTyping(e.target)) e.preventDefault();
+    };
+    document.addEventListener("contextmenu", block);
+    return () => document.removeEventListener("contextmenu", block);
+  }, []);
+
+  useEffect(() => {
+    platform.setMenuState({
+      hasItems: state.items.length > 0 || state.failed.length > 0,
+      hasImage: !!item,
+      hasVector: !!layers.exportSvg,
+      anyVector,
+      hasPath: !!item?.image.path,
+      tracing: !!item?.job,
+      mode,
+      sidebar,
+      inspector: inspectorPane,
+    });
+  }, [state.items.length, state.failed.length, item, layers.exportSvg, anyVector, mode, sidebar, inspectorPane]);
   const invalidField = item?.error?.code === "validation_error" ? (((item.error.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
 
   const panel = item ? (
@@ -155,16 +255,7 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
 
   return (
     <AppShell
-      titleBar={
-        <TitleBar
-          native={platform.kind === "native"}
-          sidebar={sidebar}
-          inspector={inspectorPane}
-          onToggleSidebar={() => setSidebar((v) => !v)}
-          onToggleInspector={() => setInspectorPane((v) => !v)}
-          onSettings={() => platform.openSettingsWindow()}
-        />
-      }
+      titleBar={<TitleBar native={platform.kind === "native"} sidebar={sidebar} inspector={inspectorPane} onToggleSidebar={() => setSidebar((v) => !v)} onToggleInspector={() => setInspectorPane((v) => !v)} onSettings={openSettings} />}
       sidebar={
         sidebar ? (
           <Sidebar
@@ -179,6 +270,18 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
             onClear={lib.clear}
             onDownscale={(i) => void lib.downscale(i)}
             onDismissFailure={lib.dismissFailure}
+            wrapCard={(it, card) => (
+              <ImageMenu
+                item={it}
+                onSelect={() => lib.select(it.image.id)}
+                onGenerate={() => lib.generate(it.image.id)}
+                onExport={() => void exports.exportImage("svg", 1, it)}
+                onReveal={() => it.image.path && void platform.reveal(it.image.path)}
+                onRemove={() => lib.remove(it.image.id)}
+              >
+                {card}
+              </ImageMenu>
+            )}
           />
         ) : null
       }

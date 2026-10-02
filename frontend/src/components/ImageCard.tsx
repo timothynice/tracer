@@ -9,7 +9,7 @@ export interface ImageCardProps {
 /** One image in the sidebar: its thumbnail, name and size, and a dot while it is queued, tracing or failed. */
 export function ImageCard({ item, selected, onSelect }: ImageCardProps) {
   const { image, job, error } = item;
-  const phase = job ? (job.phase === "queued" ? "Queued" : "Tracing…") : null;
+  const phase = job ? (job.phase === "queued" ? "Queued" : "Tracing…") : error ? "Failed" : null;
   return (
     <div id={`image-${image.id}`} role="option" aria-selected={selected} onClick={onSelect} className="block">
       <div className={`checker relative aspect-[4/3] overflow-hidden rounded-lg ${selected ? "mac-selected" : "ring-1 ring-border"}`}>

@@ -51,6 +51,16 @@ describe("useExports", () => {
     expect(text(file.bytes)).toBe("<svg edited/>");
   });
 
+  it("exports another image as its own trace, not the selected one's edited SVG", async () => {
+    const { result } = renderHook(() => useExports(state(a, b), a, "<svg edited/>", DEFAULT_SETTINGS));
+    await act(() => result.current.exportImage("svg", 1, b));
+    const file = mocks.platform.exportFile.mock.calls[0][0];
+    expect(file).toMatchObject({ imageId: "b", name: "photo.svg" });
+    expect(text(file.bytes)).toBe('<svg id="b"/>');
+    await act(() => result.current.exportImage("svg", 1, c));
+    expect(mocks.platform.exportFile).toHaveBeenCalledOnce();
+  });
+
   it("names a PNG stem.png at 1× and stem@2x.png at 2×, rendered at that scale", async () => {
     const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS));
     await act(() => result.current.exportImage("png", 1));

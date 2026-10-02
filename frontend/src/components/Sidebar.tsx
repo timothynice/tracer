@@ -48,38 +48,35 @@ export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd,
           </span>
         </button>
       </div>
-      <div
-        role="listbox"
-        aria-label="Images"
-        tabIndex={items.length ? 0 : -1}
-        aria-activedescendant={selected ? `image-${selected}` : undefined}
-        onKeyDown={onKeyDown}
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-3"
-      >
-        {items.map((item) => (
-          <Fragment key={item.image.id}>{wrapCard(item, <ImageCard item={item} selected={item.image.id === selected} onSelect={() => onSelect(item.image.id)} />)}</Fragment>
-        ))}
-        {failed.map((f, i) => (
-          <div key={`${f.path ?? f.name}-${i}`} role="group" aria-label={`${f.name} could not be opened`} className="rounded-lg bg-background/60 p-2.5">
-            <div className="flex items-start gap-2">
-              <ImageOff className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
-              <div className="min-w-0">
-                <p className="truncate text-[13px] font-medium">{f.name}</p>
-                <p className="text-[11px] leading-snug text-muted-foreground">{f.error.message}</p>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div role="listbox" aria-label="Image list" tabIndex={items.length ? 0 : -1} aria-activedescendant={selected ? `image-${selected}` : undefined} onKeyDown={onKeyDown} className="space-y-3 px-3 pb-3">
+          {items.map((item) => (
+            <Fragment key={item.image.id}>{wrapCard(item, <ImageCard item={item} selected={item.image.id === selected} onSelect={() => onSelect(item.image.id)} />)}</Fragment>
+          ))}
+        </div>
+        <div className="space-y-3 px-3 pb-3">
+          {failed.map((f, i) => (
+            <div key={`${f.path ?? f.name}-${i}`} role="group" aria-label={`${f.name} could not be opened`} className="rounded-lg bg-background/60 p-2.5">
+              <div className="flex items-start gap-2">
+                <ImageOff className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-medium">{f.name}</p>
+                  <p className="text-[11px] leading-snug text-muted-foreground">{f.error.message}</p>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {canDownscale && f.path && TOO_BIG.has(f.error.code) && (
+                  <button type="button" className="mac-button h-7 px-2 text-[12px]" onClick={() => onDownscale(i)}>
+                    Downscale to 2048 px
+                  </button>
+                )}
+                <button type="button" className="mac-button h-7 px-2 text-[12px]" onClick={() => onDismissFailure(i)}>
+                  Remove
+                </button>
               </div>
             </div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {canDownscale && f.path && TOO_BIG.has(f.error.code) && (
-                <button type="button" className="mac-button h-7 px-2 text-[12px]" onClick={() => onDownscale(i)}>
-                  Downscale to 2048 px
-                </button>
-              )}
-              <button type="button" className="mac-button h-7 px-2 text-[12px]" onClick={() => onDismissFailure(i)}>
-                Remove
-              </button>
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
       <div className="border-t p-2">
         <button type="button" className="mac-ghost w-full" disabled={!items.length && !failed.length} onClick={onClear}>

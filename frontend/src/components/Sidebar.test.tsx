@@ -44,6 +44,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("a.png")).toBeInTheDocument();
     expect(screen.getAllByText(/1200 × 800/)).toHaveLength(3);
     expect(screen.getByText(/Queued/)).toBeInTheDocument();
+    expect(screen.getByText(/· Failed/)).toBeInTheDocument();
     expect(screen.getByTitle("The trace crashed (signal 9)")).toBeInTheDocument();
   });
 
@@ -51,8 +52,8 @@ describe("Sidebar", () => {
     const props = setup();
     fireEvent.click(screen.getByRole("button", { name: /Add Image/ }));
     fireEvent.click(screen.getByText("b.png"));
-    fireEvent.keyDown(screen.getByRole("listbox", { name: "Images" }), { key: "ArrowDown" });
-    fireEvent.keyDown(screen.getByRole("listbox", { name: "Images" }), { key: "ArrowUp" });
+    fireEvent.keyDown(screen.getByRole("listbox", { name: "Image list" }), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("listbox", { name: "Image list" }), { key: "ArrowUp" });
     fireEvent.click(screen.getByRole("button", { name: /Clear All/ }));
     expect(props.onAdd).toHaveBeenCalledOnce();
     expect(props.onSelect).toHaveBeenCalledWith("b");
@@ -78,5 +79,11 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("button", { name: "Downscale to 2048 px" })).toBeNull();
     setup({ items: [], failed: [], selected: null });
     expect(screen.getAllByRole("button", { name: /Clear All/ }).at(-1)).toBeDisabled();
+  });
+
+  it("keeps the failure cards beside the listbox, which holds only options", () => {
+    setup({ failed: [{ name: "huge.png", path: "/p/huge.png", error: new ApiError("too_large", "Too big") }] });
+    const group = screen.getByRole("group", { name: /huge\.png could not be opened/ });
+    expect(screen.getByRole("listbox", { name: "Image list" })).not.toContainElement(group);
   });
 });

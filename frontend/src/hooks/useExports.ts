@@ -22,14 +22,16 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
   };
 
   const exportImage = useCallback(
-    (kind: "svg" | "png", scale: number) =>
+    (kind: "svg" | "png", scale: number, target: ImageItem | null = item) =>
       exclusive(async () => {
-        if (!item || !svg) return;
-        const stem = baseName(item.image.name);
+        // the selected image goes as it is on screen, with the layer inspector's edits; any other as its own trace
+        const text = target === item ? svg : target ? shownAnswer(target)?.svg : undefined;
+        if (!target || !text) return;
+        const stem = baseName(target.image.name);
         try {
-          const bytes = kind === "svg" ? new TextEncoder().encode(svg) : new Uint8Array(await (await svgToPngBlob(svg, item.image.width, item.image.height, scale)).arrayBuffer());
+          const bytes = kind === "svg" ? new TextEncoder().encode(text) : new Uint8Array(await (await svgToPngBlob(text, target.image.width, target.image.height, scale)).arrayBuffer());
           const name = kind === "svg" ? `${stem}.svg` : scale === 1 ? `${stem}.png` : `${stem}@${scale}x.png`;
-          const path = await platform.exportFile({ kind, imageId: item.image.id, name, bytes }, settings);
+          const path = await platform.exportFile({ kind, imageId: target.image.id, name, bytes }, settings);
           if (path && platform.kind === "native" && !settings.revealAfterExport) {
             toast.success(`Exported ${fileName(path)}`, { action: { label: "Show in Finder", onClick: () => void platform.reveal(path) } });
           }
