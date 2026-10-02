@@ -28,6 +28,20 @@ impl Opens {
     }
 }
 
+/// The window the UI that opens files lives in; drops on, and requests from, any other window are not its.
+pub const MAIN: &str = "main";
+
+impl Opens {
+    /// `take` for a window: only the main window's first ask means the UI is listening.
+    pub fn take_for(&mut self, window: &str) -> Vec<String> {
+        if window == MAIN {
+            self.take()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 pub fn deliver<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
     if paths.is_empty() {
         return;
@@ -35,7 +49,7 @@ pub fn deliver<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
     let state = app.state::<Mutex<Opens>>();
     let now = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).offer(paths);
     if let Some(paths) = now {
-        let _ = app.emit_to("main", "open-paths", paths);
+        let _ = app.emit_to(MAIN, "open-paths", paths);
     }
 }
 
@@ -51,5 +65,16 @@ mod tests {
         assert_eq!(o.take(), vec!["/a.png".to_string(), "/b.png".to_string()]);
         assert_eq!(o.offer(vec!["/c.png".into()]), Some(vec!["/c.png".to_string()]));
         assert!(o.take().is_empty());
+    }
+
+    #[test]
+    fn only_the_main_window_can_ask_for_them() {
+        let mut o = Opens::default();
+        o.offer(vec!["/a.png".into()]);
+        assert!(o.take_for("settings").is_empty());
+        // still waiting: the settings window did not make the UI ready
+        assert_eq!(o.offer(vec!["/b.png".into()]), None);
+        assert_eq!(o.take_for(MAIN), vec!["/a.png".to_string(), "/b.png".to_string()]);
+        assert_eq!(o.offer(vec!["/c.png".into()]), Some(vec!["/c.png".to_string()]));
     }
 }

@@ -209,8 +209,8 @@ pub fn set_menu_state(app: tauri::AppHandle, state: MenuState) {
 }
 
 #[tauri::command]
-pub fn take_pending_opens(opens: State<'_, Mutex<crate::opens::Opens>>) -> Vec<String> {
-    opens.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+pub fn take_pending_opens(window: tauri::WebviewWindow, opens: State<'_, Mutex<crate::opens::Opens>>) -> Vec<String> {
+    opens.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take_for(window.label())
 }
 
 pub(crate) fn show_settings_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {

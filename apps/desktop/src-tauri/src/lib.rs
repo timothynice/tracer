@@ -55,11 +55,16 @@ pub fn run() {
             use tauri::Manager;
             let (menu, handles) = menu::build(app.handle(), &settings::load(app.handle()).recent)?;
             app.set_menu(menu)?;
-            app.manage(std::sync::Mutex::new(handles));
+            app.manage(handles);
+            // nothing is possible until the UI says so
+            menu::apply_state(app.handle(), &menu::MenuState::default());
             Ok(())
         })
         .on_menu_event(|app, event| menu::on_menu(app, event.id().as_ref()))
         .on_window_event(|window, event| {
+            if window.label() != opens::MAIN {
+                return;
+            }
             if let tauri::WindowEvent::DragDrop(drop) = event {
                 use tauri::{DragDropEvent, Emitter, Manager};
                 match drop {

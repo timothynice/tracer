@@ -4,7 +4,6 @@
 use crate::{opens, settings};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use tauri::menu::{AboutMetadata, CheckMenuItem, CheckMenuItemBuilder, Menu, MenuItem, MenuItemBuilder, PredefinedMenuItem, Submenu, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -209,16 +208,21 @@ fn fill_recent<R: Runtime>(app: &AppHandle<R>, submenu: &Submenu<R>, recent: &[S
     Ok(())
 }
 
+/// Rebuilds Open Recent. The submenu is rebuilt on the main thread, in the order the requests came, so two
+/// callers cannot interleave their removes and appends; `Handles` is never locked (a lock held across a hop to
+/// the main thread deadlocks against a main-thread command waiting for the same lock).
 pub fn set_recent<R: Runtime>(app: &AppHandle<R>, recent: &[String]) {
-    if let Some(h) = app.try_state::<Mutex<Handles<R>>>() {
-        let h = h.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = fill_recent(app, &h.recent, recent);
-    }
+    let Some(h) = app.try_state::<Handles<R>>() else { return };
+    let submenu = h.recent.clone();
+    let recent = recent.to_vec();
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let _ = fill_recent(&handle, &submenu, &recent);
+    });
 }
 
 pub fn apply_state<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
-    let Some(h) = app.try_state::<Mutex<Handles<R>>>() else { return };
-    let h = h.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(h) = app.try_state::<Handles<R>>() else { return };
     for (id, enabled, checked) in plan(state) {
         if let Some(i) = h.items.get(id) {
             let _ = i.set_enabled(enabled);
