@@ -54,7 +54,9 @@ fn convert(name: &str, src: &Path, max_side: Option<u32>) -> Result<Vec<u8>, Com
     let read = std::fs::read(&out);
     let _ = std::fs::remove_file(&out);
     if !done.status.success() {
-        return Err(CommandError::conversion(name, String::from_utf8_lossy(&done.stderr).trim()));
+        let stderr = String::from_utf8_lossy(&done.stderr);
+        let why = stderr.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string).unwrap_or_else(|| done.status.to_string());
+        return Err(CommandError::conversion(name, why));
     }
     read.map_err(|e| CommandError::conversion(name, e))
 }
@@ -72,22 +74,22 @@ fn admit(core: &Core, name: String, path: Option<PathBuf>, bytes: Vec<u8>) -> Re
     })
 }
 
-fn file_name(path: &Path) -> String {
+pub fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
 }
 
-/// Open the file at `path`; `downscale` scales it to fit the core's side cap first.
+/// Open the file at `path`. With `downscale`, an image the core refuses for its size is scaled to fit the
+/// core's side cap and opened again; one that fits is never touched (`sips -Z` would enlarge it).
 pub fn open_path(core: &Core, path: &Path, downscale: bool) -> Result<OpenImage, CommandError> {
     let name = file_name(path);
     let raw = std::fs::read(path).map_err(|e| CommandError::io(path, &e))?;
-    let bytes = if downscale {
-        convert(&name, path, Some(max_side()))?
-    } else if sniff(&raw) != Kind::Native {
-        convert(&name, path, None)?
-    } else {
-        raw
-    };
-    admit(core, name, Some(path.to_path_buf()), bytes)
+    let bytes = if sniff(&raw) != Kind::Native { convert(&name, path, None)? } else { raw };
+    match admit(core, name.clone(), Some(path.to_path_buf()), bytes) {
+        Err(e) if downscale && matches!(e.code(), Some("too_many_pixels" | "too_large")) => {
+            admit(core, name.clone(), Some(path.to_path_buf()), convert(&name, path, Some(max_side()))?)
+        }
+        other => other,
+    }
 }
 
 /// Open bytes that have no file (a sample, a paste).
@@ -110,7 +112,8 @@ pub fn decode_header_name(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+            let pair = &bytes[i + 1..i + 3];
+            let hex = if pair.iter().all(u8::is_ascii_hexdigit) { std::str::from_utf8(pair).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) } else { None };
             match hex {
                 Some(b) => {
                     out.push(b);
@@ -198,6 +201,49 @@ mod tests {
     }
 
     #[test]
+    fn downscale_never_enlarges() {
+        let core = Core::new();
+        let dir = std::env::temp_dir().join(format!("s0t-small-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("small.png");
+        std::fs::write(&small, png(40, 20)).unwrap();
+        let img = open_path(&core, &small, true).unwrap();
+        assert_eq!((img.width, img.height), (40, 20));
+        // a HEIC that fits is converted but not scaled either
+        let heic = dir.join("small.heic");
+        sips(&fixture("intake_exif6.jpg"), "heic", &heic);
+        let img = open_path(&core, &heic, true).unwrap();
+        assert_eq!((img.width, img.height), (20, 40));
+    }
+
+    #[test]
+    fn a_downscaled_image_keeps_its_orientation() {
+        // stored 3000 x 300 with EXIF orientation 6: shown 300 x 3000, over the cap
+        let core = Core::new();
+        let dir = std::env::temp_dir().join(format!("s0t-bigturn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("turned.jpg");
+        let done = std::process::Command::new("/usr/bin/sips").args(["--resampleHeightWidth", "300", "3000"]).arg(fixture("intake_exif6.jpg")).arg("--out").arg(&big).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        assert_eq!(open_path(&core, &big, false).unwrap_err().code(), Some("too_many_pixels"));
+        let img = open_path(&core, &big, true).unwrap();
+        assert!(img.height == 2048 && (204..=205).contains(&img.width), "{}x{}", img.width, img.height);
+    }
+
+    #[test]
+    fn a_failed_conversion_names_one_line_of_sips() {
+        let core = Core::new();
+        let dir = std::env::temp_dir().join(format!("s0t-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("bad.tiff");
+        std::fs::write(&bad, b"II*\0 this is not a tiff").unwrap();
+        let e = open_path(&core, &bad, false).unwrap_err();
+        assert_eq!(e.code(), Some("conversion_failed"));
+        let message = e.body["detail"]["message"].as_str().unwrap();
+        assert!(message.starts_with("macOS could not convert bad.tiff: ") && !message.contains('\n'), "{message}");
+    }
+
+    #[test]
     fn bytes_open_like_files_and_a_missing_file_is_an_io_error() {
         let core = Core::new();
         let img = open_bytes(&core, "paste.png", png(8, 8)).unwrap();
@@ -212,5 +258,7 @@ mod tests {
         assert_eq!(decode_header_name("logo%20%C3%A9t%C3%A9.png"), "logo été.png");
         assert_eq!(decode_header_name("plain.png"), "plain.png");
         assert_eq!(decode_header_name("bad%zz.png"), "bad%zz.png");
+        assert_eq!(decode_header_name("a%+1b.png"), "a%+1b.png"); // from_str_radix would take the sign
+        assert_eq!(decode_header_name("100%"), "100%");
     }
 }

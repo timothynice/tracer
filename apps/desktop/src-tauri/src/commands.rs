@@ -25,7 +25,7 @@ pub(crate) fn open_one(state: &AppState, path: PathBuf, downscale: bool) -> Outc
     match intake::open_path(&state.core, &path, downscale) {
         Ok(image) => Outcome::Ok(state.images.insert(image)),
         Err(error) => Outcome::Failed {
-            name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            name: intake::file_name(&path),
             path: Some(path.display().to_string()),
             error,
         },
