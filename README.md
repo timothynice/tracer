@@ -141,10 +141,12 @@ times out (no Automation permission for Finder, or no one logged in at the
 screen) the build fails after the `.app` is made, and `CI=true npm run build`
 makes the same `.dmg` with a plain window.
 
-**The app is not signed.** The first time, macOS 15 and later refuse to open it:
-open System Settings ▸ Privacy & Security and click Open Anyway under the
-message about Studi0Trace, or run
-`xattr -dr com.apple.quarantine /Applications/Studi0Trace.app`.
+**The app is not signed**, so macOS stops it the first time. On macOS 13 and 14,
+right-click the app and choose Open (or open System Settings ▸ Privacy & Security
+and click Open Anyway). On macOS 15 and later, only the second works: try to open
+the app once, then open System Settings ▸ Privacy & Security and click Open Anyway
+under the message about Studi0Trace. Or, wherever you put the app, run
+`xattr -dr com.apple.quarantine /path/to/Studi0Trace.app`.
 
 It opens PNG, JPEG, GIF, WebP, BMP, HEIC and TIFF, up to 2048 px a side, and
 offers Downscale for larger ones. It is listed under Finder's Open With for those
@@ -158,6 +160,7 @@ types and never becomes their default app.
 | ⌘E | Export SVG |
 | ⇧⌘E | Export PNG at 2× |
 | ⌥⌘E | Export All |
+| ⌥⌘R | Show in Finder |
 | ⇧⌘C | Copy SVG |
 | ⌘1 – ⌘4 | Split, Side by Side, Overlay, Vector Only |
 | ⌘+ / ⌘- | Zoom In / Zoom Out |
@@ -168,8 +171,8 @@ types and never becomes their default app.
 | ⌘⌫ | Remove Image |
 | ⌘, | Settings |
 
-The FastAPI server and the browser build below remain for development until
-plan 4 retires them.
+The FastAPI server and the browser build below are kept for development of
+the app and of the engine.
 
 ## Run it
 

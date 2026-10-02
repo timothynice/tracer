@@ -1,27 +1,63 @@
 #!/usr/bin/env bash
 # Build Studi0Trace.app, open a sample with it the way Finder does (`open -a`), and check that it answered:
-#   1. a trace worker ran (`--trace-worker` appears in the process list): the settings say Trace new images straight away;
+#   1. a trace worker ran (a `--trace-worker` child of the instance this script started): the settings say
+#      Trace new images straight away;
 #   2. the sample is first in the recent files: the path reached the page, the page opened it, Rust kept it.
-# The user's settings are put back afterwards. Run from apps/desktop: `npm run smoke` (SKIP_BUILD=1 to reuse a build).
+# The user's settings are put back afterwards, once the instance is gone. The script refuses to run while any
+# Studi0Trace is already running (it would share the settings file). Run from apps/desktop: `npm run smoke`
+# (SKIP_BUILD=1 to reuse a build).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-[ "${SKIP_BUILD:-0}" = 1 ] || npx tauri build --bundles app
 APP="$(cd ../.. && pwd)/target/release/bundle/macos/Studi0Trace.app"
 SUPPORT="$HOME/Library/Application Support/com.studi0.trace"
 SETTINGS="$SUPPORT/settings.json"
 SAMPLE="$(cd ../../frontend/public/samples && pwd)/logo.png"
 
+# Any Studi0Trace (the user's own, a lingering one) shares the settings file: do not start, touch nothing.
+if pgrep -f "Studi0Trace.app/Contents/MacOS" >/dev/null; then
+  echo "smoke: Studi0Trace is already running; quit it first (the smoke test rewrites its settings)." >&2
+  exit 1
+fi
+
+[ "${SKIP_BUILD:-0}" = 1 ] || npx tauri build --bundles app
+
 mkdir -p "$SUPPORT"
 BACKUP=""
+PID=""
 if [ -f "$SETTINGS" ]; then BACKUP="$(mktemp)"; cp "$SETTINGS" "$BACKUP"; fi
+
+alive() { [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; }
+wait_gone() { for _ in $(seq 1 $(( $1 * 10 ))); do alive || return 0; sleep 0.1; done; ! alive; }
+
 restore() {
-  osascript -e 'quit app "Studi0Trace"' >/dev/null 2>&1 || true
-  # let it go before the settings come back: a quitting app must not write over them
-  for _ in $(seq 1 50); do pgrep -f "Studi0Trace.app/Contents/MacOS" >/dev/null || break; sleep 0.1; done
-  if [ -n "$BACKUP" ]; then mv "$BACKUP" "$SETTINGS"; else rm -f "$SETTINGS"; fi
+  local rc=$?
+  set +e
+  trap - EXIT INT TERM
+  if [ -z "$PID" ]; then PID="$(pgrep -o -f "$APP/Contents/MacOS/" || true)"; fi
+  if alive; then
+    osascript -e 'tell application id "com.studi0.trace" to quit' >/dev/null 2>&1
+    wait_gone 5 || {
+      pkill -P "$PID" 2>/dev/null   # its trace workers
+      kill "$PID" 2>/dev/null
+      wait_gone 3 || kill -9 "$PID" 2>/dev/null
+      wait_gone 2
+    }
+  fi
+  pkill -f "$APP/Contents/MacOS/" 2>/dev/null   # anything of ours left over (workers)
+  if alive; then
+    echo "smoke: WARNING: Studi0Trace (pid $PID) is still running; your settings were NOT restored." >&2
+    [ -n "$BACKUP" ] && echo "smoke: your settings are saved in $BACKUP; put them back with: cat '$BACKUP' > '$SETTINGS'" >&2
+  elif [ -n "$BACKUP" ]; then
+    if cat "$BACKUP" > "$SETTINGS"; then rm -f "$BACKUP"
+    else echo "smoke: WARNING: could not restore your settings; they are saved in $BACKUP" >&2; fi
+  else
+    rm -f "$SETTINGS"
+  fi
+  exit "$rc"
 }
 trap restore EXIT
+trap 'exit 130' INT TERM
 
 printf '{"settings":{"appearance":"system","exportTo":"ask","revealAfterExport":false,"traceOnOpen":true,"liveUpdate":true,"recent":[]}}' > "$SETTINGS"
 open -n -a "$APP" "$SAMPLE"
@@ -29,8 +65,9 @@ open -n -a "$APP" "$SAMPLE"
 worker=0
 recent=0
 for _ in $(seq 1 150); do
-  if [ "$worker" = 0 ] && pgrep -f "studi0trace-desktop --trace-worker" >/dev/null; then worker=1; fi
-  if [ "$recent" = 0 ] && grep -q "\"$SAMPLE\"" "$SETTINGS" 2>/dev/null; then recent=1; fi
+  [ -n "$PID" ] || PID="$(pgrep -o -f "$APP/Contents/MacOS/" || true)"
+  if [ "$worker" = 0 ] && [ -n "$PID" ] && pgrep -P "$PID" -f -- "--trace-worker" >/dev/null; then worker=1; fi
+  if [ "$recent" = 0 ] && grep -qF "\"$SAMPLE\"" "$SETTINGS" 2>/dev/null; then recent=1; fi
   [ "$worker" = 1 ] && [ "$recent" = 1 ] && break
   sleep 0.2
 done

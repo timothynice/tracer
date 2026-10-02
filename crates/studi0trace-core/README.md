@@ -4,8 +4,8 @@ Everything the Python server does around the Vexel engine, in Rust: image intake
 the engine's parameters and their JSON schema, the presets, SVG finishing and
 stats, the artifact scorecard and fidelity assessment, Auto, and one facade,
 `api::Core`, that answers the API's five requests with the API's JSON. The desktop
-app (plan 2, `apps/desktop`) and the web build (plan 3, `crates/studi0trace-wasm`)
-are meant to call it, and neither exists yet; the Python in `backend/studi0trace` is the
+app (plan 2, `apps/desktop`) calls it; the web build (plan 3, `crates/studi0trace-wasm`)
+is meant to, and does not exist yet. The Python in `backend/studi0trace` is the
 reference each module was ported from, and stays the definition of what the core
 does until the Python server is retired. Rust >= 1.88 (`slice::as_chunks`).
 
