@@ -1,0 +1,35 @@
+[package]
+name = "studi0trace-desktop"
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+description = "Studi0Trace for Mac: the Tauri shell around studi0trace-core"
+publish = false
+
+[lib]
+name = "studi0trace_desktop"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "studi0trace-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+# no `macos-private-api`: transparent windows no longer need it (tauri 2.12), and tauri-build insists the feature
+# and `app.macOSPrivateApi` agree, so neither is set
+tauri = { version = "2.12", features = [] }
+tauri-plugin-dialog = "2.8"
+tauri-plugin-store = "2.5"
+tauri-plugin-window-state = "2.5"
+tauri-plugin-clipboard-manager = "2.4"
+tauri-plugin-opener = "2.7"
+studi0trace-core = { path = "../../../crates/studi0trace-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }

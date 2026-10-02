@@ -1,0 +1,17 @@
+{
+  "name": "studi0trace-desktop",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "web:dev": "npm --prefix ../../frontend run dev -- --port 5173 --strictPort",
+    "web:build": "npm --prefix ../../frontend run build",
+    "icon": "../../backend/.venv/bin/python scripts/make-icon.py"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1"
+  }
+}
