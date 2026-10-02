@@ -122,6 +122,11 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
   const patch = (id: string, change: Partial<ImageItem> | ((item: ImageItem) => Partial<ImageItem>)) =>
     set({ ...state, items: state.items.map((i) => (i.image.id === id ? { ...i, ...(typeof change === "function" ? change(i) : change) } : i)) });
 
+  const clearTimer = (id: string) => {
+    clearTimeout(timers.get(id));
+    timers.delete(id);
+  };
+
   const abortJob = (item: ImageItem | undefined) => {
     if (!item?.job) return;
     controllers.get(item.job.id)?.abort();
@@ -144,6 +149,8 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     }
     const traces = { ...item.traces, [key]: answer };
     const auto = res.auto?.[ENGINE] ?? null;
+    // the answer is always kept; it takes the screen and the controls only if the settings still are the ones it traced
+    const current = traceKey(item) === key;
     let params = item.params;
     if (auto) {
       for (const c of auto.candidates) {
@@ -151,9 +158,11 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
         if (preset && c.svg) traces[paramsKey(resolve(preset.params))] = { svg: c.svg, elapsedMs: c.elapsed_ms ?? 0, stats: c.stats ?? {} };
       }
       const pick = auto.pick ? presetById.get(auto.pick) : undefined;
-      if (pick) params = resolve(pick.params);
+      if (pick && current) params = resolve(pick.params);
     }
-    patch(id, { job: null, error: null, traces, shown: key, auto: auto ?? item.auto, params });
+    // settings that moved on while it ran show their own trace if one is known (a candidate, say), else stay as they are
+    const now = current ? key : traces[traceKey({ preset: item.preset, params })] ? traceKey({ preset: item.preset, params }) : item.shown;
+    patch(id, { job: null, error: null, traces, shown: now, auto: auto ?? item.auto, params });
   };
 
   const fail = (id: string, jobId: string, err: unknown) => {
@@ -199,12 +208,16 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     if (!item) return;
     const key = traceKey(item);
     if (item.traces[key]) {
-      patch(id, { shown: key });
+      // a job for other settings has nothing left to say
+      if (item.job && item.job.key !== key) {
+        abortJob(item);
+        patch(id, { shown: key, job: null });
+      } else patch(id, { shown: key });
       return;
     }
     const last = item.shown ? item.traces[item.shown] : undefined;
     if (!settings.liveUpdate || !last || last.elapsedMs >= LIVE_MS) return;
-    clearTimeout(timers.get(id));
+    clearTimer(id);
     if (!debounce) {
       generate(id);
       return;
@@ -213,7 +226,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
       id,
       setTimeout(() => {
         timers.delete(id);
-        generate(id);
+        if (settings.liveUpdate) generate(id);
       }, DEBOUNCE_MS),
     );
   };
@@ -266,7 +279,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
       const item = find(id);
       if (!item) return;
       abortJob(item);
-      clearTimeout(timers.get(id));
+      clearTimer(id);
       platform.closeImage(id);
       set({ ...state, selected: selectAfterRemoving(id), items: state.items.filter((i) => i.image.id !== id) });
     },
@@ -274,7 +287,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     clear() {
       for (const item of state.items) {
         abortJob(item);
-        clearTimeout(timers.get(item.image.id));
+        clearTimer(item.image.id);
         platform.closeImage(item.image.id);
       }
       set({ items: [], failed: [], selected: null });
@@ -295,7 +308,11 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     pickPreset(id, preset) {
       const item = find(id);
       if (!item) return;
-      if (preset.kind === "auto") patch(id, { preset: "auto" });
+      if (preset.kind === "auto") {
+        // back to Auto shows its pick's values again, not those of the preset tried since
+        const pick = item.auto?.pick ? presetById.get(item.auto.pick) : undefined;
+        patch(id, pick ? { preset: "auto", params: resolve(pick.params) } : { preset: "auto" });
+      }
       else patch(id, { preset: preset.id, params: resolve(preset.params) });
       settle(id, false);
     },
@@ -310,6 +327,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     generate,
 
     cancel(id) {
+      clearTimer(id);
       const item = find(id);
       if (!item?.job) return;
       abortJob(item);
@@ -318,6 +336,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
 
     setSettings(next) {
       settings = next;
+      if (!settings.liveUpdate) [...timers.keys()].forEach(clearTimer);
     },
   };
   return lib;

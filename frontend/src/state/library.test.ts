@@ -247,6 +247,93 @@ describe("library", () => {
     expect(platform.vectorize).toHaveBeenCalledTimes(2);
   });
 
+  it("a trace landing after the settings moved on does not take the screen or the controls", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a"), ok("b")]);
+    // A: the job for detail 7 is running when the user goes back to the cached detail 6
+    lib.pickPreset("a", PRESETS[1]);
+    lib.generate("a");
+    calls[0].resolve(response("<svg>six</svg>", 500));
+    await flush();
+    lib.setParam("a", "detail", 7);
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    expect(lib.getState().items[0].job).not.toBeNull();
+    lib.setParam("a", "detail", 6);
+    expect(lib.getState().items[0].job).toBeNull();
+    expect(calls[1].signal.aborted).toBe(true);
+    calls[1].resolve(response("<svg>seven</svg>", 100));
+    await flush();
+    const a = lib.getState().items[0];
+    expect(a.shown).toBe(traceKey(a));
+    expect(a.traces[a.shown as string].svg).toBe("<svg>six</svg>");
+    expect(needsUpdate(a)).toBe(false);
+    // B: Balanced is picked while Auto runs; Auto lands with Logo as its pick
+    lib.generate("b");
+    lib.pickPreset("b", PRESETS[1]);
+    calls[2].resolve(
+      response("<svg>logo</svg>", 900, {
+        auto: { vexel: { engine: "vexel", pick: "logo", reason: "", candidates: [
+          { preset: "balanced", label: "Balanced", svg: "<svg>balanced</svg>", elapsed_ms: 800, stats: {} },
+          { preset: "logo", label: "Logo & icon", svg: "<svg>logo</svg>", elapsed_ms: 900, stats: {} },
+        ] } },
+      }),
+    );
+    await flush();
+    const b = lib.getState().items[1];
+    expect(b.preset).toBe("balanced");
+    expect(b.params).toEqual({ detail: 6, min_region: 8 });
+    expect(b.traces.auto.svg).toBe("<svg>logo</svg>");
+    expect(b.shown).toBe(traceKey(b));
+    expect(b.traces[b.shown as string].svg).toBe("<svg>balanced</svg>");
+    expect(b.auto?.pick).toBe("logo");
+  });
+
+  it("Cancel, a changed setting and removal all end a pending live update", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a"), ok("b"), ok("c")]);
+    for (const id of ["a", "b", "c"]) {
+      lib.pickPreset(id, PRESETS[1]);
+      lib.generate(id);
+    }
+    calls.forEach((c) => c.resolve(response("<svg/>", 100)));
+    await flush();
+    expect(platform.vectorize).toHaveBeenCalledTimes(3);
+    lib.setParam("a", "detail", 7);
+    lib.setParam("b", "detail", 7);
+    lib.setParam("c", "detail", 7);
+    vi.advanceTimersByTime(DEBOUNCE_MS / 2);
+    lib.cancel("a");
+    lib.setSettings({ ...DEFAULT_SETTINGS, liveUpdate: false });
+    vi.advanceTimersByTime(DEBOUNCE_MS * 4);
+    expect(platform.vectorize).toHaveBeenCalledTimes(3);
+    lib.setSettings(DEFAULT_SETTINGS);
+    lib.setParam("c", "detail", 8);
+    lib.remove("c");
+    vi.advanceTimersByTime(DEBOUNCE_MS * 4);
+    expect(platform.vectorize).toHaveBeenCalledTimes(3);
+  });
+
+  it("picking Auto again restores its pick's values", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    lib.generate("a");
+    calls[0].resolve(
+      response("<svg>logo</svg>", 900, {
+        auto: { vexel: { engine: "vexel", pick: "logo", reason: "", candidates: [{ preset: "logo", label: "Logo & icon", svg: "<svg>logo</svg>", elapsed_ms: 900, stats: {} }] } },
+      }),
+    );
+    await flush();
+    lib.pickPreset("a", PRESETS[1]);
+    expect(lib.getState().items[0].params).toEqual({ detail: 6, min_region: 8 });
+    lib.pickPreset("a", PRESETS[0]);
+    const item = lib.getState().items[0];
+    expect(item.params).toEqual({ detail: 10, min_region: 16 });
+    expect(item.shown).toBe("auto");
+  });
+
   it("notifies subscribers and hands out a new state object on every change", () => {
     const { platform } = fakePlatform();
     const lib = createLibrary(platform, CATALOG, DEFAULT_SETTINGS);
