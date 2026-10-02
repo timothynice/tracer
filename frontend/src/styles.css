@@ -95,6 +95,11 @@
     /* the window's vibrancy shows through where no panel is painted */
     background: transparent;
   }
+  /* the Settings window is not transparent: paint the page */
+  html.native.settings-window,
+  html.native.settings-window body {
+    background: hsl(var(--background));
+  }
   input,
   textarea,
   [contenteditable="true"],

@@ -12,6 +12,7 @@ import App from "./App";
 import { platform } from "./platform";
 
 if (platform.kind === "native") document.documentElement.classList.add("native");
+if (platform.kind === "native" && platform.windowRole() === "settings") document.documentElement.classList.add("settings-window");
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, staleTime: Infinity } },

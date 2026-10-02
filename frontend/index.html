@@ -10,9 +10,15 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Studi0Trace</title>
     <script>
-      // Apply the persisted theme before first paint to avoid a flash.
+      // Apply the saved appearance before first paint to avoid a flash. The app mirrors it into
+      // studi0trace.appearance (its store has no synchronous read); a browser's settings hold it too.
       try {
-        var t = localStorage.getItem("studi0trace.theme") || "system";
+        var t = localStorage.getItem("studi0trace.appearance");
+        if (!t) {
+          var raw = localStorage.getItem("studi0trace.settings");
+          t = raw && JSON.parse(raw).appearance;
+        }
+        t = t || "system";
         var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.classList.toggle("dark", dark);
       } catch (e) {}

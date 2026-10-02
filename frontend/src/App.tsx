@@ -7,36 +7,26 @@ import { EmptyState } from "./components/EmptyState";
 import { ExportMenu } from "./components/ExportMenu";
 import { ImageMenu } from "./components/ImageMenu";
 import { Inspector, InspectorOverlay } from "./components/Inspector";
+import { SettingsSheet } from "./components/SettingsSheet";
+import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { VectorizePanel } from "./components/VectorizePanel";
 import { Viewer, type ViewerHandle } from "./components/Viewer";
 import { useExports } from "./hooks/useExports";
 import { useLayerInspector } from "./hooks/useLayerInspector";
+import { useSettings } from "./hooks/useSettings";
 import { useWindowDrop } from "./hooks/useWindowDrop";
 import { specsFor } from "./lib/schema";
 import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
-import { applyTheme, watchSystemTheme } from "./lib/theme";
-import { DEFAULT_SETTINGS, platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
+import { platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
 import { createLibrary, ENGINE, shownAnswer, type Catalog } from "./state/library";
 import { useLibrary } from "./state/useLibrary";
 
 const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
 
 export default function App() {
-  const engines = useQuery({ queryKey: ["engines"], queryFn: ({ signal }) => platform.engines(signal) });
-  const presets = useQuery({ queryKey: ["presets"], queryFn: ({ signal }) => platform.presets(signal) });
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  useEffect(() => {
-    void platform.loadSettings().then(setSettings);
-    return platform.onSettings(setSettings);
-  }, []);
-  useEffect(() => {
-    applyTheme(settings.appearance);
-    return watchSystemTheme(() => settings.appearance);
-  }, [settings.appearance]);
-
-  // in the app, the web's context menu (Reload, Inspect Element) never shows; text fields keep theirs
+  // in the app, the web's context menu (Reload, Inspect Element) never shows, in either window; text fields keep theirs
   useEffect(() => {
     if (platform.kind !== "native") return;
     const block = (e: MouseEvent) => {
@@ -45,6 +35,23 @@ export default function App() {
     document.addEventListener("contextmenu", block);
     return () => document.removeEventListener("contextmenu", block);
   }, []);
+  return platform.windowRole() === "settings" ? <SettingsWindow /> : <MainWindow />;
+}
+
+/** The app's Settings window: the settings, saved as they change, in the window's own appearance. */
+function SettingsWindow() {
+  const { settings, change } = useSettings();
+  return (
+    <div className="min-h-dvh bg-background">
+      <SettingsView settings={settings} onChange={change} />
+    </div>
+  );
+}
+
+function MainWindow() {
+  const engines = useQuery({ queryKey: ["engines"], queryFn: ({ signal }) => platform.engines(signal) });
+  const presets = useQuery({ queryKey: ["presets"], queryFn: ({ signal }) => platform.presets(signal) });
+  const { settings, change: changeSettings } = useSettings();
 
   const engine = engines.data?.find((e) => e.id === ENGINE);
   const catalog = useMemo<Catalog | null>(() => (engine && presets.data ? { engine, presets: presets.data.filter((p) => p.engine === ENGINE) } : null), [engine, presets.data]);
@@ -52,24 +59,24 @@ export default function App() {
   if (failure || !catalog) {
     return (
       <AppShell
-        titleBar={<TitleBar native={platform.kind === "native"} sidebar={false} inspector={false} onToggleSidebar={() => {}} onToggleInspector={() => {}} onSettings={() => {}} />}
-        sidebar={null}
-        inspector={null}
-        main={
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center" role={failure ? "alert" : "status"}>
-            <p className="text-[15px] font-semibold">{failure ? "Studi0Trace could not start" : "Starting…"}</p>
-            {failure && <p className="max-w-sm text-muted-foreground">{failure.message}</p>}
-            {failure && (
-              <button type="button" className="mac-button" onClick={() => void Promise.all([engines.refetch(), presets.refetch()])}>
-                Try Again
-              </button>
-            )}
-          </div>
-        }
+          titleBar={<TitleBar native={platform.kind === "native"} sidebar={false} inspector={false} onToggleSidebar={() => {}} onToggleInspector={() => {}} onSettings={() => {}} />}
+          sidebar={null}
+          inspector={null}
+          main={
+            <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center" role={failure ? "alert" : "status"}>
+              <p className="text-[15px] font-semibold">{failure ? "Studi0Trace could not start" : "Starting…"}</p>
+              {failure && <p className="max-w-sm text-muted-foreground">{failure.message}</p>}
+              {failure && (
+                <button type="button" className="mac-button" onClick={() => void Promise.all([engines.refetch(), presets.refetch()])}>
+                  Try Again
+                </button>
+              )}
+            </div>
+          }
       />
     );
   }
-  return <Workspace catalog={catalog} settings={settings} />;
+  return <Workspace catalog={catalog} settings={settings} onSettingsChange={changeSettings} />;
 }
 
 const VIEW_KEY = "studi0trace.view";
@@ -77,7 +84,7 @@ const VIEW_KEY = "studi0trace.view";
 const READS_SETTINGS = new Set<Command>(["generate", "export-svg", "export-png-1", "export-png-2", "export-png-4", "export-all", "copy-svg"]);
 const MODES: ViewMode[] = ["split", "side", "overlay", "vector"];
 
-function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings }) {
+function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; settings: Settings; onSettingsChange: (next: Settings) => void }) {
   // one library for the window's life; the settings reach it as they change
   const lib = useMemo(() => createLibrary(platform, catalog, settings), [catalog]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => lib.setSettings(settings), [lib, settings]);
@@ -149,8 +156,7 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
 
   const exports = useExports(state, item, layers.exportSvg, settings);
   const anyVector = state.items.some((i) => i.shown !== null);
-  // TODO(Task 12): the settings sheet reads this; until then it is set and never shown
-  const [, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const openSettings = useCallback(() => {
     if (!platform.openSettingsWindow()) setSettingsOpen(true);
   }, []);
@@ -271,7 +277,8 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
   );
 
   return (
-    <AppShell
+    <>
+      <AppShell
       titleBar={<TitleBar native={platform.kind === "native"} sidebar={sidebar} inspector={inspectorPane} onToggleSidebar={() => setSidebar((v) => !v)} onToggleInspector={() => setInspectorPane((v) => !v)} onSettings={openSettings} />}
       sidebar={
         sidebar ? (
@@ -311,6 +318,8 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
           </div>
         ) : null
       }
-    />
+      />
+      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onChange={onSettingsChange} />
+    </>
   );
 }
