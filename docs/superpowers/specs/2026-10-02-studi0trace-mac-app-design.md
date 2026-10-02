@@ -168,7 +168,10 @@ system's words). A failed image keeps its card, with the error and the action th
   where their component is kept. The suite passes on the Node in use (the Node 26
   `localStorage` clash is fixed in `src/test/setup.ts`).
 - **The app itself**: `npm run build` in `apps/desktop` produces `Studi0Trace.app` and a
-  `.dmg`; a smoke script opens a sample with the built app, and the window is screenshotted
+  `.dmg`; a smoke script (`npm run smoke`) opens a sample with the built app as Finder does
+  (`open -a`) and checks that a trace worker ran and the sample is first in the recent files;
+  the `.dmg` step scripts Finder to style its window, which fails without Automation
+  permission (`CI=true` skips it); and the window is screenshotted
   (`screencapture`) in light and dark at the milestones (shell, layout, inspector, settings)
   and compared with the concept. In a browser (`.claude/launch.json` `backend` + `frontend`)
   the same UI runs against the Python server for quick visual checks.

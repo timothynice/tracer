@@ -27,7 +27,7 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   build of plan 3 will call it; neither exists yet. Its `README.md` has the
   facade, the known differences from the Python and the contract a shell must
   keep. The root `Cargo.toml` is the workspace of it and `backend/vexel-rs`:
-  `cargo test --workspace --release`, Rust ≥ 1.88. Its golden fixtures
+  `cargo test --workspace --release`, Rust ≥ 1.88 (1.90 for `apps/desktop`). Its golden fixtures
   (`tests/fixtures`) are exported from the Python by
   `backend/tools/export_core_fixtures.py` (on macOS arm64 with the Rust
   `vexel_rs` built; it writes `provenance.json` and refuses to run elsewhere
@@ -48,6 +48,13 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   and tiny-skia's one architecture-dependent operation, `recip_fast`, is used only
   by the colour-burn and colour-dodge blend modes. If one of them ever fails on
   another platform, that is where to look.
+- `apps/desktop/` — Studi0Trace for Mac (Tauri 2; plan 2, `docs/superpowers/plans/2026-10-02-studi0trace-mac-app.md`).
+  `src-tauri` is a workspace member holding `Core` for describing, presets and intake; every trace runs in a
+  child process, the app's own binary with `--trace-worker`, one at a time (`queue.rs`), killed to cancel.
+  HEIC/HEIF/TIFF and Downscale go through `/usr/bin/sips`. The webview never names a path to write: Rust shows
+  the panels and writes (`export.rs`). `npm run dev` / `npm run build` / `npm run smoke` from `apps/desktop`;
+  `cargo test -p studi0trace-desktop --release` includes the worker tests on the real binary. The crate embeds
+  `frontend/dist` when it compiles, so `cd frontend && npm run build` comes before any cargo build of the workspace.
 - `backend/tools/diffcheck.py` — runs a pipeline stage in both implementations
   over the corpus and reports where they disagree. Most stages feed both sides
   one input (`segments` hands the Python's placed arcs to both fitters and
@@ -69,6 +76,9 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
 
 ## Conventions
 
+- The frontend talks to its host only through `src/platform` (`native`: Tauri commands and events; `web`: the
+  Python server, kept as a development harness). Images live in `src/state/library.ts`, a store with no React
+  in it; components read it with `useLibrary`. Never call `invoke` or `fetch` from a component.
 - Engines are synchronous. Only `api/` touches asyncio/anyio.
 - Every engine parameter lives in its Pydantic `Params` model with bounds,
   default, description and `json_schema_extra={"ui": {...}}`. Never validate

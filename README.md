@@ -113,6 +113,64 @@ python -m bench run                 # every registered engine
 Design and research notes: `docs/superpowers/specs/2026-09-17-vexel-engine-design.md`,
 and `2026-09-20-vexel-rust-port-design.md` for the Rust implementation.
 
+## Studi0Trace for Mac
+
+A Mac app (macOS 13 or later, Apple silicon) that turns images into clean vectors.
+Your images stay on your Mac: nothing is uploaded, and the tracing engine runs
+inside the app. Free and MIT licensed.
+
+Run it from source (needs Node ≥ 20 and Rust ≥ 1.90, <https://rustup.rs>):
+
+```bash
+cd apps/desktop && npm install && npm run dev          # starts the frontend's Vite server itself
+```
+
+Build it:
+
+```bash
+cd apps/desktop && npm run build
+# target/release/bundle/macos/Studi0Trace.app
+# target/release/bundle/dmg/Studi0Trace_0.3.0_aarch64.dmg
+npm run smoke                                          # opens a sample with the built app, as Finder does, and checks it traced
+```
+
+The first release build takes ten minutes or more (the workspace's release profile
+is LTO with one codegen unit). The build embeds `frontend/dist`; `npm run build`
+makes it first. The `.dmg` step styles its window by scripting Finder; where that
+times out (no Automation permission for Finder, or no one logged in at the
+screen) the build fails after the `.app` is made, and `CI=true npm run build`
+makes the same `.dmg` with a plain window.
+
+**The app is not signed.** The first time, macOS 15 and later refuse to open it:
+open System Settings ▸ Privacy & Security and click Open Anyway under the
+message about Studi0Trace, or run
+`xattr -dr com.apple.quarantine /Applications/Studi0Trace.app`.
+
+It opens PNG, JPEG, GIF, WebP, BMP, HEIC and TIFF, up to 2048 px a side, and
+offers Downscale for larger ones. It is listed under Finder's Open With for those
+types and never becomes their default app.
+
+| Keys | Does |
+|---|---|
+| ⌘O | Open images |
+| ⌘↩ | Generate Vector |
+| ⌘. | Cancel Trace |
+| ⌘E | Export SVG |
+| ⇧⌘E | Export PNG at 2× |
+| ⌥⌘E | Export All |
+| ⇧⌘C | Copy SVG |
+| ⌘1 – ⌘4 | Split, Side by Side, Overlay, Vector Only |
+| ⌘+ / ⌘- | Zoom In / Zoom Out |
+| ⌘0 | Actual Size |
+| ⌘9 | Zoom to Fit |
+| ⌃⌘S | Show or hide the sidebar |
+| ⌥⌘I | Show or hide the inspector |
+| ⌘⌫ | Remove Image |
+| ⌘, | Settings |
+
+The FastAPI server and the browser build below remain for development until
+plan 4 retires them.
+
 ## Run it
 
 Backend (needs the `potrace` binary: `brew install potrace` / `apt install
@@ -142,7 +200,7 @@ npm run dev                                            # http://localhost:5173
 
 ```bash
 cd backend           && .venv/bin/python -m pytest
-cargo test --workspace --release                       # the engine and the core (Rust >= 1.88)
+cargo test --workspace --release                       # the engine and the core (Rust >= 1.88; the desktop crate needs 1.90)
 cd backend/vexel-rs  && cargo test                     # the engine alone
 cd frontend          && npm run test:run
 ```
