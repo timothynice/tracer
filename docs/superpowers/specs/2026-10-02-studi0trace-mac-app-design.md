@@ -103,10 +103,11 @@ concept; 1280 × 800 by default, 960 × 640 at least, size and place remembered.
 
 **Sidebar** (232 px, ⌃⌘S hides it; vibrancy behind it). **Add Image** (with the formats
 underneath). Then a card per image: its thumbnail on a checkerboard, its name and size, and a
-status where it is not idle (a spinner while tracing, "Queued", a red dot with the error in the
-tooltip, "Too large · Downscale"). The selected card has an accent ring all round (never a
-one-sided border). ↑ ↓ move the selection, ⌫ removes, a right click offers Export SVG, Show in
-Finder, Remove. **Clear All** at the foot. With no images the centre is the empty state: a
+status where it is not idle (a pulsing dot while tracing, "Queued", a red dot with the error in
+the tooltip; a file that could not be opened keeps a card with its error and Remove, and Downscale
+to 2048 px when it is too large). The selected card has an accent ring all round (never a
+one-sided border). ↑ ↓ move the selection, ⌘⌫ removes, a right click offers Generate Vector,
+Export SVG, Show in Finder, Remove. **Clear All** at the foot. With no images the centre is the empty state: a
 drop target ("Drop images here, or press ⌘O") and the samples to try.
 
 **Viewer** (the centre). The existing canvas (split, side by side, overlay, vector; pan and
@@ -135,7 +136,7 @@ Recent ▸ with the last ten and Clear Menu, Export SVG… ⌘E, Export PNG ▸,
 Finder, Close Window ⌘W). Edit (Copy SVG ⇧⌘C, Select All for text fields). View (Zoom In
 ⌘+, Zoom Out ⌘-, Actual Size ⌘0, Zoom to Fit ⌘9, Split / Side by Side / Overlay / Vector
 ⌘1–⌘4, Show Sidebar ⌃⌘S, Show Inspector ⌥⌘I, Enter Full Screen). Image (Generate ⌘↩, Cancel
-⌘., Downscale to 2048 px, Remove ⌫). Window, Help. Menu items reach the UI as one event,
+⌘., Remove ⌘⌫, Clear All). Window, Help. Menu items reach the UI as one event,
 `menu`, with the item's id; the UI's state enables and disables them (`menu_state`).
 
 **Behaving like a Mac app.** No text selection outside text fields; the arrow cursor on
