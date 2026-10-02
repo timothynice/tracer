@@ -45,7 +45,10 @@ const PAD = 32;
 
 // Space belongs to a text field, and to a control it would otherwise activate (preventing keydown cancels a button's click).
 const keepsSpace = (target: EventTarget | null) =>
-  target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(target.tagName) || !!target.closest('[role="tab"],[role="menuitem"],[role="button"]'));
+  target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(target.tagName) || !!target.closest('[role="tab"],[role="menuitem"],[role="button"],[role="option"],[role="checkbox"],[role="radio"],[role="switch"]'));
+
+// Controls painted over the viewer (the layer inspector, the error card) keep their wheel and gesture events.
+const overUi = (e: Event) => !!(e.target as Element | null)?.closest?.("[data-overlay-ui]");
 
 export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(props, ref) {
   const { sourceUrl, svg, width, height, mode, onModeChange, busy, errorMessage, onRetry, display, onDisplayChange, layersOpen, onToggleLayers, marks, panel } = props;
@@ -72,7 +75,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
   const paneW = mode === "side" ? size.w / 2 : size.w;
   const fitTransform = useCallback((): Transform => {
     if (!paneW || !size.h || !width || !height) return { scale: 1, x: 0, y: 0 };
-    const scale = Math.min((paneW - PAD * 2) / width, (size.h - PAD * 2) / height);
+    const scale = Math.max(MIN_SCALE, Math.min((paneW - PAD * 2) / width, (size.h - PAD * 2) / height));
     return { scale, x: (paneW - width * scale) / 2, y: (size.h - height * scale) / 2 };
   }, [paneW, size.h, width, height]);
 
@@ -120,6 +123,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
       return [(e.clientX - r.left) % (paneW || 1), e.clientY - r.top] as const;
     };
     const wheel = (e: WheelEvent) => {
+      if (overUi(e)) return;
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
         const [cx, cy] = local(e);
@@ -131,10 +135,12 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
     };
     let last = 1;
     const gestureStart = (e: Event) => {
+      if (overUi(e)) return;
       e.preventDefault();
       last = 1;
     };
     const gestureChange = (e: Event) => {
+      if (overUi(e)) return;
       e.preventDefault();
       const g = e as Event & { scale: number; clientX: number; clientY: number };
       const [cx, cy] = local(g);
@@ -154,7 +160,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
   // holding Space is the hand, whatever the tool
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !e.repeat && !keepsSpace(e.target)) {
+      if (e.code === "Space" && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !keepsSpace(e.target)) {
         e.preventDefault();
         setSpaceHeld(true);
       }
@@ -162,11 +168,17 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
     const up = (e: KeyboardEvent) => {
       if (e.code === "Space") setSpaceHeld(false);
     };
+    // a keyup the window never sees (focus left, the tab hid) must not leave the hand stuck on
+    const release = () => setSpaceHeld(false);
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
+    window.addEventListener("blur", release);
+    document.addEventListener("visibilitychange", release);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", release);
+      document.removeEventListener("visibilitychange", release);
     };
   }, []);
   const panning = tool === "pan" || spaceHeld;
@@ -197,6 +209,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
   };
   const onPointerUp = () => (drag.current = null);
   const startSplit = (e: ReactPointerEvent) => {
+    if (e.button !== 0) return;
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY, tx: t.x, ty: t.y, kind: "split" };

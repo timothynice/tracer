@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SVG } from "@/test/server";
 import { Viewer, type ViewerHandle, type ViewerProps } from "./Viewer";
@@ -126,5 +126,113 @@ describe("Viewer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show anchor points" }));
     expect(props.onToggleLayers).toHaveBeenCalledOnce();
     expect(props.onDisplayChange).toHaveBeenCalledWith({ points: true });
+  });
+
+  it("wheel and gesture events over the panel are the panel's: no pan, no preventDefault", () => {
+    setup({ panel: <div data-overlay-ui data-testid="p"><span data-testid="row">layer</span></div> });
+    const img = screen.getByAltText("Source raster");
+    const before = img.style.transform;
+    const row = screen.getByTestId("row");
+    const wheel = new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true });
+    act(() => {
+      row.dispatchEvent(wheel);
+    });
+    expect(wheel.defaultPrevented).toBe(false);
+    expect(img.style.transform).toBe(before);
+    const pinch = new WheelEvent("wheel", { deltaY: -40, ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      row.dispatchEvent(pinch);
+    });
+    expect(pinch.defaultPrevented).toBe(false);
+    expect(zoomLevel()).toHaveTextContent("100%");
+    const gesture = new Event("gesturestart", { bubbles: true, cancelable: true });
+    act(() => {
+      row.dispatchEvent(gesture);
+    });
+    expect(gesture.defaultPrevented).toBe(false);
+    // and over the image the same wheel is the viewer's
+    const own = new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true });
+    act(() => {
+      viewport().dispatchEvent(own);
+    });
+    expect(own.defaultPrevented).toBe(true);
+  });
+
+  it("the hand lets go of Space when the window loses focus", () => {
+    setup();
+    fireEvent.keyDown(window, { code: "Space" });
+    expect(viewport().className).toContain("cursor-grab");
+    fireEvent.click(screen.getByRole("button", { name: "Zoom tool" }));
+    expect(viewport().className).toContain("cursor-grab");
+    fireEvent.blur(window);
+    expect(viewport().className).toContain("cursor-zoom-in");
+    fireEvent.keyDown(window, { code: "Space", metaKey: true });
+    expect(viewport().className).toContain("cursor-zoom-in");
+  });
+});
+
+describe("Viewer refit on resize", () => {
+  const size = { w: 464, h: 464 };
+  let resized: ((rect: { width: number; height: number }) => void) | null = null;
+
+  function mount() {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: (entries: { contentRect: { width: number; height: number } }[]) => void) {
+          resized = (rect) => cb([{ contentRect: rect }]);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => size.w);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(() => size.h);
+    return setup();
+  }
+  const resize = (side: number) => {
+    size.w = size.h = side;
+    act(() => resized!({ width: side, height: side }));
+  };
+  // a 64 px image with 32 px of padding: (side - 64) / 64, centred
+  const fitted = (side: number) => `translate(${(side - 64 * ((side - 64) / 64)) / 2}px, ${(side - 64 * ((side - 64) / 64)) / 2}px) scale(${(side - 64) / 64})`;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    size.w = size.h = 464;
+  });
+
+  it("an untouched view refits when the pane resizes", () => {
+    mount();
+    const img = screen.getByAltText("Source raster");
+    expect(img.style.transform).toBe(fitted(464));
+    resize(264);
+    expect(img.style.transform).toBe(fitted(264));
+  });
+
+  it("a panned or zoomed view stays where the user left it", () => {
+    mount();
+    const img = screen.getByAltText("Source raster");
+    act(() => {
+      viewport().dispatchEvent(new WheelEvent("wheel", { deltaX: 30, deltaY: 10, bubbles: true, cancelable: true }));
+    });
+    const panned = img.style.transform;
+    expect(panned).not.toBe(fitted(464));
+    resize(264);
+    expect(img.style.transform).toBe(panned);
+  });
+
+  it("fit() re-arms refitting", () => {
+    const { ref } = mount();
+    const img = screen.getByAltText("Source raster");
+    act(() => ref.current!.zoomIn());
+    resize(264);
+    expect(img.style.transform).not.toBe(fitted(264));
+    act(() => ref.current!.fit());
+    expect(img.style.transform).toBe(fitted(264));
+    resize(364);
+    expect(img.style.transform).toBe(fitted(364));
   });
 });

@@ -73,8 +73,12 @@ function Workspace({ catalog, settings }: { catalog: Catalog; settings: Settings
   const [inspectorPane, setInspectorPane] = useState(true);
   const [dragging, setDragging] = useState(false);
   const [mode, setModeState] = useState<ViewMode>(() => {
-    const saved = localStorage.getItem(VIEW_KEY) as ViewMode | null;
-    return saved && MODES.includes(saved) ? saved : "split";
+    try {
+      const saved = localStorage.getItem(VIEW_KEY) as ViewMode | null;
+      return saved && MODES.includes(saved) ? saved : "split";
+    } catch {
+      return "split";
+    }
   });
   const setMode = useCallback((m: ViewMode) => {
     setModeState(m);
