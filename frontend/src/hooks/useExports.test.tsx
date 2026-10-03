@@ -164,7 +164,7 @@ describe("useExports", () => {
     await act(() => result.current.exportAll());
     expect(marked).toHaveBeenCalledWith([{ id: "a", key }]);
     expect(mocks.success).not.toHaveBeenCalled();
-    expect(mocks.error).toHaveBeenCalledWith("Exported 1 of 2 files. Could not export \u201cphoto.svg\u201d: Studi0Trace cannot write to the folder of \u201cphoto.svg\u201d.");
+    expect(mocks.error).toHaveBeenCalledWith("Studi0Trace cannot write to the folder of \u201cphoto.svg\u201d.");
   });
 
   it("Export All with nothing written marks nothing and says so", async () => {
@@ -173,7 +173,14 @@ describe("useExports", () => {
     const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS, marked));
     await act(() => result.current.exportAll());
     expect(marked).not.toHaveBeenCalled();
-    expect(mocks.error).toHaveBeenCalledWith("Nothing was exported. Could not export \u201clogo.svg\u201d: no");
+    expect(mocks.error).toHaveBeenCalledWith("no");
+  });
+
+  it("Export All names every image that failed, once, when several did", async () => {
+    mocks.platform.exportAll.mockResolvedValue({ written: [], failed: [{ id: "a", name: "logo.svg", message: "first reason" }, { id: "b", name: "photo.svg", message: "second" }] });
+    const { result } = renderHook(() => useExports(state(a, b), a, "<svg/>", DEFAULT_SETTINGS));
+    await act(() => result.current.exportAll());
+    expect(mocks.error).toHaveBeenCalledWith("2 images could not be exported: \u201clogo.svg\u201d, \u201cphoto.svg\u201d. first reason");
   });
 
   it("marks the selected image by the trace on screen now, which its bytes came from, not by an older copy's", async () => {

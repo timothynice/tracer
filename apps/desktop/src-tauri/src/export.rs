@@ -47,9 +47,16 @@ fn write_io(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             Err(e) => return Err(e),
         }
     };
-    file.write_all(bytes).and_then(|_| file.sync_all()).and_then(|_| std::fs::rename(&tmp, path)).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+    file.write_all(bytes)
+        .and_then(|_| {
+            // best effort: some volumes (SMB shares, some external disks) refuse the full sync macOS asks for, and the
+            // rename below is what makes the write whole
+            let _ = file.sync_all();
+            std::fs::rename(&tmp, path)
+        })
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
 }
 
 /// Write through a temporary file in the same folder, so nothing ever sees half a file.
@@ -282,12 +289,15 @@ mod tests {
         std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
         let denied = save(&ro.join("x.svg"), b"x", None);
         std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
-        if let Err(e) = denied {
-            // (root can write anywhere; everyone else is told the folder cannot be written)
-            assert!(e.elsewhere);
-            assert_eq!(e.error.body["detail"]["message"], "Studi0Trace cannot write to the folder of \u{201c}x.svg\u{201d}.");
+        match denied {
+            Err(e) => {
+                assert!(e.elsewhere);
+                assert_eq!(e.error.body["detail"]["message"], "Studi0Trace cannot write to the folder of \u{201c}x.svg\u{201d}.");
+                assert!(!ro.join("x.svg").exists());
+            }
+            // root can write into a folder without write permission: nothing to assert about a refusal
+            Ok(()) => eprintln!("skipped the read-only folder check: this user can write there anyway (root?)"),
         }
-        assert!(!ro.join("x.svg").exists() || std::fs::read(ro.join("x.svg")).is_ok());
         // a failure that another place would not mend does not ask for one
         let long = save(&dir.join(format!("{}.svg", "n".repeat(300))), b"x", None).unwrap_err();
         assert!(!long.elsewhere);

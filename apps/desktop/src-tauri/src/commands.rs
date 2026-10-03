@@ -131,18 +131,29 @@ pub async fn export_file(app: tauri::AppHandle, state: State<'_, AppState>, requ
         }
         Ok(Some(path.display().to_string()))
     };
+    let mut fell_back = false;
     if let Some(path) = export::beside(original.as_deref(), destination, &name) {
         match export::save(&path, bytes, original.as_deref()) {
             Ok(()) => return done(&path),
             // a read-only volume or a folder that is gone: the same export through the panel instead
-            Err(e) if e.elsewhere => eprintln!("studi0trace: export beside the original failed ({}); asking where", e.error.message()),
+            Err(e) if e.elsewhere => {
+                eprintln!("studi0trace: export beside the original failed ({}); asking where", e.error.message());
+                fell_back = true;
+            }
             Err(e) => return Err(e.error),
         }
     }
     let mut panel = app
         .dialog()
         .file()
-        .set_title(if ext == "png" { "Export PNG" } else { "Export SVG" })
+        // the reason the panel came up when the user asked for Beside, visible before they could cancel
+        .set_title(if fell_back {
+            "Studi0Trace cannot save next to the original. Choose where to save."
+        } else if ext == "png" {
+            "Export PNG"
+        } else {
+            "Export SVG"
+        })
         .set_file_name(export::panel_name(&name, original.as_deref()))
         .add_filter(if ext == "png" { "PNG image" } else { "SVG image" }, &[ext]);
     if let Some(dir) = original.as_deref().and_then(Path::parent).filter(|d| d.is_dir()) {

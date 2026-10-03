@@ -66,8 +66,9 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
           const { written, failed } = answer;
           const noun = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
           if (failed.length) {
+            // one failure's message already names its file
             const names = failed.map((f) => `\u201c${f.name}\u201d`).join(", ");
-            toast.error(`${written.length ? `Exported ${written.length} of ${files.length} files` : "Nothing was exported"}. Could not export ${names}: ${failed[0].message}`);
+            toast.error(failed.length === 1 ? failed[0].message : `${failed.length} images could not be exported: ${names}. ${failed[0].message}`);
           } else if (platform.kind === "native") toast.success(`Exported ${noun(written.length)}`);
         } catch (err) {
           toast.error((err as Error).message);
