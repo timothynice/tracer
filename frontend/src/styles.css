@@ -31,6 +31,8 @@
   --radius: 0.5rem;
   --checker-a: 0 0% 100%;
   --checker-b: 210 40% 94%;
+  --window: 220 14% 93%;
+  --accent-mac: #007aff;
 }
 
 .dark {
@@ -56,6 +58,15 @@
   --ring: 215 20% 45%;
   --checker-a: 214 19% 20%;
   --checker-b: 210 15% 15%;
+  --window: 216 22% 9%;
+}
+
+/* The system's accent colour where WebKit exposes it (`AccentColor` is fixed blue in WebKit; this one follows
+   System Settings ▸ Appearance), macOS blue elsewhere. */
+@supports (color: -apple-system-control-accent) {
+  :root {
+    --accent-mac: -apple-system-control-accent;
+  }
 }
 
 @layer base {
@@ -71,8 +82,36 @@
     min-height: 100dvh;
   }
   body {
-    @apply bg-background text-foreground font-sans text-sm antialiased;
+    @apply bg-window text-foreground font-sans text-sm antialiased;
     margin: 0;
+    /* a window, not a page: nothing selects, nothing scrolls past its end, the cursor is the arrow */
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+    overscroll-behavior: none;
+  }
+  html.native,
+  html.native body {
+    /* the window's vibrancy shows through where no panel is painted */
+    background: transparent;
+  }
+  /* the Settings window is not transparent: paint the page */
+  html.native.settings-window,
+  html.native.settings-window body {
+    background: hsl(var(--background));
+  }
+  input,
+  textarea,
+  [contenteditable="true"],
+  .selectable {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: auto;
+  }
+  button,
+  [role="option"],
+  [role="radio"] {
+    cursor: default;
   }
   button,
   input,
@@ -85,11 +124,102 @@
     touch-action: manipulation;
   }
   :focus-visible {
-    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+    outline: 3px solid var(--accent-mac);
+    outline-offset: 1px;
+  }
+  @supports (color: color-mix(in srgb, red 50%, blue)) {
+    :focus-visible {
+      outline-color: color-mix(in srgb, var(--accent-mac) 50%, transparent);
+    }
   }
 }
 
 @layer components {
+  .app-shell {
+    @apply flex h-dvh flex-col overflow-hidden bg-window;
+  }
+  html.native .app-shell {
+    background: transparent;
+  }
+  .panel {
+    @apply rounded-xl border bg-card text-card-foreground;
+  }
+  .panel-sidebar {
+    @apply rounded-xl border bg-card/60 text-card-foreground backdrop-blur-xl dark:bg-card/45;
+  }
+  .mac-primary {
+    @apply inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg text-[13px] font-semibold text-white transition-[filter]
+      disabled:opacity-50;
+    background: var(--accent-mac);
+  }
+  .mac-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+  .mac-primary:active:not(:disabled) {
+    filter: brightness(0.94);
+  }
+  .mac-button {
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border bg-background/70 px-3 text-[13px] font-medium
+      transition-colors hover:bg-accent disabled:opacity-50;
+  }
+  .mac-ghost {
+    @apply inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-muted-foreground transition-colors
+      hover:bg-accent hover:text-foreground disabled:opacity-40;
+  }
+  .mac-icon {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors
+      hover:bg-accent hover:text-foreground disabled:opacity-40 aria-pressed:bg-accent aria-pressed:text-foreground;
+  }
+  .mac-selected {
+    box-shadow: 0 0 0 2px var(--accent-mac);
+  }
+  .mac-dot {
+    @apply inline-block h-1.5 w-1.5 rounded-full;
+    background: var(--accent-mac);
+  }
+  .mac-tint {
+    background: rgb(0 122 255 / 0.1);
+  }
+  .mac-choice {
+    @apply rounded-lg p-2.5 transition-colors hover:bg-accent/60;
+  }
+  .mac-choice[aria-checked="true"] {
+    background: rgb(0 122 255 / 0.1);
+    box-shadow: inset 0 0 0 1px rgb(0 122 255 / 0.6);
+  }
+  .mac-radio {
+    @apply inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/40;
+  }
+  [aria-checked="true"] .mac-radio {
+    border-color: var(--accent-mac);
+    background: var(--accent-mac);
+    box-shadow: inset 0 0 0 3px hsl(var(--card));
+  }
+  @supports (color: color-mix(in srgb, red 50%, blue)) {
+    .mac-tint,
+    .mac-choice[aria-checked="true"] {
+      background: color-mix(in srgb, var(--accent-mac) 10%, transparent);
+    }
+    .mac-choice[aria-checked="true"] {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-mac) 60%, transparent);
+    }
+  }
+  .mac-menu {
+    @apply z-50 min-w-[11rem] rounded-lg border bg-popover/95 p-1 text-[13px] text-popover-foreground shadow-elevated backdrop-blur-xl;
+  }
+  .mac-menu-item {
+    @apply flex h-6 cursor-default select-none items-center gap-2 rounded-[5px] px-2 outline-none data-[disabled]:opacity-40;
+  }
+  .mac-menu-item[data-highlighted] {
+    background: var(--accent-mac);
+    color: white;
+  }
+  .mac-menu-separator {
+    @apply mx-1 my-1 h-px bg-border;
+  }
+  .mac-menu-shortcut {
+    @apply ml-auto pl-4 text-[12px] opacity-60;
+  }
   .card {
     @apply rounded-lg border bg-card text-card-foreground shadow-sm;
   }

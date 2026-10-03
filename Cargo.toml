@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["backend/vexel-rs", "crates/studi0trace-core"]
+members = ["backend/vexel-rs", "crates/studi0trace-core", "apps/desktop/src-tauri"]
 
 # MIRRORED in backend/Dockerfile as CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS (its build context, backend/, has no
 # root manifest, so it carries this profile in environment variables). Change one, change the other; the pytest
@@ -11,3 +11,21 @@ members = ["backend/vexel-rs", "crates/studi0trace-core"]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+# `tauri dev` builds the app in the dev profile. The engine, the core and the image and render crates under them are
+# optimised there as well, or a trace that takes a second in release takes a minute in development. (It also makes
+# `cargo test` without --release run them optimised; the core's fixtures hold either way.)
+[profile.dev.package.vexel-rs]
+opt-level = 3
+[profile.dev.package.studi0trace-core]
+opt-level = 3
+[profile.dev.package.resvg]
+opt-level = 3
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3

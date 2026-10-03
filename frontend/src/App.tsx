@@ -1,267 +1,330 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Layers } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { Actions } from "./components/Actions";
-import { Canvas } from "./components/Canvas";
-import { Dropzone } from "./components/Dropzone";
-import { EngineTabs } from "./components/EngineTabs";
-import { Header } from "./components/Header";
-import { EMPTY_INSPECTOR, Inspector, InspectorOverlay, tinyShapes, type InspectorState } from "./components/Inspector";
-import { ParamPanel } from "./components/ParamPanel";
-import { Presets } from "./components/Presets";
-import { Samples } from "./components/Samples";
-import { useHealth } from "./hooks/useHealth";
-import { useParams } from "./hooks/useParams";
-import { useUpload } from "./hooks/useUpload";
-import { useVectorize } from "./hooks/useVectorize";
-import { ApiError, getEngines, getPresets, type AutoResult, type Preset } from "./lib/api";
-import { parseSvg } from "./lib/svgdoc";
+import { AppShell } from "./components/AppShell";
+import { EmptyState } from "./components/EmptyState";
+import { ExportMenu } from "./components/ExportMenu";
+import { ImageMenu } from "./components/ImageMenu";
+import { Inspector, InspectorOverlay } from "./components/Inspector";
+import { SettingsSheet } from "./components/SettingsSheet";
+import { SettingsView } from "./components/SettingsView";
+import { Sidebar } from "./components/Sidebar";
+import { TitleBar } from "./components/TitleBar";
+import { VectorizePanel } from "./components/VectorizePanel";
+import { Viewer, type ViewerHandle } from "./components/Viewer";
+import { useExports } from "./hooks/useExports";
+import { useLayerInspector } from "./hooks/useLayerInspector";
+import { useSettings } from "./hooks/useSettings";
+import { useWindowDrop } from "./hooks/useWindowDrop";
+import { loadSample } from "./lib/samples";
+import { specsFor } from "./lib/schema";
+import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
+import { platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
+import { createLibrary, ENGINE, shownAnswer, type Catalog } from "./state/library";
+import { useLibrary } from "./state/useLibrary";
 
-const ENGINE_KEY = "studi0trace.engine";
+const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
+// what the empty state lists: the app converts HEIC and TIFF with sips, a browser sends only these five
+const DROP_FORMATS = platform.kind === "native" ? "PNG, JPEG, GIF, WebP, BMP, HEIC or TIFF" : "PNG, JPEG, GIF, WebP or BMP";
 
 export default function App() {
-  const health = useHealth();
-  const ready = health.status === "ok";
-  const engines = useQuery({ queryKey: ["engines"], queryFn: ({ signal }) => getEngines(signal), enabled: ready });
-  const presets = useQuery({ queryKey: ["presets"], queryFn: ({ signal }) => getPresets(signal), enabled: ready });
-  const upload = useUpload();
-  const params = useParams(engines.data);
-
-  // The app shows the engines the backend marks primary. The others stay
-  // callable for benchmarking and comparison, just not in the product's face.
-  const shown = useMemo(() => (engines.data ?? []).filter((e) => e.primary), [engines.data]);
-  const [engine, setEngine] = useState<string>(() => localStorage.getItem(ENGINE_KEY) ?? "");
+  // in the app, the web's context menu (Reload, Inspect Element) never shows, in either window; text fields keep theirs
   useEffect(() => {
-    if (shown.length && !shown.some((e) => e.id === engine)) setEngine(shown[0].id);
-  }, [shown, engine]);
-  const pickEngine = useCallback((id: string) => {
-    setEngine(id);
-    localStorage.setItem(ENGINE_KEY, id);
+    if (platform.kind !== "native") return;
+    const block = (e: MouseEvent) => {
+      if (!isTyping(e.target)) e.preventDefault();
+    };
+    document.addEventListener("contextmenu", block);
+    return () => document.removeEventListener("contextmenu", block);
   }, []);
+  return platform.windowRole() === "settings" ? <SettingsWindow /> : <MainWindow />;
+}
 
-  const active = shown.find((e) => e.id === engine);
-  const engineIds = useMemo(() => (active ? [active.id] : []), [active]);
-  const enginePresets = useMemo(() => (presets.data ?? []).filter((p) => p.engine === active?.id), [presets.data, active?.id]);
-  const autoAvailable = enginePresets.some((p) => p.kind === "auto");
+/** The app's Settings window: the settings, saved as they change, in the window's own appearance. */
+function SettingsWindow() {
+  const { settings, change } = useSettings();
+  return (
+    <div className="min-h-dvh bg-background">
+      <SettingsView settings={settings} onChange={change} />
+    </div>
+  );
+}
 
-  // Every new image starts on Auto: which preset suits an image is not
-  // something anyone can tell by looking at it. Picking a preset or moving a
-  // control leaves Auto until the next image, or until Auto is picked again.
-  const [autoMode, setAutoMode] = useState(true);
-  const newFile = upload.preview?.file;
-  useEffect(() => {
-    if (newFile) setAutoMode(true);
-  }, [newFile]);
-  const auto = autoMode && autoAvailable;
+function MainWindow() {
+  const engines = useQuery({ queryKey: ["engines"], queryFn: ({ signal }) => platform.engines(signal) });
+  const presets = useQuery({ queryKey: ["presets"], queryFn: ({ signal }) => platform.presets(signal) });
+  const { settings, change: changeSettings } = useSettings();
 
-  const trace = useVectorize({
-    image: upload.image,
-    engines: engineIds,
-    params: params.values,
-    auto,
-    // Wait for the preset list: it decides whether the first trace is Auto.
-    enabled: ready && !!active && !presets.isPending,
-    reupload: upload.reupload,
-  });
+  const engine = engines.data?.find((e) => e.id === ENGINE);
+  const catalog = useMemo<Catalog | null>(() => (engine && presets.data ? { engine, presets: presets.data.filter((p) => p.engine === ENGINE) } : null), [engine, presets.data]);
+  const failure = engines.error ?? presets.error;
+  if (failure || !catalog) {
+    return (
+      <AppShell
+          titleBar={<TitleBar native={platform.kind === "native"} sidebar={false} inspector={false} onToggleSidebar={() => {}} onToggleInspector={() => {}} onSettings={() => {}} />}
+          sidebar={null}
+          inspector={null}
+          main={
+            <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center" role={failure ? "alert" : "status"}>
+              <p className="text-[15px] font-semibold">{failure ? "Studi0Trace could not start" : "Starting…"}</p>
+              {failure && <p className="max-w-sm text-muted-foreground">{failure.message}</p>}
+              {failure && (
+                <button type="button" className="mac-button" onClick={() => void Promise.all([engines.refetch(), presets.refetch()])}>
+                  Try Again
+                </button>
+              )}
+            </div>
+          }
+      />
+    );
+  }
+  return <Workspace catalog={catalog} settings={settings} onSettingsChange={changeSettings} />;
+}
 
-  // The last Auto run on this image: every candidate's trace and scores. Each
-  // is also stored as the answer for that preset's settings, so picking a
-  // candidate afterwards shows its trace at once, with nothing traced again.
-  const [autoRun, setAutoRun] = useState<{ hash: string; result: AutoResult } | null>(null);
-  const autoResponse = trace.data?.auto ? trace.data : undefined;
-  const { seed } = trace;
-  const { resolve, apply } = params;
-  useEffect(() => {
-    const result = active && autoResponse?.auto?.[active.id];
-    if (!active || !autoResponse || !result) return;
-    setAutoRun((prev) => (prev?.hash === autoResponse.hash && prev.result === result ? prev : { hash: autoResponse.hash, result }));
-    for (const c of result.candidates) {
-      const preset = enginePresets.find((p) => p.id === c.preset);
-      if (!preset || !c.svg) continue;
-      seed(
-        { [active.id]: resolve(active.id, preset.params) },
-        {
-          ...autoResponse,
-          results: { [active.id]: { svg: c.svg, elapsed_ms: c.elapsed_ms, stats: c.stats } },
-          parameters_used: { [active.id]: c.parameters ?? {} },
-          auto: null,
-        },
-      );
+const VIEW_KEY = "studi0trace.view";
+// the commands that read the parameters or the traced SVG, which a number field still being typed in has not yet committed
+const READS_SETTINGS = new Set<Command>(["generate", "export-svg", "export-png-1", "export-png-2", "export-png-4", "export-all", "copy-svg"]);
+const MODES: ViewMode[] = ["split", "side", "overlay", "vector"];
+
+function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; settings: Settings; onSettingsChange: (next: Settings) => void }) {
+  // one library for the window's life; the settings reach it as they change
+  const lib = useMemo(() => createLibrary(platform, catalog, settings), [catalog]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => lib.setSettings(settings), [lib, settings]);
+  const state = useLibrary(lib);
+  const item = state.selected ? (state.items.find((i) => i.image.id === state.selected) ?? null) : null;
+  const answer = item ? shownAnswer(item) : null;
+  const [sidebar, setSidebar] = useState(true);
+  const [inspectorPane, setInspectorPane] = useState(true);
+  const [dragging, setDragging] = useState(false);
+  const [mode, setModeState] = useState<ViewMode>(() => {
+    try {
+      const saved = localStorage.getItem(VIEW_KEY) as ViewMode | null;
+      return saved && MODES.includes(saved) ? saved : "split";
+    } catch {
+      return "split";
     }
-  }, [autoResponse, active, enginePresets, seed, resolve]);
-  const autoHere = autoRun && autoRun.hash === upload.image?.hash && autoRun.result.engine === active?.id ? autoRun.result : null;
+  });
+  const setMode = useCallback((m: ViewMode) => {
+    setModeState(m);
+    try {
+      localStorage.setItem(VIEW_KEY, m);
+    } catch {
+      /* a remembered convenience, nothing more */
+    }
+  }, []);
+  const viewerRef = useRef<ViewerHandle>(null);
+  const specs = useMemo(() => specsFor(catalog.engine), [catalog.engine]);
 
-  // The panel follows Auto's choice, so a control moved afterwards starts
-  // from the trace on screen.
-  const pickedPreset = autoHere?.pick ? enginePresets.find((p) => p.id === autoHere.pick) : undefined;
-  useEffect(() => {
-    if (auto && active && pickedPreset) apply(active.id, pickedPreset.params);
-  }, [auto, active, pickedPreset, apply]);
-
-  const pickPreset = useCallback(
-    (p: Preset) => {
-      if (!active) return;
-      if (p.kind === "auto") {
-        setAutoMode(true);
-        return;
+  const open = useCallback(
+    async (outcomes: Promise<OpenOutcome[]>) => {
+      try {
+        lib.add(await outcomes);
+      } catch (err) {
+        toast.error((err as Error).message);
       }
-      setAutoMode(false);
-      apply(active.id, p.params);
     },
-    [active, apply],
+    [lib],
+  );
+  const openFiles = useCallback((files: File[]) => void open(platform.openFiles(files)), [open]);
+  useEffect(() => platform.onOpenPaths((paths) => void open(platform.openPaths(paths))), [open]);
+  useEffect(() => platform.onDragState(setDragging), []);
+  useWindowDrop(platform.kind === "web", openFiles, setDragging);
+
+  const layers = useLayerInspector(answer?.svg);
+
+  const busy = item?.job ? (item.job.phase === "queued" ? "Queued…" : item.job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
+  const viewer = item ? (
+    <Viewer
+      ref={viewerRef}
+      sourceUrl={item.image.previewUrl}
+      svg={layers.exportSvg}
+      width={item.image.width}
+      height={item.image.height}
+      mode={mode}
+      onModeChange={setMode}
+      busy={busy}
+      errorMessage={item.error?.message}
+      onRetry={() => lib.generate(item.image.id)}
+      display={{ points: layers.state.points, outlines: layers.state.outlines }}
+      onDisplayChange={layers.patch}
+      layersOpen={layers.state.open}
+      onToggleLayers={() => layers.patch({ open: !layers.state.open })}
+      marks={layers.doc ? (scale) => <InspectorOverlay doc={layers.doc!} state={layers.liveState} scale={scale} /> : undefined}
+      panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} /> : undefined}
+    />
+  ) : (
+    <EmptyState formats={DROP_FORMATS} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
   );
 
+  const exports = useExports(state, item, layers.exportSvg, settings);
+  const anyVector = state.items.some((i) => i.shown !== null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const openSettings = useCallback(() => {
+    if (!platform.openSettingsWindow()) setSettingsOpen(true);
+  }, []);
+
+  const run = useCallback(
+    (cmd: Command) => {
+      const id = item?.image.id;
+      switch (cmd) {
+        case "open":
+          return void open(platform.pickImages());
+        case "settings":
+          return openSettings();
+        case "export-svg":
+          return void exports.exportImage("svg", 1);
+        case "export-png-1":
+          return void exports.exportImage("png", 1);
+        case "export-png-2":
+          return void exports.exportImage("png", 2);
+        case "export-png-4":
+          return void exports.exportImage("png", 4);
+        case "export-all":
+          return void exports.exportAll();
+        case "copy-svg":
+          return void exports.copySvg();
+        case "reveal":
+          if (item?.image.path) void platform.reveal(item.image.path);
+          return;
+        case "zoom-in":
+          return viewerRef.current?.zoomIn();
+        case "zoom-out":
+          return viewerRef.current?.zoomOut();
+        case "zoom-actual":
+          return viewerRef.current?.actualSize();
+        case "zoom-fit":
+          return viewerRef.current?.fit();
+        case "mode-split":
+        case "mode-side":
+        case "mode-overlay":
+        case "mode-vector":
+          return setMode(cmd.slice("mode-".length) as ViewMode);
+        case "toggle-sidebar":
+          return setSidebar((v) => !v);
+        case "toggle-inspector":
+          return setInspectorPane((v) => !v);
+        case "generate":
+          if (id) lib.generate(id);
+          return;
+        case "cancel":
+          if (id) lib.cancel(id);
+          return;
+        case "remove":
+          if (id) lib.remove(id);
+          return;
+        case "clear":
+          return lib.clear();
+      }
+    },
+    [item, open, openSettings, exports, setMode, lib],
+  );
+  // the listeners subscribe once and call whatever `run` is now
+  const runRef = useRef(run);
+  runRef.current = run;
+  // Both roads in (the menu bar, the keys of a browser) pass here. ⌘⌫ in a text field deletes text, it does not remove
+  // the image; and what reads the settings (a trace, an export) waits for the field's own blur to commit its value.
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const dispatch = useCallback((cmd: Command) => {
+    const active = document.activeElement;
+    if (isTyping(active)) {
+      if (cmd === "remove") return;
+      if (READS_SETTINGS.has(cmd)) {
+        (active as HTMLElement).blur();
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => runRef.current(cmd), 0);
+        return;
+      }
+    }
+    runRef.current(cmd);
+  }, []);
+  useEffect(() => platform.onMenu(dispatch), [dispatch]);
   useEffect(() => {
-    if (upload.error) toast.error(upload.error.message);
-  }, [upload.error]);
+    if (platform.kind !== "web") return;
+    const onKey = (e: KeyboardEvent) => {
+      const cmd = commandForKey(e);
+      if (!cmd) return;
+      // the Settings sheet is modal: the image behind it is not exported, traced or removed from its keys
+      if (settingsOpen && cmd !== "settings") return;
+      if (cmd === "remove" && (e.repeat || isTyping(e.target))) return;
+      e.preventDefault();
+      dispatch(cmd);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dispatch, settingsOpen]);
+
+  const hasItems = state.items.length > 0 || state.failed.length > 0;
+  const hasImage = !!item;
+  const hasVector = !!layers.exportSvg;
+  const hasPath = !!item?.image.path;
+  const tracing = !!item?.job;
   useEffect(() => {
-    if (trace.error) toast.error(trace.error.message, { id: "trace-error" });
-  }, [trace.error]);
+    platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, mode, sidebar, inspector: inspectorPane });
+  }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, mode, sidebar, inspectorPane]);
+  const invalidField = item?.error?.code === "validation_error" ? (((item.error.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
 
-  const invalidField = useMemo(() => {
-    const err = trace.error;
-    if (!(err instanceof ApiError) || err.code !== "validation_error") return null;
-    const loc = (err.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc;
-    return loc && loc[0] === engine ? String(loc[1]) : null;
-  }, [trace.error, engine]);
-
-  const onFile = useCallback((file: File) => void upload.upload(file), [upload]);
-  const disabledReason = health.status === "down" ? "Server unreachable — retrying…" : ready ? undefined : "Waking the server…";
-  const result = active ? trace.results?.[active.id] : undefined;
-
-  // The workspace opens on the local preview, so the source is on screen while
-  // the upload and the trace are still in flight.
-  const view = upload.preview;
-  const busy = upload.uploading || (!!view && !upload.error && trace.updating);
-  const autoCandidates = enginePresets.filter((p) => p.auto_candidate).length;
-  const autoRunning = auto && trace.updating && !autoHere;
-  const busyLabel = upload.uploading ? "Uploading…" : autoRunning ? `Trying ${autoCandidates} presets…` : "Tracing…";
-  // A request that never returned a result (502, network, timeout) has to reach
-  // the canvas; a toast alone leaves it sitting on "No vector yet".
-  const failure = result?.error
-    ? `${active?.label ?? engine} failed: ${result.error.message}`
-    : upload.error
-      ? upload.error.message
-      : trace.error && !result
-        ? trace.error.message
-        : undefined;
-  const retry = useCallback(() => (upload.error ? upload.retry() : trace.refetch()), [upload, trace]);
-
-  // Inspection works on the SVG the engine returned; export gets the cleaned one.
-  const [inspector, setInspector] = useState<InspectorState>(EMPTY_INSPECTOR);
-  const patchInspector = useCallback((patch: Partial<InspectorState>) => setInspector((prev) => ({ ...prev, ...patch })), []);
-  const doc = useMemo(() => (result?.svg ? parseSvg(result.svg) : null), [result?.svg]);
-  // A new trace invalidates shape indices, so per-shape state cannot carry over.
-  useEffect(() => setInspector((prev) => ({ ...prev, hidden: new Set(), highlight: null, minArea: 0 })), [result?.svg]);
-  const dropped = useMemo(() => {
-    if (!doc) return new Set<number>();
-    const out = new Set(inspector.hidden);
-    for (const i of tinyShapes(doc, inspector.minArea)) out.add(i);
-    return out;
-  }, [doc, inspector.hidden, inspector.minArea]);
-  const exportSvg = useMemo(() => (doc && dropped.size ? doc.render(dropped) : result?.svg ?? undefined), [doc, dropped, result?.svg]);
-  const liveState = useMemo(() => ({ ...inspector, hidden: dropped }), [inspector, dropped]);
+  const panel = item ? (
+    <VectorizePanel
+      item={item}
+      catalog={catalog}
+      specs={specs}
+      invalidField={invalidField}
+      onPick={(p) => lib.pickPreset(item.image.id, p)}
+      onParam={(name, value) => lib.setParam(item.image.id, name, value)}
+      onGenerate={() => lib.generate(item.image.id)}
+      onCancel={() => lib.cancel(item.image.id)}
+      exportMenu={<ExportMenu canExport={!!layers.exportSvg} anyVector={anyVector} onExport={(k, s) => void exports.exportImage(k, s)} onCopy={() => void exports.copySvg()} onExportAll={() => void exports.exportAll()} />}
+    />
+  ) : (
+    <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground">Open an image to vectorize it.</div>
+  );
 
   return (
-    // A fixed viewport: the app never scrolls as a page, only inside its panels.
-    <div className="flex h-dvh flex-col overflow-hidden">
-      <Header health={health} onNew={view ? upload.clear : undefined} />
-
-      <main className="mx-auto flex w-full min-h-0 max-w-[1600px] flex-1 flex-col px-4 py-4 md:px-6 md:py-5">
-        {!view ? (
-          <div className="motion-fade mx-auto w-full max-w-2xl space-y-6 overflow-y-auto pt-6 md:pt-16">
-            <div className="space-y-2 text-center">
-              <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Raster in. Faithful vectors out.</h1>
-              <p className="text-muted-foreground">Trace logos, flat art and gradient illustrations to faithful SVG.</p>
-            </div>
-            <Dropzone onFile={onFile} disabled={!ready} disabledReason={disabledReason} />
-            <Samples onPick={onFile} disabled={!ready} />
-            {health.status === "waking" && (
-              <p className="text-center text-xs text-muted-foreground">Free-tier servers sleep after inactivity and take up to a minute to wake. Hang tight.</p>
+    <>
+      <AppShell
+      titleBar={<TitleBar native={platform.kind === "native"} sidebar={sidebar} inspector={inspectorPane} onToggleSidebar={() => setSidebar((v) => !v)} onToggleInspector={() => setInspectorPane((v) => !v)} onSettings={openSettings} />}
+      sidebar={
+        sidebar ? (
+          <Sidebar
+            items={state.items}
+            failed={state.failed}
+            selected={state.selected}
+            formats={FORMATS}
+            canDownscale={platform.kind === "native"}
+            onAdd={() => void open(platform.pickImages())}
+            onSelect={lib.select}
+            onSelectNext={lib.selectNext}
+            onClear={lib.clear}
+            onDownscale={(i) => void lib.downscale(i)}
+            onDismissFailure={lib.dismissFailure}
+            wrapCard={(it, card) => (
+              <ImageMenu
+                item={it}
+                onSelect={() => lib.select(it.image.id)}
+                onGenerate={() => lib.generate(it.image.id)}
+                onExport={() => void exports.exportImage("svg", 1, it)}
+                onReveal={() => it.image.path && void platform.reveal(it.image.path)}
+                onRemove={() => lib.remove(it.image.id)}
+              >
+                {card}
+              </ImageMenu>
             )}
+          />
+        ) : null
+      }
+      main={viewer}
+      inspector={inspectorPane ? panel : null}
+      overlay={
+        dragging ? (
+          <div className="pointer-events-none fixed inset-2 top-[60px] z-50 flex items-center justify-center rounded-xl border-2 border-dashed mac-tint" style={{ borderColor: "var(--accent-mac)" }}>
+            <p className="text-[15px] font-semibold">Drop to add</p>
           </div>
-        ) : (
-          <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="motion-rise flex min-h-0 min-w-0 flex-col gap-3">
-              <Canvas
-                sourceUrl={view.previewUrl}
-                svg={exportSvg}
-                width={view.width}
-                height={view.height}
-                updating={busy}
-                busyLabel={busyLabel}
-                errorMessage={failure}
-                onRetry={retry}
-                display={{ points: inspector.points, outlines: inspector.outlines }}
-                onDisplayChange={patchInspector}
-                marks={doc ? (scale) => <InspectorOverlay doc={doc} state={liveState} scale={scale} /> : undefined}
-                panel={
-                  doc ? (
-                    inspector.open ? (
-                      <Inspector doc={doc} bytes={exportSvg?.length ?? 0} elapsedMs={result?.elapsed_ms} engineLabel={active?.label ?? engine} edited={dropped.size > 0} state={liveState} onChange={patchInspector} />
-                    ) : (
-                      <button
-                        type="button"
-                        data-overlay-ui
-                        className="btn-ghost btn-icon absolute left-3 top-3 z-30 h-9 w-9 border bg-card/90 shadow-sm backdrop-blur"
-                        aria-label="Inspect the vector"
-                        title="Inspect the vector"
-                        onClick={() => patchInspector({ open: true })}
-                      >
-                        <Layers className="h-4 w-4" aria-hidden="true" />
-                      </button>
-                    )
-                  ) : undefined
-                }
-              />
-              <div className="card shrink-0 px-3 py-2.5">
-                <Actions svg={exportSvg} filename={view.file.name} engine={engine} width={view.width} height={view.height} />
-              </div>
-            </div>
-
-            <aside aria-label="Controls" className="motion-rise card flex min-h-0 flex-col overflow-hidden [animation-delay:120ms]">
-              {engines.data && active ? (
-                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                  {enginePresets.length > 0 && (
-                    <div className="border-b pb-4">
-                      <Presets
-                        presets={enginePresets}
-                        defaults={active.defaults}
-                        values={params.values[active.id] ?? active.defaults}
-                        onPick={pickPreset}
-                        active={auto ? "auto" : undefined}
-                        auto={autoHere}
-                        autoRunning={autoRunning}
-                      />
-                    </div>
-                  )}
-                  {shown.length > 1 && (
-                    <div className="border-b py-3">
-                      <EngineTabs engines={shown} value={active.id} onChange={pickEngine}>
-                        {() => null}
-                      </EngineTabs>
-                    </div>
-                  )}
-                  <ParamPanel
-                    engine={active.id}
-                    specs={params.specs[active.id] ?? []}
-                    values={params.values[active.id] ?? active.defaults}
-                    onChange={(name, value) => {
-                      setAutoMode(false);
-                      params.set(active.id, name, value);
-                    }}
-                    invalidField={invalidField}
-                  />
-                </div>
-              ) : (
-                <p className="p-4 text-sm text-muted-foreground">Loading engines…</p>
-              )}
-            </aside>
-          </div>
-        )}
-      </main>
-    </div>
+        ) : null
+      }
+      />
+      <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onChange={onSettingsChange} />
+    </>
   );
 }

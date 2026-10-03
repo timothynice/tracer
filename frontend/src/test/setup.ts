@@ -4,6 +4,12 @@ import { afterEach } from "vitest";
 
 afterEach(() => cleanup());
 
+// Node 25+ has a `localStorage` global of its own (backed by --localstorage-file, and useless without it). It
+// shadows jsdom's on globalThis; the tests mean jsdom's. Defined from jsdom's window, never reading Node's getter
+// (which warns).
+const jsdomWindow = (globalThis as { jsdom?: { window: Window } }).jsdom?.window ?? window;
+Object.defineProperty(globalThis, "localStorage", { value: jsdomWindow.localStorage, configurable: true, writable: true });
+
 // jsdom lacks these; components only need them to exist.
 if (!window.matchMedia) {
   window.matchMedia = ((query: string) => ({
@@ -28,3 +34,25 @@ if (!URL.createObjectURL) {
   URL.createObjectURL = () => "blob:mock";
   URL.revokeObjectURL = () => {};
 }
+// jsdom 26 has no PointerEvent, so testing-library falls back to a bare Event and drops button, clientX and the
+// rest of the init. A MouseEvent that also carries pointerId is enough for the components' handlers.
+if (!("PointerEvent" in window)) {
+  class PointerEventPolyfill extends MouseEvent {
+    readonly pointerId: number;
+    readonly pointerType: string;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 0;
+      this.pointerType = init.pointerType ?? "mouse";
+    }
+  }
+  (window as unknown as { PointerEvent: unknown }).PointerEvent = PointerEventPolyfill;
+}
+
+// floating-ui (under every Radix menu) asks each element `matches(":modal")`, which jsdom's nwsapi answers by
+// scanning the document (about 175 ms a call here; a context menu made 20 s of it). Nothing in jsdom is in the top
+// layer, so the answer is no.
+const nativeMatches = Element.prototype.matches;
+Element.prototype.matches = function (this: Element, selector: string) {
+  return selector === ":modal" || selector === ":popover-open" ? false : nativeMatches.call(this, selector);
+};

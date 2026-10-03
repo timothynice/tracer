@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Studi0Trace",
+  "version": "0.3.0",
+  "identifier": "com.studi0.trace",
+  "build": {
+    "beforeDevCommand": "npm run web:dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run web:build",
+    "frontendDist": "../../../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Studi0Trace",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 18, "y": 28 },
+        "transparent": true,
+        "windowEffects": { "effects": ["sidebar"], "state": "followsWindowActiveState" },
+        "dragDropEnabled": true,
+        "zoomHotkeysEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:",
+      "devCsp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.png"],
+    "category": "public.app-category.graphics-design",
+    "shortDescription": "Turn images into clean vectors",
+    "copyright": "Copyright © 2026 Timothy Nice. MIT licensed.",
+    "macOS": { "minimumSystemVersion": "13.0" },
+    "fileAssociations": [
+      { "ext": ["png"], "name": "PNG image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.png"] },
+      { "ext": ["jpg", "jpeg"], "name": "JPEG image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.jpeg"] },
+      { "ext": ["gif"], "name": "GIF image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["com.compuserve.gif"] },
+      { "ext": ["webp"], "name": "WebP image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["org.webmproject.webp"] },
+      { "ext": ["bmp"], "name": "BMP image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["com.microsoft.bmp"] },
+      { "ext": ["heic", "heif"], "name": "HEIC image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.heic", "public.heif"] },
+      { "ext": ["tif", "tiff"], "name": "TIFF image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.tiff"] }
+    ]
+  }
+}

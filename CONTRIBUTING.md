@@ -29,7 +29,7 @@ cd frontend && npm ci                                  # Node ≥ 20
 ```
 
 The two `maturin` lines build Rust (needs a toolchain from <https://rustup.rs>,
-1.88 or newer for the second). The first is Vexel's pipeline: skip it and
+1.88 or newer for the second, 1.90 for `apps/desktop`). The first is Vexel's pipeline: skip it and
 everything still works — Vexel falls back to its Python implementation and
 traces about ten times slower. The second is `studi0trace_core`, the Rust port of
 everything around the engine, as a Python module beside `vexel_rs`; only

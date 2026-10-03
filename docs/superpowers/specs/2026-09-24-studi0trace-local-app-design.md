@@ -1,7 +1,8 @@
 # Studi0Trace as a local app: design and roadmap
 
-2026-09-24. Studi0Trace becomes a free, open-source (MIT) Mac app, with the web version kept
-and held to the same output. Nothing Python ships. Potrace and VTracer leave the product.
+2026-09-24. Studi0Trace becomes a free, open-source (MIT) Mac app. Nothing Python ships.
+**2026-10-02: Mac only.** The web version (plan 3) is dropped for now and the Render server is
+not kept in step; plan 2's design is `2026-10-02-studi0trace-mac-app-design.md`. Potrace and VTracer leave the product.
 The UI is refined afterwards, by hand, once the app runs locally.
 
 ## Decisions
@@ -12,7 +13,7 @@ The UI is refined afterwards, by hand, once the app runs locally.
 | Python | none in anything that ships; the Python reference engine, the bench and `tools/diffcheck.py` stay as developer tools | the reference is what every engine change is checked against, and what makes the published benchmark reproducible |
 | Engines in the product | Vexel only | Potrace and VTracer stay only as optional bench adapters, so the published comparison can be re-run |
 | Mac shell | Tauri 2 | the engine is already Rust and links in-process; the existing React UI runs unchanged in the webview; a ~20–30 MB app instead of a 300 MB Python bundle |
-| Web version | the same Rust core compiled to WebAssembly, running in a Web Worker; a static site with no server | parity by construction (one engine, two targets), no hosting to run, images never leave the browser |
+| Web version | *dropped 2026-10-02 (Mac only).* Was: the same Rust core compiled to WebAssembly in a Web Worker, a static site with no server. The core stays wasm-clean so it can come back | parity by construction (one engine, two targets), no hosting to run, images never leave the browser |
 | Distribution | open source on GitHub, not the App Store: GitHub Actions builds the app and attaches it to a GitHub Release; **not signed or notarized** (decided 2026-09-30: no Developer ID); the app updates itself through Tauri's updater, which has its own minisign key pair and needs no Apple certificate | the app is free and open source, distributed through GitHub; anyone can also build it from source. The README tells users how to open an unsigned app (macOS 15 removed right-click → Open: System Settings → Privacy & Security → Open Anyway, or `xattr -dr com.apple.quarantine`) |
 
 ## Architecture
@@ -59,7 +60,7 @@ JSON shapes those calls return today, so the UI changes only at the transport.
    dialogs, drag and drop from Finder, export next to the original, recent files, settings kept
    between launches; `cargo tauri dev` runs it. Deliverable: the local app, feature-equal with
    the web app, ready for UI refinement.
-3. **Web on WebAssembly**: `crates/studi0trace-wasm`; rayon made optional in `vexel-rs` (a
+3. **Web on WebAssembly** (*dropped 2026-10-02 while the product is Mac only*): `crates/studi0trace-wasm`; rayon made optional in `vexel-rs` (a
    `parallel` feature, on for native, off for wasm); a Web Worker hosting `Core`; the `wasm`
    transport; the corpus traced natively and in wasm with SVG bytes compared; a static deploy
    (`render.yaml` reduced to the static site). Deliverable: the web version with no server.

@@ -1,0 +1,92 @@
+import * as Switch from "@radix-ui/react-switch";
+import type { ReactNode } from "react";
+
+import type { Settings } from "@/platform/types";
+
+export interface SettingsViewProps {
+  settings: Settings;
+  onChange: (next: Settings) => void;
+}
+
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-1.5">
+      <h3 className="px-1 text-[11px] font-semibold text-muted-foreground">{title}</h3>
+      <div className="divide-y rounded-xl border bg-card">{children}</div>
+    </section>
+  );
+}
+
+function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="flex min-h-10 items-center justify-between gap-4 px-3 py-2">
+      <div className="min-w-0">
+        <p className="text-[13px]">{label}</p>
+        {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Choice<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="inline-flex shrink-0 rounded-md bg-muted p-0.5">
+      {options.map(([v, text]) => (
+        <button
+          key={v}
+          type="button"
+          role="radio"
+          aria-checked={value === v}
+          onClick={() => onChange(v)}
+          className="h-6 rounded-[5px] px-2.5 text-[12px] font-medium text-muted-foreground aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-sm"
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <Switch.Root
+      aria-label={label}
+      checked={checked}
+      onCheckedChange={onChange}
+      className="relative h-[22px] w-[38px] shrink-0 rounded-full bg-muted-foreground/30 transition-colors data-[state=checked]:bg-[var(--accent-mac)]"
+    >
+      <Switch.Thumb className="block h-[18px] w-[18px] translate-x-[2px] rounded-full bg-white shadow transition-transform data-[state=checked]:translate-x-[18px]" />
+    </Switch.Root>
+  );
+}
+
+/** The settings, as grouped rows in the manner of System Settings. */
+export function SettingsView({ settings, onChange }: SettingsViewProps) {
+  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
+  return (
+    <div className="space-y-5 p-5">
+      <Group title="Appearance">
+        <Row label="Appearance">
+          <Choice label="Appearance" value={settings.appearance} options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]} onChange={(v) => set("appearance", v)} />
+        </Row>
+      </Group>
+      <Group title="Export">
+        <Row label="Save exports">
+          <Choice label="Save exports" value={settings.exportTo} options={[["ask", "Ask each time"], ["beside", "Next to the original"]]} onChange={(v) => set("exportTo", v)} />
+        </Row>
+        <Row label="Show in Finder after export">
+          <Toggle label="Show in Finder after export" checked={settings.revealAfterExport} onChange={(v) => set("revealAfterExport", v)} />
+        </Row>
+      </Group>
+      <Group title="Tracing">
+        <Row label="Trace new images straight away" hint="With Auto, as soon as they are opened">
+          <Toggle label="Trace new images straight away" checked={settings.traceOnOpen} onChange={(v) => set("traceOnOpen", v)} />
+        </Row>
+        <Row label="Update automatically when tracing is quick" hint="Traces again as you change a setting, for images that trace in under 2 seconds">
+          <Toggle label="Update automatically when tracing is quick" checked={settings.liveUpdate} onChange={(v) => set("liveUpdate", v)} />
+        </Row>
+      </Group>
+    </div>
+  );
+}
