@@ -3,6 +3,7 @@
 //! Menu change it: the UI cannot hand back a list of its own.
 use crate::error::CommandError;
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, PoisonError};
 use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_store::StoreExt;
 
@@ -45,7 +46,20 @@ pub fn load<R: Runtime>(app: &AppHandle<R>) -> Settings {
     app.store(FILE).ok().and_then(|s| s.get(KEY)).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
 }
 
-pub fn save<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Result<(), CommandError> {
+/// Held around every load → change → save, so two writers (a save from the UI, a file opened in a batch, Clear
+/// Menu) cannot read the same file and save over each other's change, or persist out of order. Nothing that
+/// holds it waits on the main thread: `save` hands the Open Recent rebuild to it without waiting.
+static WRITE: Mutex<()> = Mutex::new(());
+
+/// Reads the settings, changes them with `change` and saves the result, as one step.
+pub fn update<R: Runtime>(app: &AppHandle<R>, change: impl FnOnce(Settings) -> Settings) -> Result<Settings, CommandError> {
+    let _held = WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+    let next = change(load(app));
+    save(app, &next)?;
+    Ok(next)
+}
+
+fn save<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Result<(), CommandError> {
     let store = app.store(FILE).map_err(|e| CommandError::new(500, "io_error", e.to_string()))?;
     store.set(KEY, serde_json::to_value(settings).expect("settings are JSON"));
     store.save().map_err(|e| CommandError::new(500, "io_error", e.to_string()))?;
@@ -55,11 +69,11 @@ pub fn save<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Result<(), C
 }
 
 pub fn note_recent<R: Runtime>(app: &AppHandle<R>, path: &str) {
-    let _ = save(app, &load(app).with_recent(path));
+    let _ = update(app, |s| s.with_recent(path));
 }
 
 pub fn clear_recent<R: Runtime>(app: &AppHandle<R>) {
-    let _ = save(app, &Settings { recent: Vec::new(), ..load(app) });
+    let _ = update(app, |s| Settings { recent: Vec::new(), ..s });
 }
 
 #[cfg(test)]

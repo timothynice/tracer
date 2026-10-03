@@ -278,12 +278,7 @@ pub fn run() {
   "windows": ["main", "settings"],
   "permissions": [
     "core:default",
-    "core:window:allow-start-dragging",
-    "dialog:default",
-    "store:default",
-    "window-state:default",
-    "clipboard-manager:allow-write-text",
-    "opener:allow-reveal-item-in-dir"
+    "core:window:allow-start-dragging"
   ]
 }
 ```

@@ -36,11 +36,6 @@ pub(crate) fn open_one<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &App
 }
 
 #[tauri::command]
-pub fn health(state: State<'_, AppState>) -> Value {
-    state.core.health()
-}
-
-#[tauri::command]
 pub fn engines(state: State<'_, AppState>) -> Value {
     state.core.engines()
 }
@@ -198,9 +193,7 @@ pub fn load_settings(app: tauri::AppHandle) -> Settings {
 
 #[tauri::command]
 pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<Settings, CommandError> {
-    let next = settings::load(&app).merged(settings);
-    settings::save(&app, &next)?;
-    Ok(next)
+    settings::update(&app, |stored| stored.merged(settings))
 }
 
 #[tauri::command]

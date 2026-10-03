@@ -27,11 +27,13 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .manage(std::sync::Mutex::new(opens::Opens::default()))
-        .manage(AppState { core: Core::new(), images: store::Images::default(),
+        // The parent's core validates what is opened and answers engines and presets; the worker traces with a
+        // core of its own, from the bytes in `images`. A cache of 0 bytes keeps only the last image decoded
+        // (the core keeps the newest alone when nothing fits), not 256 MiB of pixels nobody traces here.
+        .manage(AppState { core: Core::with_limits(studi0trace_core::intake::Limits::default(), 0), images: store::Images::default(),
             queue: queue::TraceQueue::new(std::env::current_exe().expect("the app knows where it is")),
         })
         .invoke_handler(tauri::generate_handler![
-            commands::health,
             commands::engines,
             commands::presets,
             commands::open_paths,
@@ -63,6 +65,13 @@ pub fn run() {
         .on_menu_event(|app, event| menu::on_menu(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if window.label() != opens::MAIN {
+                return;
+            }
+            // the app is its main window: with it gone (Settings may still be open), Finder, the Dock, ⌘O and
+            // Open Recent would deliver into nothing, so the app quits with it
+            if let tauri::WindowEvent::Destroyed = event {
+                use tauri::Manager;
+                window.app_handle().exit(0);
                 return;
             }
             if let tauri::WindowEvent::DragDrop(drop) = event {

@@ -11,14 +11,10 @@ pub struct Entry {
     pub id: &'static str,
     pub label: &'static str,
     pub accel: Option<&'static str>,
-    pub check: bool,
 }
 
 const fn e(id: &'static str, label: &'static str, accel: Option<&'static str>) -> Entry {
-    Entry { id, label, accel, check: false }
-}
-const fn c(id: &'static str, label: &'static str, accel: Option<&'static str>) -> Entry {
-    Entry { id, label, accel, check: true }
+    Entry { id, label, accel }
 }
 
 /// Every item of ours (the predefined ones, About, Hide, Copy and so on, are added in `build`).
@@ -36,12 +32,12 @@ pub const MENU: &[Entry] = &[
     e("zoom-out", "Zoom Out", Some("CmdOrCtrl+-")),
     e("zoom-actual", "Actual Size", Some("CmdOrCtrl+0")),
     e("zoom-fit", "Zoom to Fit", Some("CmdOrCtrl+9")),
-    c("mode-split", "Split", Some("CmdOrCtrl+1")),
-    c("mode-side", "Side by Side", Some("CmdOrCtrl+2")),
-    c("mode-overlay", "Overlay", Some("CmdOrCtrl+3")),
-    c("mode-vector", "Vector Only", Some("CmdOrCtrl+4")),
-    c("toggle-sidebar", "Show Sidebar", Some("Ctrl+Super+S")),
-    c("toggle-inspector", "Show Inspector", Some("Alt+Super+I")),
+    e("mode-split", "Split", Some("CmdOrCtrl+1")),
+    e("mode-side", "Side by Side", Some("CmdOrCtrl+2")),
+    e("mode-overlay", "Overlay", Some("CmdOrCtrl+3")),
+    e("mode-vector", "Vector Only", Some("CmdOrCtrl+4")),
+    e("toggle-sidebar", "Show Sidebar", Some("Ctrl+Super+S")),
+    e("toggle-inspector", "Show Inspector", Some("Alt+Super+I")),
     e("generate", "Generate Vector", Some("CmdOrCtrl+Enter")),
     e("cancel", "Cancel Trace", Some("CmdOrCtrl+.")),
     e("remove", "Remove Image", Some("CmdOrCtrl+Backspace")),
@@ -93,11 +89,20 @@ pub fn plan(s: &MenuState) -> Vec<(&'static str, bool, Option<bool>)> {
     out
 }
 
+/// The check marks `state` asks for: every View mode and both toggles. muda flips a check item on every click,
+/// so choosing the mode already shown would uncheck it, and the UI, whose mode did not change, would not send a
+/// state to check it again: after a click on one of them, these are put back.
+pub fn checks(state: &MenuState) -> Vec<(&'static str, bool)> {
+    plan(state).into_iter().filter_map(|(id, _, checked)| checked.map(|on| (id, on))).collect()
+}
+
 /// The items `plan` touches, and the Open Recent submenu, kept to change later.
 pub struct Handles<R: Runtime> {
     items: HashMap<&'static str, MenuItem<R>>,
     checks: HashMap<&'static str, CheckMenuItem<R>>,
     recent: Submenu<R>,
+    /// The state last applied, to put the check marks back after a click (held only to read or replace it).
+    shown: std::sync::Mutex<MenuState>,
 }
 
 fn entry(id: &str) -> &'static Entry {
@@ -188,7 +193,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
     let help = SubmenuBuilder::new(app, "Help").item(&item("help")?).build()?;
     let menu = Menu::with_items(app, &[&app_menu, &file, &edit, &view, &image, &window, &help])?;
-    let handles = Handles { items, checks, recent: recent_menu };
+    let handles = Handles { items, checks, recent: recent_menu, shown: std::sync::Mutex::new(MenuState::default()) };
     fill_recent(app, &handles.recent, recent)?;
     Ok((menu, handles))
 }
@@ -223,6 +228,7 @@ pub fn set_recent<R: Runtime>(app: &AppHandle<R>, recent: &[String]) {
 
 pub fn apply_state<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
     let Some(h) = app.try_state::<Handles<R>>() else { return };
+    *h.shown.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = state.clone();
     for (id, enabled, checked) in plan(state) {
         if let Some(i) = h.items.get(id) {
             let _ = i.set_enabled(enabled);
@@ -264,6 +270,22 @@ pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
         }
         other => {
             let _ = app.emit_to("main", "menu", serde_json::json!({ "id": other }));
+            restore_checks(app, other);
+        }
+    }
+}
+
+/// After a click on a check item, its marks are the last state's again; a change the UI makes arrives as a new
+/// state and is applied over them.
+fn restore_checks<R: Runtime>(app: &AppHandle<R>, clicked: &str) {
+    let Some(h) = app.try_state::<Handles<R>>() else { return };
+    if !h.checks.contains_key(clicked) {
+        return;
+    }
+    let shown = h.shown.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    for (id, on) in checks(&shown) {
+        if let Some(c) = h.checks.get(id) {
+            let _ = c.set_checked(on);
         }
     }
 }
@@ -302,5 +324,16 @@ mod tests {
         assert_eq!(get(&p, "toggle-inspector").2, Some(false));
         let tracing = plan(&MenuState { tracing: true, ..s });
         assert_eq!((get(&tracing, "generate").1, get(&tracing, "cancel").1), (false, true));
+    }
+
+    #[test]
+    fn a_click_on_the_mode_shown_leaves_it_checked() {
+        let s = MenuState { has_image: true, mode: "split".into(), sidebar: true, ..MenuState::default() };
+        let marks: HashMap<_, _> = checks(&s).into_iter().collect();
+        // every check item in the View menu gets a mark back, and only the mode shown is on
+        let ids: std::collections::BTreeSet<_> = marks.keys().copied().collect();
+        assert_eq!(ids, ["mode-overlay", "mode-side", "mode-split", "mode-vector", "toggle-inspector", "toggle-sidebar"].into_iter().collect());
+        assert_eq!((marks["mode-split"], marks["mode-side"], marks["mode-overlay"], marks["mode-vector"]), (true, false, false, false));
+        assert_eq!((marks["toggle-sidebar"], marks["toggle-inspector"]), (true, false));
     }
 }

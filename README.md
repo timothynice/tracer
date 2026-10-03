@@ -122,7 +122,8 @@ inside the app. Free and MIT licensed.
 Run it from source (needs Node ≥ 20 and Rust ≥ 1.90, <https://rustup.rs>):
 
 ```bash
-cd apps/desktop && npm install && npm run dev          # starts the frontend's Vite server itself
+cd frontend && npm ci                                  # the UI's dependencies, once per checkout
+cd ../apps/desktop && npm ci && npm run dev            # the Tauri CLI; starts the frontend's Vite server itself
 ```
 
 Build it:
