@@ -1,5 +1,5 @@
 import { ImageOff, Plus, Trash2 } from "lucide-react";
-import { Fragment, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import { failureText, MAX_SIDE } from "@/lib/limits";
 import type { OpenFailure } from "@/platform/types";
@@ -27,6 +27,16 @@ export interface SidebarProps {
 const TOO_BIG = new Set(["too_many_pixels", "too_large"]);
 
 export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd, onSelect, onSelectNext, onClear, onDownscale, onDismissFailure, wrapCard = (_, card) => card }: SidebarProps) {
+  // A selection made by the arrow keys, or a newly opened image, may be out of sight in a long list; so may a new failure.
+  useEffect(() => {
+    if (selected) document.getElementById(`image-${selected}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
+  const failures = useRef<HTMLDivElement>(null);
+  const seenFailures = useRef(failed.length);
+  useEffect(() => {
+    if (failed.length > seenFailures.current) failures.current?.lastElementChild?.scrollIntoView?.({ block: "nearest" });
+    seenFailures.current = failed.length;
+  }, [failed.length]);
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowRight") {
       e.preventDefault();
@@ -55,7 +65,7 @@ export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd,
             <Fragment key={item.image.id}>{wrapCard(item, <ImageCard item={item} selected={item.image.id === selected} onSelect={() => onSelect(item.image.id)} />)}</Fragment>
           ))}
         </div>
-        <div className={`space-y-3 px-3 ${failed.length ? "pb-3" : ""}`}>
+        <div ref={failures} className={`space-y-3 px-3 ${failed.length ? "pb-3" : ""}`}>
           {failed.map((f, i) => (
             <div key={`${f.path ?? f.name}-${i}`} role="group" aria-label={`${f.name} could not be opened`} className="rounded-lg bg-background/60 p-2.5">
               <div className="flex items-start gap-2">

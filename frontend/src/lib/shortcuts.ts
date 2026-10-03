@@ -50,5 +50,9 @@ export function commandForKey(e: Keys): Command | null {
   }
 }
 
+const TEXT_INPUTS = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
+
+/** Whether keys here type text: a textarea, a contenteditable, an input that takes text. A slider or a checkbox does not. */
 export const isTyping = (target: EventTarget | null) =>
-  target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+  target instanceof HTMLElement &&
+  (target.isContentEditable || target.tagName === "TEXTAREA" || (target instanceof HTMLInputElement && TEXT_INPUTS.has(target.type)));

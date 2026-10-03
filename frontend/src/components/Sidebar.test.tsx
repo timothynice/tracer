@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
 import type { ImageItem } from "@/state/library";
@@ -20,6 +20,12 @@ const item = (id: string, patch: Partial<ImageItem> = {}): ImageItem => ({
 });
 
 function setup(patch: Partial<SidebarProps> = {}) {
+  const props = props_(patch);
+  render(<Sidebar {...props} />);
+  return props;
+}
+
+function props_(patch: Partial<SidebarProps> = {}): SidebarProps {
   const props: SidebarProps = {
     items: [item("a"), item("b", { job: { id: "j", key: "auto", startedAt: 0, phase: "queued" } }), item("c", { error: new ApiError("engine_crashed", "The trace crashed (signal 9)"), errorKey: "auto" })],
     failed: [],
@@ -34,7 +40,6 @@ function setup(patch: Partial<SidebarProps> = {}) {
     onDismissFailure: vi.fn(),
     ...patch,
   };
-  render(<Sidebar {...props} />);
   return props;
 }
 
@@ -110,5 +115,49 @@ describe("Sidebar", () => {
     setup({ failed: [{ name: "huge.png", path: "/p/huge.png", error: new ApiError("too_large", "Too big") }] });
     const group = screen.getByRole("group", { name: /huge\.png could not be opened/ });
     expect(screen.getByRole("listbox", { name: "Image list" })).not.toContainElement(group);
+  });
+  describe("keeps the newest thing in view", () => {
+    const scrolled: { id: string; arg: unknown }[] = [];
+    const original = Element.prototype.scrollIntoView;
+    const install = () => {
+      scrolled.length = 0;
+      Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+        scrolled.push({ id: this.id || this.getAttribute("aria-label") || "?", arg });
+      };
+    };
+    afterEach(() => {
+      Element.prototype.scrollIntoView = original;
+    });
+
+    it("scrolls the selected card to the nearest edge when the selection changes", () => {
+      install();
+      const props = props_({ selected: "a" });
+      const { rerender } = render(<Sidebar {...props} />);
+      scrolled.length = 0;
+      rerender(<Sidebar {...props} selected="c" />);
+      expect(scrolled).toEqual([{ id: "image-c", arg: { block: "nearest" } }]);
+    });
+
+    it("scrolls a newly opened image into view", () => {
+      install();
+      const props = props_({ selected: "a" });
+      const { rerender } = render(<Sidebar {...props} />);
+      scrolled.length = 0;
+      rerender(<Sidebar {...props} items={[...props.items, item("d")]} selected="d" />);
+      expect(scrolled).toEqual([{ id: "image-d", arg: { block: "nearest" } }]);
+    });
+
+    it("scrolls the newest failure card into view, and only when one arrives", () => {
+      install();
+      const props = props_({ selected: "a" });
+      const failure = (name: string) => ({ name, path: `/p/${name}`, error: { code: "unsupported", message: "no" } }) as unknown as SidebarProps["failed"][number];
+      const { rerender } = render(<Sidebar {...props} failed={[failure("x.bmp")]} />);
+      scrolled.length = 0;
+      rerender(<Sidebar {...props} failed={[failure("x.bmp"), failure("y.bmp")]} />);
+      expect(scrolled).toEqual([{ id: "y.bmp could not be opened", arg: { block: "nearest" } }]);
+      scrolled.length = 0;
+      rerender(<Sidebar {...props} failed={[failure("y.bmp")]} />);
+      expect(scrolled).toEqual([]);
+    });
   });
 });

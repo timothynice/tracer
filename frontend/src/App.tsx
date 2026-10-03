@@ -134,7 +134,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   useEffect(() => platform.onDragState(setDragging), []);
   useWindowDrop(platform.kind === "web", openFiles, setDragging);
 
-  const layers = useLayerInspector(answer?.svg);
+  const layers = useLayerInspector(answer?.svg, item?.image.id);
 
   const job = item ? currentJob(item) : null;
   const busy = job ? (job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;

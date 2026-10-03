@@ -19,4 +19,27 @@ describe("SettingsView", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Show in Finder after export" }));
     expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, revealAfterExport: true });
   });
+  it("a radiogroup is one tab stop, moved between its options by the arrow keys", () => {
+    const onChange = vi.fn();
+    render(<SettingsView settings={DEFAULT_SETTINGS} onChange={onChange} />);
+    const system = screen.getByRole("radio", { name: "System" });
+    const light = screen.getByRole("radio", { name: "Light" });
+    const dark = screen.getByRole("radio", { name: "Dark" });
+    expect([system, light, dark].map((r) => r.tabIndex)).toEqual([0, -1, -1]);
+    fireEvent.keyDown(system, { key: "ArrowRight" });
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, appearance: "light" });
+    expect(light).toHaveFocus();
+    fireEvent.keyDown(system, { key: "ArrowLeft" }); // wraps to the last
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, appearance: "dark" });
+    expect(dark).toHaveFocus();
+    fireEvent.keyDown(system, { key: "ArrowDown" });
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, appearance: "light" });
+    fireEvent.keyDown(system, { key: "ArrowUp" });
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, appearance: "dark" });
+  });
+
+  it("the tab stop follows the checked option", () => {
+    render(<SettingsView settings={{ ...DEFAULT_SETTINGS, appearance: "dark" }} onChange={vi.fn()} />);
+    expect(["System", "Light", "Dark"].map((n) => screen.getByRole("radio", { name: n }).tabIndex)).toEqual([-1, -1, 0]);
+  });
 });

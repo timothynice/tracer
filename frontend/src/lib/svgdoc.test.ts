@@ -1,4 +1,4 @@
-import { parseSvg, pathAnchors, shapeLabel } from "./svgdoc";
+import { parseSvg, pathAnchors, shapeLabel, svgStats } from "./svgdoc";
 
 const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48">
 <defs><linearGradient id="g1"><stop offset="0" stop-color="#fff"/></linearGradient></defs>
@@ -120,4 +120,22 @@ test("a shape inside a scaled group is measured in canvas units", () => {
   expect(doc.shapes[1].bounds).toEqual([20, 20, 40, 40]);
   expect(doc.shapes[1].outline).toContain('transform="scale(0.5)"');
   expect(doc.render(new Set([1])).match(/<path/g)).toBeNull();
+});
+
+test("counts every painted element outside defs, nodes over paths only", () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<defs><path id="p" d="M0 0L4 0L4 4Z"/><circle id="c" r="2"/></defs>
+<rect width="64" height="64" fill="#eee"/>
+<use href="#p" x="10" y="10" fill="#f00"/><use href="#p" x="20" y="10" fill="#f00"/><use href="#c" x="30" y="10"/>
+<g transform="scale(0.5)"><path d="M0 0L8 0L8 8L0 8Z" fill="#00f"/><ellipse cx="4" cy="4" rx="2" ry="1"/><polygon points="0,0 1,0 1,1"/><polyline points="0,0 1,1"/><line x1="0" y1="0" x2="1" y2="1"/></g>
+<circle cx="9" cy="9" r="3"/>
+</svg>`;
+  // rect, 3 uses, a path, ellipse, polygon, polyline, line, circle — the two defs are not painted
+  // the nodes are the drawn paths: the path's four and a use of a path's three each
+  expect(svgStats(svg)).toEqual({ shapes: 10, nodes: 10 });
+});
+
+test("a shape count of one is singular, and an SVG that does not parse has no count", () => {
+  expect(svgStats('<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>')).toEqual({ shapes: 1, nodes: 0 });
+  expect(svgStats("not svg")).toBeNull();
 });

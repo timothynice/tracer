@@ -324,3 +324,23 @@ export function shapeLabel(s: Shape): string {
   const kind = s.tag === "path" ? "Path" : s.tag[0].toUpperCase() + s.tag.slice(1);
   return `${kind} ${s.index + 1}`;
 }
+
+/**
+ * What the stats line counts: every painted element outside `<defs>` (a `<use>` copy is a shape, wherever its
+ * group sits), and the anchors of the paths among them, a use of a path included. Null when the markup is not an SVG.
+ */
+export function svgStats(markup: string): { shapes: number; nodes: number } | null {
+  const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+  const root = doc.documentElement;
+  if (!root || root.tagName.toLowerCase() !== "svg" || doc.getElementsByTagName("parsererror").length) return null;
+  let shapes = 0;
+  let nodes = 0;
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    const tag = el.tagName.toLowerCase();
+    if (!SHAPE_TAGS.has(tag) || el.closest("defs")) continue;
+    shapes++;
+    const drawn = tag === "use" ? useTarget(el) : el;
+    if (drawn?.tagName.toLowerCase() === "path") nodes += anchorsOf(el).length;
+  }
+  return { shapes, nodes };
+}

@@ -1,9 +1,10 @@
 import { ChevronRight, Wand2 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { Preset } from "@/lib/api";
 import { formatBytes, formatInt, formatMs } from "@/lib/format";
 import type { ParamSpec } from "@/lib/schema";
+import { svgStats } from "@/lib/svgdoc";
 import { shownAnswer, type Catalog, type ImageItem } from "@/state/library";
 import { ParamPanel } from "./ParamPanel";
 import { PresetCards } from "./PresetCards";
@@ -28,6 +29,8 @@ export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onP
     if (invalidField !== null) setAdvanced(true); // a field the server refused is in there
   }, [invalidField]);
   const answer = shownAnswer(item);
+  // counted from the markup, which holds shapes a path tally leaves out (copies, circles, rects); the server's tally stands in for markup that will not parse
+  const counts = useMemo(() => (answer ? (svgStats(answer.svg) ?? { shapes: answer.stats.paths, nodes: answer.stats.nodes }) : null), [answer]);
   const candidates = catalog.presets.filter((p) => p.auto_candidate).length;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -65,7 +68,7 @@ export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onP
       <div className="space-y-2 border-t p-3">
         {answer && (
           <p className="tabular text-center text-[11px] text-muted-foreground">
-            {formatInt(answer.stats.paths)} shapes · {formatInt(answer.stats.nodes)} nodes · {formatBytes(answer.stats.bytes)} · {formatMs(answer.elapsedMs)}
+            {formatInt(counts!.shapes)} {counts!.shapes === 1 ? "shape" : "shapes"} · {formatInt(counts!.nodes)} {counts!.nodes === 1 ? "node" : "nodes"} · {formatBytes(answer.stats.bytes)} · {formatMs(answer.elapsedMs)}
           </p>
         )}
         <TraceButton item={item} candidates={candidates} onGenerate={onGenerate} onCancel={onCancel} />

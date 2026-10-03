@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { commandForKey } from "./shortcuts";
+import { commandForKey, isTyping } from "./shortcuts";
 
 const key = (code: string, mods: { shift?: boolean; alt?: boolean; ctrl?: boolean; meta?: boolean } = {}) => ({
   code,
@@ -44,5 +44,22 @@ describe("commandForKey", () => {
     expect(commandForKey(key("KeyC"))).toBeNull(); // plain ⌘C is the system's Copy
     expect(commandForKey(key("KeyS"))).toBeNull();
     expect(commandForKey(key("KeyQ"))).toBeNull();
+  });
+});
+
+describe("isTyping", () => {
+  const field = (html: string) => {
+    document.body.innerHTML = html;
+    return document.body.firstElementChild as HTMLElement;
+  };
+  it("is true for a text field, a number field, a textarea and a contenteditable", () => {
+    for (const html of ['<input type="text">', "<input>", '<input type="search">', '<input type="number">', '<input type="password">', "<textarea></textarea>"]) expect(isTyping(field(html))).toBe(true);
+    const editable = field("<div></div>");
+    Object.defineProperty(editable, "isContentEditable", { value: true });
+    expect(isTyping(editable)).toBe(true);
+  });
+  it("is false for a slider, a checkbox, a radio, a button and a select", () => {
+    for (const html of ['<input type="range">', '<input type="checkbox">', '<input type="radio">', "<button></button>", "<select></select>"]) expect(isTyping(field(html))).toBe(false);
+    expect(isTyping(null)).toBe(false);
   });
 });
