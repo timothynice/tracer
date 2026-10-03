@@ -125,6 +125,12 @@ and its types).
   writes the defaults over the file. Fix: read field by field — start from defaults and take each key that
   deserialises to its type (unknown keys ignored); a test with `{"appearance": 3, "recent": ["/a.png"],
   "liveUpdate": false}` keeps `recent` and `liveUpdate`.
+- **Q-M3** File errors reach the user raw: `…/ro-logo.svg: Permission denied (os error 13)`, a multi-line path
+  ending `(os error 2)`. Fix: `CommandError::io` words the common kinds for people and names only the file
+  name: not found → `“<name>” could not be found. It may have been moved or deleted.`; permission denied /
+  read-only → `Studi0Trace cannot write to the folder of “<name>”.` (for writes) or `… cannot read “<name>”.`
+  (for reads); anything else → `“<name>”: <error without the "(os error N)" suffix>`. The full path and errno
+  go to stderr (`eprintln!`), not to the UI. Unit-test the wording per kind.
 
 ### Task A4: The library keeps Auto, errors belong to their settings (frontend)
 
@@ -144,6 +150,14 @@ and its types).
   let the running job finish (its answer is cached as any non-current answer is).
 - **F-M9** A failed Downscale is silent (unhandled rejection). Fix: catch it and show the error toast the
   other open failures use.
+- **Q-M2** Show in Finder on a moved or deleted original does nothing (the error is thrown away:
+  `void platform.reveal(...)` in `App.tsx` and `useExports.ts`). Fix: catch and toast the error.
+- **Q-M6** The core's refusal reads like an area limit (`Image exceeds the 2048x2048 pixel limit` for a
+  4000×200 image). Do not change the core (its message is a contract with the Python). Fix in the UI: for an
+  open failure with code `too_many_pixels` or `too_large`, the text shown is `<name> is larger than 2048 px on a
+  side.` / `<name> is larger than 20 MB.` followed by the existing Downscale action (read the numbers from
+  the failure's message if present, else from constants beside the existing ones); the empty state's formats
+  line ends `up to 2048 px a side (larger images can be downscaled)`.
 
 ### Task A5: Viewer, inspector and keyboard (frontend)
 
@@ -165,6 +179,15 @@ tests.
   `scrollIntoView({ block: "nearest" })` on the selected card when the selection changes by keyboard.
 - **F-M13** The split divider lacks `aria-valuemin`/`aria-valuemax` (add 0/100 and `aria-valuenow`); the
   Settings radiogroups get arrow-key navigation with a roving tabindex.
+- **Q-M5** A newly opened image, or the failure card of one that failed, is not scrolled into view in a long
+  sidebar, so an open looks like nothing happened. Fix: scroll the new selection / the newest failure card
+  into view (`block: "nearest"`), together with F-M11.
+- **Q-M4** The stats line counts only `<path>` elements ("1 shapes · 0 nodes" for 17 visible shapes drawn as
+  `<use>` copies, circles and a rect). Fix: count every painted element (`path, rect, circle, ellipse, polygon,
+  polyline, line, use`) outside `<defs>`, and nodes over paths only; pluralise properly (`1 shape`).
+- **Q-M7** The export toast covers the bottom zoom/mode toolbar. Fix: toasts at the top centre of the viewer
+  (below the title bar), or offset above the toolbar — whichever keeps them off every control at the minimum
+  window size (960×640).
 
 ### Task A6: The window follows the Appearance setting (Rust)
 
@@ -178,6 +201,33 @@ creation), tests.
   `set_theme` to every webview window at setup, whenever settings are saved, and to the Settings window when it
   is created. Verify natively: screenshots of both windows with the Mac in its current appearance and the
   setting on the opposite one, and on System.
+
+### Task A7: Mac polish from the native pass (frontend + menu)
+
+**Files:** `frontend/src/styles.css`, `frontend/src/components/SettingsView.tsx`, `ParamControl.tsx`, the
+switch components, `apps/desktop/src-tauri/src/menu.rs`, `src/lib.rs` (Clear All confirm), tests where behaviour
+changes.
+
+- Checkerboard: faint diagonal seams in the transparency checkerboard (drawn with gradients). Fix: draw it from a
+  tiled SVG/`conic-gradient` with integer cell sizes so no seams show at any zoom.
+- White artwork nearly vanishes on the light-mode checkerboard. Fix: the light checkerboard uses two mid greys
+  (e.g. `#d9d9d9`/`#c4c4c4`-ish via tokens) so white and black art both read.
+- Settings shows a section header "Appearance" over a row "Appearance": rename the section header to `General`
+  (or drop it), no duplicate label.
+- Orphaned last words in wrapped copy ("…under 2 / seconds", "…a / side"): `text-wrap: pretty` on body copy and
+  hints.
+- Number fields: the stepper arrows crowd the value. Fix: hide the native spinners
+  (`::-webkit-inner-spin-button` `appearance: none`) — the fields already accept arrow keys — and keep right
+  padding.
+- Two switch styles (a yellow knob on grey in Advanced Options, blue in Settings): one switch component and one
+  style everywhere, using the accent (`--accent-mac`) for on.
+- View ▸ "Toggle Full Screen": use `PredefinedMenuItem::fullscreen(app, Some("Enter Full Screen"))` so it reads as
+  macOS writes it.
+- Clear All removes every image at once with no confirmation. Fix: when any image has an unexported vector (the
+  `unexported` count Task A2 adds to the menu state), Clear All asks first (native dialog from Rust: `Clear all
+  images?` / `<N> traced image(s) have not been exported.` / `Clear All` / `Cancel`); otherwise it clears.
+  Remove (one image) stays immediate.
+- Verify natively with screenshots (`apps/desktop/scripts/shot.swift`) in light and dark.
 
 ---
 
