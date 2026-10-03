@@ -134,7 +134,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   useEffect(() => platform.onDragState(setDragging), []);
   useWindowDrop(platform.kind === "web", openFiles, setDragging);
 
-  const layers = useLayerInspector(answer?.svg, item?.image.id);
+  const layers = useLayerInspector(answer?.svg, item?.image.id, useMemo(() => state.items.map((i) => i.image.id), [state.items]));
 
   const job = item ? currentJob(item) : null;
   const busy = job ? (job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
@@ -155,13 +155,13 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       layersOpen={layers.state.open}
       onToggleLayers={() => layers.patch({ open: !layers.state.open })}
       marks={layers.doc ? (scale) => <InspectorOverlay doc={layers.doc!} state={layers.liveState} scale={scale} /> : undefined}
-      panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} /> : undefined}
+      panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} onToggle={layers.toggle} /> : undefined}
     />
   ) : (
     <EmptyState formats={DROP_FORMATS} canDownscale={platform.kind === "native"} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
   );
 
-  const exports = useExports(state, item, layers.exportSvg, settings, lib.markExported);
+  const exports = useExports(state, item, layers.exportSvg, settings, lib.markExported, layers.exportSvgFor);
   const anyVector = state.items.some((i) => i.shown !== null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const openSettings = useCallback(() => {

@@ -159,5 +159,14 @@ describe("Sidebar", () => {
       rerender(<Sidebar {...props} failed={[failure("y.bmp")]} />);
       expect(scrolled).toEqual([]);
     });
+    it("prefers the new selection when one open brings both an image and a failure", () => {
+      install();
+      const props = props_({ selected: "a" });
+      const { rerender } = render(<Sidebar {...props} />);
+      scrolled.length = 0;
+      const failed = [{ name: "x.bmp", path: "/p/x.bmp", error: { code: "unsupported", message: "no" } }] as unknown as SidebarProps["failed"];
+      rerender(<Sidebar {...props} items={[...props.items, item("d")]} selected="d" failed={failed} />);
+      expect(scrolled.at(-1)?.id).toBe("image-d");
+    });
   });
 });

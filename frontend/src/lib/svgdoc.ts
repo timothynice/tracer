@@ -326,7 +326,7 @@ export function shapeLabel(s: Shape): string {
 }
 
 /**
- * What the stats line counts: every painted element outside `<defs>` (a `<use>` copy is a shape, wherever its
+ * What the stats line counts: every painted element outside `<defs>` and the other containers that only describe (clipPath, mask, pattern, symbol, marker) (a `<use>` copy is a shape, wherever its
  * group sits), and the anchors of the paths among them, a use of a path included. Null when the markup is not an SVG.
  */
 export function svgStats(markup: string): { shapes: number; nodes: number } | null {
@@ -337,7 +337,7 @@ export function svgStats(markup: string): { shapes: number; nodes: number } | nu
   let nodes = 0;
   for (const el of Array.from(root.querySelectorAll("*"))) {
     const tag = el.tagName.toLowerCase();
-    if (!SHAPE_TAGS.has(tag) || el.closest("defs")) continue;
+    if (!SHAPE_TAGS.has(tag) || el.closest("defs, clipPath, mask, pattern, symbol, marker")) continue;
     shapes++;
     const drawn = tag === "use" ? useTarget(el) : el;
     if (drawn?.tagName.toLowerCase() === "path") nodes += anchorsOf(el).length;

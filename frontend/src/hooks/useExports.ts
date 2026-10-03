@@ -10,9 +10,10 @@ const fileName = (path: string) => path.split("/").pop() ?? path;
 
 /**
  * Export the selected image's vector (as edited in the layer inspector), copy it, or export every traced image.
+ * `forImage` gives any other image's SVG as its own inspector state would export it.
  * `onExported` hears which traces went out, so closing the app knows what would be lost.
  */
-export function useExports(state: LibraryState, item: ImageItem | null, svg: string | undefined, settings: Settings, onExported: (marks: ExportMark[]) => void = () => {}) {
+export function useExports(state: LibraryState, item: ImageItem | null, svg: string | undefined, settings: Settings, onExported: (marks: ExportMark[]) => void = () => {}, forImage: (id: string, svg: string) => string = (_, v) => v) {
   // One save panel at a time: an export asked for while another is open is ignored.
   const busy = useRef(false);
   const exclusive = async (run: () => Promise<void>) => {
@@ -28,9 +29,9 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
   const exportImage = useCallback(
     (kind: "svg" | "png", scale: number, target: ImageItem | null = item) =>
       exclusive(async () => {
-        // the selected image goes as it is on screen, with the layer inspector's edits; any other as its own trace.
+        // the selected image goes as it is on screen, with the layer inspector's edits; any other with its own.
         // By id: the context menu's item may be an older copy of the selected one (a state update since render).
-        const text = target?.image.id === item?.image.id ? svg : target ? shownAnswer(target)?.svg : undefined;
+        const text = target?.image.id === item?.image.id ? svg : target && shownAnswer(target) ? forImage(target.image.id, shownAnswer(target)!.svg) : undefined;
         if (!target || !text) return;
         const stem = baseName(target.image.name);
         try {
@@ -47,7 +48,7 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
           toast.error((err as Error).message);
         }
       }),
-    [item, svg, settings, onExported], // eslint-disable-line react-hooks/exhaustive-deps -- `exclusive` only touches a ref
+    [item, svg, settings, onExported, forImage], // eslint-disable-line react-hooks/exhaustive-deps -- `exclusive` only touches a ref
   );
 
   const exportAll = useCallback(
@@ -55,7 +56,7 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
       exclusive(async () => {
         const traced = state.items.filter((i) => shownAnswer(i));
         // the selected image goes as it is on screen, with the layer inspector's edits
-        const files = traced.map((i) => ({ id: i.image.id, name: `${baseName(i.image.name)}.svg`, svg: i.image.id === item?.image.id && svg ? svg : shownAnswer(i)!.svg }));
+        const files = traced.map((i) => ({ id: i.image.id, name: `${baseName(i.image.name)}.svg`, svg: i.image.id === item?.image.id && svg ? svg : forImage(i.image.id, shownAnswer(i)!.svg) }));
         if (!files.length) return;
         try {
           const answer = await platform.exportAll(files, settings);
@@ -68,14 +69,16 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
           const noun = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
           if (failed.length) {
             // one failure's message already names its file
-            const names = failed.map((f) => `\u201c${f.name}\u201d`).join(", ");
+            // a long list would make a tall toast
+            const shown = failed.slice(0, 3).map((f) => `\u201c${f.name}\u201d`);
+            const names = failed.length > 3 ? `${shown.join(", ")} and ${failed.length - 3} more` : shown.join(", ");
             toast.error(failed.length === 1 ? failed[0].message : `${failed.length} images could not be exported: ${names}. ${failed[0].message}`);
           } else if (platform.kind === "native") toast.success(`Exported ${noun(written.length)}`);
         } catch (err) {
           toast.error((err as Error).message);
         }
       }),
-    [state.items, item, svg, settings, onExported], // eslint-disable-line react-hooks/exhaustive-deps -- `exclusive` only touches a ref
+    [state.items, item, svg, settings, onExported, forImage], // eslint-disable-line react-hooks/exhaustive-deps -- `exclusive` only touches a ref
   );
 
   const copySvg = useCallback(async () => {

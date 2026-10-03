@@ -12,7 +12,7 @@ const doc = parseSvg(SVG)!;
 const state = (patch: Partial<InspectorState> = {}) => ({ ...EMPTY_INSPECTOR, open: true, ...patch });
 
 test("lists every shape with its anchor count", () => {
-  render(<Inspector doc={doc} bytes={512} state={state()} onChange={() => {}} />);
+  render(<Inspector doc={doc} bytes={512} state={state()} onChange={() => {}} onToggle={() => {}} />);
   expect(screen.getByText("Rect 1")).toBeInTheDocument();
   expect(screen.getByText("Path 2")).toBeInTheDocument();
   expect(screen.getByText("Rect 3")).toBeInTheDocument();
@@ -20,10 +20,10 @@ test("lists every shape with its anchor count", () => {
 });
 
 test("hiding a shape reports it back", () => {
-  const onChange = vi.fn();
-  render(<Inspector doc={doc} bytes={512} state={state()} onChange={onChange} />);
+  const onToggle = vi.fn();
+  render(<Inspector doc={doc} bytes={512} state={state()} onChange={() => {}} onToggle={onToggle} />);
   fireEvent.click(screen.getByRole("button", { name: "Hide Path 2" }));
-  expect(onChange).toHaveBeenCalledWith({ hidden: new Set([1]) });
+  expect(onToggle).toHaveBeenCalledWith(1);
 });
 
 test("the speck threshold picks out only the small shapes", () => {
@@ -34,6 +34,6 @@ test("the speck threshold picks out only the small shapes", () => {
 });
 
 test("says what the cleanup will actually drop", () => {
-  render(<Inspector doc={doc} bytes={512} state={state({ minArea: 10 })} onChange={() => {}} />);
+  render(<Inspector doc={doc} bytes={512} state={state({ minArea: 10 })} onChange={() => {}} onToggle={() => {}} />);
   expect(screen.getByText(/1 shape will be left out/)).toBeInTheDocument();
 });

@@ -33,6 +33,7 @@ function Choice<T extends string>({ label, value, options, onChange }: { label: 
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
   // one tab stop (the checked option); the arrow keys move between the options, wrapping, and choose as they go
   const onKeyDown = (e: KeyboardEvent, at: number) => {
+    if (e.metaKey || e.altKey || e.ctrlKey) return; // a shortcut's, not the group's
     const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
     if (!step) return;
     e.preventDefault();

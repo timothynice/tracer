@@ -28,15 +28,16 @@ const TOO_BIG = new Set(["too_many_pixels", "too_large"]);
 
 export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd, onSelect, onSelectNext, onClear, onDownscale, onDismissFailure, wrapCard = (_, card) => card }: SidebarProps) {
   // A selection made by the arrow keys, or a newly opened image, may be out of sight in a long list; so may a new failure.
-  useEffect(() => {
-    if (selected) document.getElementById(`image-${selected}`)?.scrollIntoView?.({ block: "nearest" });
-  }, [selected]);
   const failures = useRef<HTMLDivElement>(null);
   const seenFailures = useRef(failed.length);
   useEffect(() => {
     if (failed.length > seenFailures.current) failures.current?.lastElementChild?.scrollIntoView?.({ block: "nearest" });
     seenFailures.current = failed.length;
   }, [failed.length]);
+  // declared last so that when one open brings both, the selection is what ends in view
+  useEffect(() => {
+    if (selected) document.getElementById(`image-${selected}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowRight") {
       e.preventDefault();

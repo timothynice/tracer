@@ -42,4 +42,10 @@ describe("SettingsView", () => {
     render(<SettingsView settings={{ ...DEFAULT_SETTINGS, appearance: "dark" }} onChange={vi.fn()} />);
     expect(["System", "Light", "Dark"].map((n) => screen.getByRole("radio", { name: n }).tabIndex)).toEqual([-1, -1, 0]);
   });
+  it("leaves a shortcut's arrow keys alone", () => {
+    const onChange = vi.fn();
+    render(<SettingsView settings={DEFAULT_SETTINGS} onChange={onChange} />);
+    for (const mod of ["metaKey", "altKey", "ctrlKey"]) fireEvent.keyDown(screen.getByRole("radio", { name: "System" }), { key: "ArrowRight", [mod]: true });
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

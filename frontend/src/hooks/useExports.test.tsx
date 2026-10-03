@@ -217,4 +217,23 @@ describe("useExports", () => {
     await act(() => result.current.exportImage("svg", 1));
     expect(mocks.platform.exportFile).toHaveBeenCalledTimes(2);
   });
+  it("exports every image with its own inspector state: the selected one as on screen, any other through the resolver", async () => {
+    const forImage = vi.fn((id: string, svg: string) => `${svg}<!-- ${id} cleaned -->`);
+    const { result } = renderHook(() => useExports(state(a, b), a, "<svg edited/>", DEFAULT_SETTINGS, () => {}, forImage));
+    await act(() => result.current.exportAll());
+    expect(mocks.platform.exportAll.mock.calls[0][0]).toEqual([
+      { id: "a", name: "logo.svg", svg: "<svg edited/>" },
+      { id: "b", name: "photo.svg", svg: '<svg id="b"/><!-- b cleaned -->' },
+    ]);
+    await act(() => result.current.exportImage("svg", 1, b));
+    expect(text(mocks.platform.exportFile.mock.calls[0][0].bytes)).toBe('<svg id="b"/><!-- b cleaned -->');
+  });
+
+  it("names at most three of the images that could not be exported", async () => {
+    const f = (n: number) => ({ id: `i${n}`, name: `n${n}.svg`, message: "first reason" });
+    mocks.platform.exportAll.mockResolvedValue({ written: [], failed: [1, 2, 3, 4, 5].map(f) });
+    const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS));
+    await act(() => result.current.exportAll());
+    expect(mocks.error).toHaveBeenCalledWith("5 images could not be exported: \u201cn1.svg\u201d, \u201cn2.svg\u201d, \u201cn3.svg\u201d and 2 more. first reason");
+  });
 });

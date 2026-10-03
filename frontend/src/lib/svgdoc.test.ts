@@ -139,3 +139,8 @@ test("a shape count of one is singular, and an SVG that does not parse has no co
   expect(svgStats('<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>')).toEqual({ shapes: 1, nodes: 0 });
   expect(svgStats("not svg")).toBeNull();
 });
+
+test("shapes inside clipPath, mask, pattern, symbol and marker are not painted", () => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><clipPath id="c"><rect width="4" height="4"/></clipPath><mask id="m"><circle r="2"/></mask><pattern id="p"><path d="M0 0L1 1"/></pattern><symbol id="s"><rect width="1" height="1"/></symbol><marker id="k"><path d="M0 0L1 1"/></marker><rect width="8" height="8" clip-path="url(#c)"/></svg>`;
+  expect(svgStats(svg)).toEqual({ shapes: 1, nodes: 0 });
+});
