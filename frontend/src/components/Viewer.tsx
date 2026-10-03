@@ -42,6 +42,10 @@ const MIN_SCALE = 0.05;
 const MAX_SCALE = 32;
 const STEP = 1.25;
 const PAD = 32;
+// The toolbar floats over the foot of the viewport (44 px tall, 12 px up from the edge): a fit leaves its space, plus a little air, below the image.
+const BOTTOM_INSET = 44 + 12 + 8;
+// ... and the corner chips (12 px down, 22 px tall) stay clear of the top edge.
+const TOP_INSET = 40;
 
 // Space belongs to a text field, and to a control it would otherwise activate (preventing keydown cancels a button's click).
 const keepsSpace = (target: EventTarget | null) =>
@@ -75,8 +79,9 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
   const paneW = mode === "side" ? size.w / 2 : size.w;
   const fitTransform = useCallback((): Transform => {
     if (!paneW || !size.h || !width || !height) return { scale: 1, x: 0, y: 0 };
-    const scale = Math.max(MIN_SCALE, Math.min((paneW - PAD * 2) / width, (size.h - PAD * 2) / height));
-    return { scale, x: (paneW - width * scale) / 2, y: (size.h - height * scale) / 2 };
+    const availH = Math.max(1, size.h - TOP_INSET - BOTTOM_INSET);
+    const scale = Math.max(MIN_SCALE, Math.min((paneW - PAD * 2) / width, availH / height));
+    return { scale, x: (paneW - width * scale) / 2, y: TOP_INSET + (availH - height * scale) / 2 };
   }, [paneW, size.h, width, height]);
 
   useLayoutEffect(() => {
@@ -97,7 +102,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
   const zoomTo = useCallback(
     (scale: number | "fit") => {
       touched.current = scale !== "fit";
-      setT(scale === "fit" ? fitTransform() : { scale, x: (paneW - width * scale) / 2, y: (size.h - height * scale) / 2 });
+      setT(scale === "fit" ? fitTransform() : { scale, x: (paneW - width * scale) / 2, y: TOP_INSET + (Math.max(1, size.h - TOP_INSET - BOTTOM_INSET) - height * scale) / 2 });
     },
     [fitTransform, paneW, size.h, width, height],
   );
@@ -292,7 +297,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
                 {marksNode}
               </>
             )}
-            {mode === "split" && (
+            {/* The divider and its handle wait for a vector: before that the centre of the viewport belongs to the hint, the busy pill and the error card. */}
+            {mode === "split" && svg && (
               <>
                 <div
                   role="separator"
@@ -314,10 +320,10 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
                     <ChevronRight className="-ml-1 h-3.5 w-3.5" aria-hidden="true" />
                   </div>
                 </div>
-                {chip("Original", "left-3")}
-                {chip("Vector", "right-3")}
               </>
             )}
+            {mode === "split" && chip("Original", "left-3")}
+            {mode === "split" && chip("Vector", "right-3")}
             {mode === "overlay" && chip("Overlay", "left-1/2 -translate-x-1/2")}
             {mode === "vector" && chip("Vector", "left-1/2 -translate-x-1/2")}
           </>

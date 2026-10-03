@@ -21,7 +21,9 @@ pub struct AppState {
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Settings is a fixed-size window of its own: a remembered size (it was 520x400 once) would override the one
+        // the code gives it, and the sheet would scroll again.
+        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["settings"]).build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())

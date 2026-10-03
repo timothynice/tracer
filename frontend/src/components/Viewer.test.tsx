@@ -41,6 +41,15 @@ describe("Viewer", () => {
     expect(divider).toHaveAttribute("aria-valuenow", "52");
   });
 
+  it("the divider and its handle wait for a vector, so the hint never sits on them", () => {
+    const { props, rerender } = setup({ svg: undefined });
+    expect(screen.queryByRole("separator", { name: /comparison divider/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Press Generate Vector/)).toBeInTheDocument();
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    rerender(<Viewer {...props} svg={SVG} />);
+    expect(screen.getByRole("separator", { name: /comparison divider/i })).toBeInTheDocument();
+  });
+
   it("the mode is the caller's: the tabs ask for a change, the prop decides", () => {
     const { props, rerender } = setup();
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Vector" }));
@@ -195,8 +204,12 @@ describe("Viewer refit on resize", () => {
     size.w = size.h = side;
     act(() => resized!({ width: side, height: side }));
   };
-  // a 64 px image with 32 px of padding: (side - 64) / 64, centred
-  const fitted = (side: number) => `translate(${(side - 64 * ((side - 64) / 64)) / 2}px, ${(side - 64 * ((side - 64) / 64)) / 2}px) scale(${(side - 64) / 64})`;
+  // a 64 px image with 32 px of padding, fitted above the toolbar (56 px + 8 px of air below, 40 px above for the chips), centred in what is left
+  const fitted = (side: number) => {
+    const availH = side - 40 - 64;
+    const scale = Math.min((side - 64) / 64, availH / 64);
+    return `translate(${(side - 64 * scale) / 2}px, ${40 + (availH - 64 * scale) / 2}px) scale(${scale})`;
+  };
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -210,6 +223,15 @@ describe("Viewer refit on resize", () => {
     expect(img.style.transform).toBe(fitted(464));
     resize(264);
     expect(img.style.transform).toBe(fitted(264));
+  });
+
+  it("a fit leaves the toolbar's space: the image's bottom edge clears the toolbar's top", () => {
+    mount();
+    const img = screen.getByAltText("Source raster");
+    const m = /translate\(([\d.]+)px, ([\d.]+)px\) scale\(([\d.]+)\)/.exec(img.style.transform)!;
+    const bottom = Number(m[2]) + 64 * Number(m[3]);
+    expect(bottom).toBeLessThanOrEqual(size.h - 12 - 44);
+    expect(Number(m[2])).toBeGreaterThanOrEqual(40);
   });
 
   it("a panned or zoomed view stays where the user left it", () => {
