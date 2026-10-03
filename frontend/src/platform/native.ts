@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ApiError, apiErrorFromBody, type EngineDescription, type Preset, type VectorizeResponse } from "@/lib/api";
-import { DEFAULT_SETTINGS, type MenuCommand, type OpenFailure, type OpenOutcome, type Platform, type Settings } from "./types";
+import { DEFAULT_SETTINGS, type ExportAllResult, type MenuCommand, type OpenFailure, type OpenOutcome, type Platform, type Settings } from "./types";
 
 interface CommandError {
   status: number;
@@ -132,7 +132,7 @@ export function nativePlatform(): Platform {
         "x-destination": settings.exportTo,
         "x-reveal": settings.revealAfterExport ? "1" : "0",
       }),
-    exportAll: (files, settings) => call<string[] | null>("export_all", { items: files, reveal: settings.revealAfterExport }),
+    exportAll: (files, settings) => call<ExportAllResult | null>("export_all", { items: files, reveal: settings.revealAfterExport }),
     copyText: (text) => call<void>("copy_text", { text }),
     reveal: (path) => call<void>("reveal", { path }),
     loadSettings: async () => ({ ...DEFAULT_SETTINGS, ...(await call<Partial<Settings>>("load_settings")) }),

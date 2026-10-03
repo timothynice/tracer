@@ -54,12 +54,21 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
       exclusive(async () => {
         const traced = state.items.filter((i) => shownAnswer(i));
         // the selected image goes as it is on screen, with the layer inspector's edits
-        const files = traced.map((i) => ({ name: `${baseName(i.image.name)}.svg`, svg: i.image.id === item?.image.id && svg ? svg : shownAnswer(i)!.svg }));
+        const files = traced.map((i) => ({ id: i.image.id, name: `${baseName(i.image.name)}.svg`, svg: i.image.id === item?.image.id && svg ? svg : shownAnswer(i)!.svg }));
         if (!files.length) return;
         try {
-          const written = await platform.exportAll(files, settings);
-          if (written) onExported(traced.map((i) => ({ id: i.image.id, key: i.shown! })));
-          if (written && platform.kind === "native") toast.success(`Exported ${written.length} ${written.length === 1 ? "file" : "files"}`);
+          const answer = await platform.exportAll(files, settings);
+          if (!answer) return;
+          // only the images that were written count as exported
+          const lost = new Set(answer.failed.map((f) => f.id));
+          const marks = traced.filter((i) => !lost.has(i.image.id)).map((i) => ({ id: i.image.id, key: i.shown! }));
+          if (marks.length) onExported(marks);
+          const { written, failed } = answer;
+          const noun = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
+          if (failed.length) {
+            const names = failed.map((f) => `\u201c${f.name}\u201d`).join(", ");
+            toast.error(`${written.length ? `Exported ${written.length} of ${files.length} files` : "Nothing was exported"}. Could not export ${names}: ${failed[0].message}`);
+          } else if (platform.kind === "native") toast.success(`Exported ${noun(written.length)}`);
         } catch (err) {
           toast.error((err as Error).message);
         }

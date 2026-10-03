@@ -1,7 +1,10 @@
 //! Writing exports. The UI hands over the bytes and a suggested name; this side picks the place (a save panel,
 //! or beside the original, named as Finder names copies) and writes, so the webview never names a path to write.
 use crate::error::CommandError;
+use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 
 /// A suggested file name made safe to write: no folders, not hidden, not empty.
@@ -27,14 +30,108 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
     (2..).map(|n| dir.join(format!("{stem} {n}{ext}"))).find(|c| !c.exists()).expect("a free name")
 }
 
+/// A temporary file's name: short whatever the target's name is (a name of 255 bytes leaves no room to add to it),
+/// and never the same twice in a process (the process id and a counter; the file is also made with `create_new`).
+fn temp_name() -> String {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    format!(".s0t-{:08x}{:08x}.tmp", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+fn write_io(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tries = 0;
+    let (tmp, mut file) = loop {
+        let tmp = path.with_file_name(temp_name());
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 16 => tries += 1,
+            Err(e) => return Err(e),
+        }
+    };
+    file.write_all(bytes).and_then(|_| file.sync_all()).and_then(|_| std::fs::rename(&tmp, path)).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 /// Write through a temporary file in the same folder, so nothing ever sees half a file.
 pub fn write_file(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.studi0trace-tmp"));
-    std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path)).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        CommandError::io(path, &e)
+    write_io(path, bytes).map_err(|e| CommandError::io_write(path, &e))
+}
+
+/// A write that did not happen. `elsewhere` says the place is the trouble (a folder that is gone, read-only or
+/// not ours), so another place may do; a refusal, a long name or a full disk will not be mended by one.
+#[derive(Debug)]
+pub struct WriteError {
+    pub error: CommandError,
+    pub elsewhere: bool,
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    if let (Ok(x), Ok(y)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+        return (x.dev(), x.ino()) == (y.dev(), y.ino());
+    }
+    // not there yet: the same folder and the same name
+    let resolve = |p: &Path| Some(p.parent()?.canonicalize().ok()?.join(p.file_name()?));
+    matches!((resolve(a), resolve(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// [`write_file`] for an export of `original`'s trace: it refuses to write over the original itself.
+pub fn save(path: &Path, bytes: &[u8], original: Option<&Path>) -> Result<(), WriteError> {
+    if original.is_some_and(|o| same_file(path, o)) {
+        return Err(WriteError { error: CommandError::new(400, "is_original", "That is the original image; choose another name."), elsewhere: false });
+    }
+    write_io(path, bytes).map_err(|e| {
+        use std::io::ErrorKind::{NotFound, PermissionDenied, ReadOnlyFilesystem};
+        WriteError { error: CommandError::io_write(path, &e), elsewhere: matches!(e.kind(), NotFound | PermissionDenied | ReadOnlyFilesystem) }
     })
+}
+
+/// The name a save panel suggests: `name`, unless that is the original's own file name (a 1× PNG of `logo.png`),
+/// which would offer to replace it; then `stem.traced.ext`.
+pub fn panel_name(name: &str, original: Option<&Path>) -> String {
+    let same = original.and_then(|o| o.file_name()).is_some_and(|o| o.to_string_lossy().eq_ignore_ascii_case(name));
+    if !same {
+        return name.to_string();
+    }
+    let p = Path::new(name);
+    match (p.file_stem(), p.extension()) {
+        (Some(stem), Some(ext)) => format!("{}.traced.{}", stem.to_string_lossy(), ext.to_string_lossy()),
+        _ => format!("{name}.traced"),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Item {
+    pub id: String,
+    pub name: String,
+    pub svg: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Failure {
+    pub id: String,
+    pub name: String,
+    pub message: String,
+}
+
+/// Export All's answer: what was written and what was not.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Written {
+    pub written: Vec<String>,
+    pub failed: Vec<Failure>,
+}
+
+/// Every item into `dir` under a free name; a write that fails is reported and the rest go on.
+pub fn write_all(dir: &Path, items: &[Item]) -> Written {
+    let mut answer = Written { written: Vec::new(), failed: Vec::new() };
+    for item in items {
+        let path = unique_path(dir, &safe_name(&item.name, "svg"));
+        match write_file(&path, item.svg.as_bytes()) {
+            Ok(()) => answer.written.push(path.display().to_string()),
+            Err(e) => answer.failed.push(Failure { id: item.id.clone(), name: item.name.clone(), message: e.message().to_string() }),
+        }
+    }
+    answer
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,5 +209,105 @@ mod tests {
         assert_eq!(beside(None, Destination::Beside, "logo.svg"), None);
         assert_eq!(Destination::parse("beside"), Destination::Beside);
         assert_eq!(Destination::parse("anything"), Destination::Ask);
+    }
+
+    #[test]
+    fn a_png_that_would_be_named_like_the_original_is_named_traced() {
+        let orig = Path::new("/p/logo.png");
+        assert_eq!(panel_name("logo.png", Some(orig)), "logo.traced.png");
+        assert_eq!(panel_name("LOGO.PNG", Some(orig)), "LOGO.traced.PNG");
+        assert_eq!(panel_name("logo@2x.png", Some(orig)), "logo@2x.png");
+        assert_eq!(panel_name("logo.svg", Some(orig)), "logo.svg");
+        assert_eq!(panel_name("logo.png", None), "logo.png");
+    }
+
+    #[test]
+    fn the_original_is_never_written_over() {
+        let dir = temp("original");
+        let original = dir.join("logo.png");
+        std::fs::write(&original, b"original").unwrap();
+        let refused = save(&original, b"x", Some(&original)).unwrap_err();
+        assert_eq!(refused.error.code(), Some("is_original"));
+        assert_eq!(refused.error.body["detail"]["message"], "That is the original image; choose another name.");
+        assert!(!refused.elsewhere);
+        // the same file by another spelling: a dot segment, a hard link, a symlink
+        assert_eq!(save(&dir.join(".").join("logo.png"), b"x", Some(&original)).unwrap_err().error.code(), Some("is_original"));
+        let link = dir.join("link.png");
+        std::fs::hard_link(&original, &link).unwrap();
+        assert_eq!(save(&link, b"x", Some(&original)).unwrap_err().error.code(), Some("is_original"));
+        let sym = dir.join("sym.png");
+        std::os::unix::fs::symlink(&original, &sym).unwrap();
+        assert_eq!(save(&sym, b"x", Some(&original)).unwrap_err().error.code(), Some("is_original"));
+        assert_eq!(std::fs::read(&original).unwrap(), b"original");
+        // another name is fine, and so is no original at all
+        save(&dir.join("logo.traced.png"), b"traced", Some(&original)).unwrap();
+        save(&dir.join("other.png"), b"o", None).unwrap();
+        assert_eq!(std::fs::read(dir.join("logo.traced.png")).unwrap(), b"traced");
+    }
+
+    #[test]
+    fn a_name_of_the_longest_length_writes() {
+        let dir = temp("long");
+        let name = format!("{}.svg", "n".repeat(251)); // 255 bytes: the most a name can be
+        let path = dir.join(&name);
+        write_file(&path, b"<svg/>").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"<svg/>");
+        write_file(&path, b"<svg>2</svg>").unwrap();
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().len()).collect();
+        assert_eq!(names, vec![255]);
+    }
+
+    #[test]
+    fn temporary_names_are_short_and_do_not_repeat() {
+        let a = temp_name();
+        let b = temp_name();
+        assert_ne!(a, b);
+        for n in [&a, &b] {
+            assert!(n.starts_with(".s0t-") && n.ends_with(".tmp") && n.len() == ".s0t-".len() + 16 + ".tmp".len(), "{n}");
+            assert!(n[5..21].chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_written_asks_for_another_place() {
+        let dir = temp("fallback");
+        // a folder that is gone
+        let gone = save(&dir.join("vanished").join("x.svg"), b"x", None).unwrap_err();
+        assert!(gone.elsewhere);
+        assert!(gone.error.body["detail"]["message"].as_str().unwrap().contains("could not be found"));
+        // a folder that is read-only
+        use std::os::unix::fs::PermissionsExt;
+        let ro = dir.join("ro");
+        std::fs::create_dir_all(&ro).unwrap();
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let denied = save(&ro.join("x.svg"), b"x", None);
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if let Err(e) = denied {
+            // (root can write anywhere; everyone else is told the folder cannot be written)
+            assert!(e.elsewhere);
+            assert_eq!(e.error.body["detail"]["message"], "Studi0Trace cannot write to the folder of \u{201c}x.svg\u{201d}.");
+        }
+        assert!(!ro.join("x.svg").exists() || std::fs::read(ro.join("x.svg")).is_ok());
+        // a failure that another place would not mend does not ask for one
+        let long = save(&dir.join(format!("{}.svg", "n".repeat(300))), b"x", None).unwrap_err();
+        assert!(!long.elsewhere);
+    }
+
+    #[test]
+    fn export_all_writes_what_it_can_and_names_what_it_could_not() {
+        let dir = temp("all");
+        std::fs::write(dir.join("a.svg"), "old").unwrap();
+        let items = vec![
+            Item { id: "1".into(), name: "a.svg".into(), svg: "<svg>1</svg>".into() },
+            Item { id: "2".into(), name: format!("{}.svg", "n".repeat(300)), svg: "<svg>2</svg>".into() },
+            Item { id: "3".into(), name: "c.svg".into(), svg: "<svg>3</svg>".into() },
+        ];
+        let answer = write_all(&dir, &items);
+        assert_eq!(answer.written, vec![dir.join("a 2.svg").display().to_string(), dir.join("c.svg").display().to_string()]);
+        assert_eq!(answer.failed.len(), 1);
+        assert_eq!((answer.failed[0].id.as_str(), answer.failed[0].name.as_str()), ("2", items[1].name.as_str()));
+        assert!(!answer.failed[0].message.contains(&dir.display().to_string()));
+        assert_eq!(std::fs::read(dir.join("a.svg")).unwrap(), b"old");
+        assert_eq!(std::fs::read(dir.join("c.svg")).unwrap(), b"<svg>3</svg>");
     }
 }

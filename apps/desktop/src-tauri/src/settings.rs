@@ -29,6 +29,24 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Read field by field: start from the defaults and take each key that holds its own type, so one wrong-typed
+    /// key (or one the app does not know) costs only itself, not the other settings and the recent list.
+    pub fn from_value(value: &serde_json::Value) -> Settings {
+        fn take<T: serde::de::DeserializeOwned>(value: &serde_json::Value, key: &str, into: &mut T) {
+            if let Some(v) = value.get(key).and_then(|v| serde_json::from_value(v.clone()).ok()) {
+                *into = v;
+            }
+        }
+        let mut s = Settings::default();
+        take(value, "appearance", &mut s.appearance);
+        take(value, "exportTo", &mut s.export_to);
+        take(value, "revealAfterExport", &mut s.reveal_after_export);
+        take(value, "traceOnOpen", &mut s.trace_on_open);
+        take(value, "liveUpdate", &mut s.live_update);
+        take(value, "recent", &mut s.recent);
+        s
+    }
+
     pub fn with_recent(mut self, path: &str) -> Settings {
         self.recent.retain(|p| p != path);
         self.recent.insert(0, path.to_string());
@@ -48,7 +66,7 @@ impl Settings {
 }
 
 pub fn load<R: Runtime>(app: &AppHandle<R>) -> Settings {
-    app.store(FILE).ok().and_then(|s| s.get(KEY)).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    app.store(FILE).ok().and_then(|s| s.get(KEY)).map(|v| Settings::from_value(&v)).unwrap_or_default()
 }
 
 /// Held around every load → change → save, so two writers (a save from the UI, a file opened in a batch, Clear
@@ -100,6 +118,16 @@ mod tests {
         // a file from an older version, missing keys, still reads
         let old: Settings = serde_json::from_value(serde_json::json!({"appearance": "dark"})).unwrap();
         assert_eq!((old.appearance.as_str(), old.live_update), ("dark", true));
+    }
+
+    #[test]
+    fn one_wrong_typed_key_costs_only_that_key() {
+        let s = Settings::from_value(&serde_json::json!({"appearance": 3, "recent": ["/a.png"], "liveUpdate": false, "mystery": 1}));
+        assert_eq!((s.appearance.as_str(), s.recent.as_slice(), s.live_update), ("system", ["/a.png".to_string()].as_slice(), false));
+        let s = Settings::from_value(&serde_json::json!({"recent": "nope", "exportTo": "beside", "traceOnOpen": "yes", "revealAfterExport": true}));
+        assert_eq!((s.export_to.as_str(), s.recent.len(), s.trace_on_open, s.reveal_after_export), ("beside", 0, false, true));
+        assert_eq!(Settings::from_value(&serde_json::json!([1, 2])), Settings::default());
+        assert_eq!(Settings::from_value(&serde_json::json!({})), Settings::default());
     }
 
     #[test]

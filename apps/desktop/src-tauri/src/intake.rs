@@ -212,7 +212,7 @@ pub fn open_bytes(core: &Core, name: &str, bytes: Vec<u8>) -> Result<OpenImage, 
         return admit(core, name, None, bytes);
     }
     let tmp = scratch("img");
-    std::fs::write(&tmp, &bytes).map_err(|e| CommandError::io(&tmp, &e))?;
+    std::fs::write(&tmp, &bytes).map_err(|e| CommandError::io_write(&tmp, &e))?;
     drop(bytes);
     let opened = open_file(core, name, &tmp, None, false);
     let _ = std::fs::remove_file(&tmp);

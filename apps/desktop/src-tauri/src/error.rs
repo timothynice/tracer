@@ -20,6 +20,11 @@ impl CommandError {
         self.body["detail"]["code"].as_str()
     }
 
+    /// The words the user reads.
+    pub fn message(&self) -> &str {
+        self.body["detail"]["message"].as_str().unwrap_or_default()
+    }
+
     pub fn cancelled() -> Self {
         Self::new(499, "cancelled", "The trace was cancelled")
     }
@@ -42,8 +47,28 @@ impl CommandError {
         Self::new(400, "conversion_failed", format!("macOS could not convert {name}: {why}"))
     }
 
+    /// A file that could not be read, in words for a person: the file's name, never its path or the errno (those
+    /// go to stderr).
     pub fn io(path: &Path, err: &std::io::Error) -> Self {
-        Self::new(500, "io_error", format!("{}: {err}", path.display()))
+        Self::file_error(path, err, false)
+    }
+
+    /// A file that could not be written (see [`CommandError::io`]).
+    pub fn io_write(path: &Path, err: &std::io::Error) -> Self {
+        Self::file_error(path, err, true)
+    }
+
+    fn file_error(path: &Path, err: &std::io::Error, writing: bool) -> Self {
+        use std::io::ErrorKind::{NotFound, PermissionDenied, ReadOnlyFilesystem};
+        eprintln!("studi0trace: {} {}: {err}", if writing { "writing" } else { "reading" }, path.display());
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
+        let message = match err.kind() {
+            NotFound => format!("\u{201c}{name}\u{201d} could not be found. It may have been moved or deleted."),
+            PermissionDenied | ReadOnlyFilesystem if writing => format!("Studi0Trace cannot write to the folder of \u{201c}{name}\u{201d}."),
+            PermissionDenied | ReadOnlyFilesystem => format!("Studi0Trace cannot read \u{201c}{name}\u{201d}."),
+            _ => format!("\u{201c}{name}\u{201d}: {}", without_errno(&err.to_string())),
+        };
+        Self::new(500, "io_error", message)
     }
 
     /// The core's own words for an id it does not hold.
@@ -53,6 +78,14 @@ impl CommandError {
 
     pub fn bad_request(why: impl Into<String>) -> Self {
         Self::new(400, "bad_request", why)
+    }
+}
+
+/// `Permission denied (os error 13)` → `Permission denied`.
+fn without_errno(text: &str) -> &str {
+    match text.rfind(" (os error ") {
+        Some(i) if text.ends_with(')') => &text[..i],
+        _ => text,
     }
 }
 
@@ -84,6 +117,43 @@ mod tests {
         assert_eq!(other.code(), Some("engine_crashed"));
     }
 
+    fn kind(k: std::io::ErrorKind) -> std::io::Error {
+        std::io::Error::from(k)
+    }
+    fn words(e: &CommandError) -> &str {
+        e.body["detail"]["message"].as_str().unwrap()
+    }
+
+    #[test]
+    fn a_file_that_is_not_there_says_it_may_have_moved() {
+        let p = Path::new("/Users/t/Pictures/old/logo.png");
+        for e in [CommandError::io(p, &kind(std::io::ErrorKind::NotFound)), CommandError::io_write(p, &kind(std::io::ErrorKind::NotFound))] {
+            assert_eq!(e.code(), Some("io_error"));
+            assert_eq!(words(&e), "\u{201c}logo.png\u{201d} could not be found. It may have been moved or deleted.");
+        }
+    }
+
+    #[test]
+    fn permission_and_read_only_name_the_file_and_not_the_path() {
+        let p = Path::new("/Volumes/Disc/ro-logo.svg");
+        let denied = kind(std::io::ErrorKind::PermissionDenied);
+        let read_only = std::io::Error::from_raw_os_error(30); // EROFS
+        assert_eq!(words(&CommandError::io_write(p, &denied)), "Studi0Trace cannot write to the folder of \u{201c}ro-logo.svg\u{201d}.");
+        assert_eq!(words(&CommandError::io_write(p, &read_only)), "Studi0Trace cannot write to the folder of \u{201c}ro-logo.svg\u{201d}.");
+        assert_eq!(words(&CommandError::io(p, &denied)), "Studi0Trace cannot read \u{201c}ro-logo.svg\u{201d}.");
+        assert_eq!(words(&CommandError::io(p, &read_only)), "Studi0Trace cannot read \u{201c}ro-logo.svg\u{201d}.");
+    }
+
+    #[test]
+    fn anything_else_keeps_its_reason_without_the_errno() {
+        let p = Path::new("/a/b/c/long.svg");
+        let too_long = std::io::Error::from_raw_os_error(63); // ENAMETOOLONG
+        let m = words(&CommandError::io_write(p, &too_long)).to_string();
+        assert!(m.starts_with("\u{201c}long.svg\u{201d}: ") && !m.contains("os error") && !m.contains("/a/b"), "{m}");
+        let plain = std::io::Error::new(std::io::ErrorKind::Other, "disk is on fire");
+        assert_eq!(words(&CommandError::io(p, &plain)), "\u{201c}long.svg\u{201d}: disk is on fire");
+    }
+
     #[test]
     fn the_apps_own_codes() {
         assert_eq!(CommandError::cancelled().code(), Some("cancelled"));
@@ -91,6 +161,6 @@ mod tests {
         assert_eq!(CommandError::expired().code(), Some("image_expired"));
         let e = CommandError::io(std::path::Path::new("/nope/x.png"), &std::io::Error::from(std::io::ErrorKind::NotFound));
         assert_eq!(e.code(), Some("io_error"));
-        assert!(e.body["detail"]["message"].as_str().unwrap().starts_with("/nope/x.png: "));
+        assert!(!words(&e).contains("/nope"));
     }
 }

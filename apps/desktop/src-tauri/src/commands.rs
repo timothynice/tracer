@@ -103,7 +103,6 @@ pub fn cancel_trace(state: State<'_, AppState>, job: String) -> bool {
 }
 
 use crate::export;
-use serde::Deserialize;
 use std::path::Path;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
@@ -125,50 +124,50 @@ pub async fn export_file(app: tauri::AppHandle, state: State<'_, AppState>, requ
     let name = export::safe_name(&header(&request, "x-name").unwrap_or_default(), ext);
     let original = header(&request, "x-image").and_then(|id| state.images.get(&id)).and_then(|i| i.path);
     let destination = export::Destination::parse(&header(&request, "x-destination").unwrap_or_default());
-    let path = match export::beside(original.as_deref(), destination, &name) {
-        Some(p) => p,
-        None => {
-            let mut panel = app.dialog().file().set_title(if ext == "png" { "Export PNG" } else { "Export SVG" }).set_file_name(&name).add_filter(if ext == "png" { "PNG image" } else { "SVG image" }, &[ext]);
-            if let Some(dir) = original.as_deref().and_then(Path::parent) {
-                panel = panel.set_directory(dir);
-            }
-            match panel.blocking_save_file() {
-                Some(fp) => panel_path(fp)?,
-                None => return Ok(None),
-            }
+    let reveal = header(&request, "x-reveal").as_deref() == Some("1");
+    let done = |path: &Path| {
+        if reveal {
+            let _ = app.opener().reveal_item_in_dir(path);
         }
+        Ok(Some(path.display().to_string()))
     };
-    export::write_file(&path, bytes)?;
-    if header(&request, "x-reveal").as_deref() == Some("1") {
-        let _ = app.opener().reveal_item_in_dir(&path);
+    if let Some(path) = export::beside(original.as_deref(), destination, &name) {
+        match export::save(&path, bytes, original.as_deref()) {
+            Ok(()) => return done(&path),
+            // a read-only volume or a folder that is gone: the same export through the panel instead
+            Err(e) if e.elsewhere => eprintln!("studi0trace: export beside the original failed ({}); asking where", e.error.message()),
+            Err(e) => return Err(e.error),
+        }
     }
-    Ok(Some(path.display().to_string()))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ExportItem {
-    pub name: String,
-    pub svg: String,
+    let mut panel = app
+        .dialog()
+        .file()
+        .set_title(if ext == "png" { "Export PNG" } else { "Export SVG" })
+        .set_file_name(export::panel_name(&name, original.as_deref()))
+        .add_filter(if ext == "png" { "PNG image" } else { "SVG image" }, &[ext]);
+    if let Some(dir) = original.as_deref().and_then(Path::parent).filter(|d| d.is_dir()) {
+        panel = panel.set_directory(dir);
+    }
+    let Some(chosen) = panel.blocking_save_file() else {
+        return Ok(None);
+    };
+    let path = panel_path(chosen)?;
+    export::save(&path, bytes, original.as_deref()).map_err(|e| e.error)?;
+    done(&path)
 }
 
 #[tauri::command]
-pub async fn export_all(app: tauri::AppHandle, items: Vec<ExportItem>, reveal: bool) -> Result<Option<Vec<String>>, CommandError> {
+pub async fn export_all(app: tauri::AppHandle, items: Vec<export::Item>, reveal: bool) -> Result<Option<export::Written>, CommandError> {
     let Some(dir) = app.dialog().file().set_title("Export All").blocking_pick_folder() else {
         return Ok(None);
     };
-    let dir = panel_path(dir)?;
-    let mut written = Vec::new();
-    for item in items {
-        let path = export::unique_path(&dir, &export::safe_name(&item.name, "svg"));
-        export::write_file(&path, item.svg.as_bytes())?;
-        written.push(path.display().to_string());
-    }
+    let answer = export::write_all(&panel_path(dir)?, &items);
     if reveal {
-        if let Some(first) = written.first() {
+        if let Some(first) = answer.written.first() {
             let _ = app.opener().reveal_item_in_dir(first);
         }
     }
-    Ok(Some(written))
+    Ok(Some(answer))
 }
 
 #[tauri::command]

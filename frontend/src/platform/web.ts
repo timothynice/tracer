@@ -79,7 +79,7 @@ export function webPlatform(): Platform {
     },
     async exportAll(files) {
       for (const f of files) downloadBlob(new Blob([f.svg], { type: "image/svg+xml" }), f.name);
-      return files.map((f) => f.name);
+      return { written: files.map((f) => f.name), failed: [] };
     },
     copyText: (text) => navigator.clipboard.writeText(text),
     reveal: async () => {},

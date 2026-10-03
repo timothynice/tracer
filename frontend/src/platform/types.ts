@@ -100,6 +100,12 @@ export interface ExportFile {
   bytes: Uint8Array<ArrayBuffer>;
 }
 
+/** Export All's answer: the paths written, and the images that could not be (`id` is the one the call was given). */
+export interface ExportAllResult {
+  written: string[];
+  failed: { id: string; name: string; message: string }[];
+}
+
 export interface Platform {
   readonly kind: "native" | "web";
   engines(signal?: AbortSignal): Promise<EngineDescription[]>;
@@ -114,7 +120,8 @@ export interface Platform {
   vectorize(req: TraceRequest, opts: TraceOptions): Promise<VectorizeResponse>;
   /** The path written; null when the save panel was cancelled. In a browser the file is downloaded and this is its name. */
   exportFile(file: ExportFile, settings: Settings): Promise<string | null>;
-  exportAll(files: { name: string; svg: string }[], settings: Settings): Promise<string[] | null>;
+  /** Writes every file it can; null when the folder panel was cancelled. */
+  exportAll(files: { id: string; name: string; svg: string }[], settings: Settings): Promise<ExportAllResult | null>;
   copyText(text: string): Promise<void>;
   reveal(path: string): Promise<void>;
   loadSettings(): Promise<Settings>;

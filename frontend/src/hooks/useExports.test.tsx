@@ -38,7 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.platform.kind = "native";
   mocks.platform.exportFile.mockResolvedValue("/Users/t/logo.svg");
-  mocks.platform.exportAll.mockResolvedValue(["/x/logo.svg"]);
+  mocks.platform.exportAll.mockResolvedValue({ written: ["/x/logo.svg"], failed: [] });
   mocks.platform.copyText.mockResolvedValue(undefined);
   mocks.png.mockResolvedValue(new Blob([new Uint8Array([1, 2, 3])]));
 });
@@ -125,8 +125,8 @@ describe("useExports", () => {
     await act(() => result.current.exportAll());
     expect(mocks.platform.exportAll).toHaveBeenCalledWith(
       [
-        { name: "logo.svg", svg: "<svg edited/>" },
-        { name: "photo.svg", svg: '<svg id="b"/>' },
+        { id: "a", name: "logo.svg", svg: "<svg edited/>" },
+        { id: "b", name: "photo.svg", svg: '<svg id="b"/>' },
       ],
       DEFAULT_SETTINGS,
     );
@@ -155,6 +155,25 @@ describe("useExports", () => {
     await act(() => result.current.exportAll());
     await act(() => result.current.copySvg());
     expect(marked).not.toHaveBeenCalled();
+  });
+
+  it("Export All marks only the images written, and says how many and which ones were not", async () => {
+    const marked = vi.fn();
+    mocks.platform.exportAll.mockResolvedValue({ written: ["/x/logo.svg"], failed: [{ id: "b", name: "photo.svg", message: "Studi0Trace cannot write to the folder of \u201cphoto.svg\u201d." }] });
+    const { result } = renderHook(() => useExports(state(a, b, c), a, "<svg/>", DEFAULT_SETTINGS, marked));
+    await act(() => result.current.exportAll());
+    expect(marked).toHaveBeenCalledWith([{ id: "a", key }]);
+    expect(mocks.success).not.toHaveBeenCalled();
+    expect(mocks.error).toHaveBeenCalledWith("Exported 1 of 2 files. Could not export \u201cphoto.svg\u201d: Studi0Trace cannot write to the folder of \u201cphoto.svg\u201d.");
+  });
+
+  it("Export All with nothing written marks nothing and says so", async () => {
+    const marked = vi.fn();
+    mocks.platform.exportAll.mockResolvedValue({ written: [], failed: [{ id: "a", name: "logo.svg", message: "no" }] });
+    const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS, marked));
+    await act(() => result.current.exportAll());
+    expect(marked).not.toHaveBeenCalled();
+    expect(mocks.error).toHaveBeenCalledWith("Nothing was exported. Could not export \u201clogo.svg\u201d: no");
   });
 
   it("marks the selected image by the trace on screen now, which its bytes came from, not by an older copy's", async () => {

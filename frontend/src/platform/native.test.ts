@@ -87,6 +87,14 @@ describe("native platform", () => {
     expect(calls[0].payload).toEqual(bytes);
   });
 
+  it("sends Export All its images by id and returns what was written and what was not", async () => {
+    const answer = { written: ["/out/a.svg"], failed: [{ id: "b", name: "b.svg", message: "no" }] };
+    ipc((cmd) => (cmd === "export_all" ? answer : null));
+    const files = [{ id: "a", name: "a.svg", svg: "<svg/>" }, { id: "b", name: "b.svg", svg: "<svg/>" }];
+    expect(await nativePlatform().exportAll(files, DEFAULT_SETTINGS)).toEqual(answer);
+    expect(calls[0].payload).toEqual({ items: files, reveal: false });
+  });
+
   it("hands the app's open failures over as failures with their code", async () => {
     ipc(() => null);
     const got: unknown[] = [];
