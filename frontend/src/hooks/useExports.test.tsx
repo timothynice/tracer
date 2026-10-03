@@ -157,6 +157,14 @@ describe("useExports", () => {
     expect(marked).not.toHaveBeenCalled();
   });
 
+  it("marks the selected image by the trace on screen now, which its bytes came from, not by an older copy's", async () => {
+    const marked = vi.fn();
+    const { result } = renderHook(() => useExports(state(a), a, "<svg edited/>", DEFAULT_SETTINGS, marked));
+    const older = { ...a, shown: "an-earlier-trace" }; // a context menu's copy from before the latest trace took the screen
+    await act(() => result.current.exportImage("svg", 1, older));
+    expect(marked).toHaveBeenLastCalledWith([{ id: "a", key }]);
+  });
+
   it("ignores an export asked for while a save panel is still open", async () => {
     let close: (path: string | null) => void = () => {};
     mocks.platform.exportFile.mockReturnValue(new Promise((r) => (close = r)));

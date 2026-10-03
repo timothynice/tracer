@@ -71,6 +71,10 @@ pub fn ask<R: Runtime>(app: &AppHandle<R>, message: String) {
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(QUIT.into(), CANCEL.into()));
     if let Some(main) = app.get_webview_window(crate::opens::MAIN) {
+        // the alert is a sheet on the main window, which a minimised window or a hidden app (⌘H, then the Dock's
+        // Quit) would keep out of sight: the question would hang unanswered and every later Quit would be ignored.
+        // The window is brought up first; these and the sheet are queued on the main thread in this order.
+        bring_up(app, &main);
         dialog = dialog.parent(&main);
     }
     let app = app.clone();
@@ -81,6 +85,17 @@ pub fn ask<R: Runtime>(app: &AppHandle<R>, message: String) {
             app.exit(0);
         }
     });
+}
+
+/// Show the app and the main window, unminimised and key, so a sheet on it is seen.
+fn bring_up<R: Runtime>(app: &AppHandle<R>, main: &tauri::WebviewWindow<R>) {
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    let _ = main.unminimize();
+    let _ = main.show();
+    let _ = main.set_focus();
 }
 
 /// Answer AppKit's `applicationShouldTerminate:` on tao's app delegate: the Dock's Quit, logout and an Apple Event
@@ -117,7 +132,11 @@ pub fn install_terminate_hook(app: &AppHandle<tauri::Wry>) {
     // replaces nothing of tao's.
     unsafe {
         let imp: Imp = std::mem::transmute::<extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize, Imp>(should_terminate);
-        objc2::ffi::class_addMethod(class as *const AnyClass as *mut AnyClass, objc2::sel!(applicationShouldTerminate:), imp, c"Q@:@".as_ptr());
+        let added = objc2::ffi::class_addMethod(class as *const AnyClass as *mut AnyClass, objc2::sel!(applicationShouldTerminate:), imp, c"Q@:@".as_ptr());
+        if !added.as_bool() {
+            // tao answers it itself now: the Dock's Quit and logout no longer ask here (see this module's head)
+            eprintln!("studi0trace: applicationShouldTerminate: was not added (tao's delegate has one); the Dock's Quit will not ask before losing work");
+        }
     }
 }
 

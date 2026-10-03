@@ -137,11 +137,6 @@ pub fn recent_labels(paths: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The recent files still there (the next save prunes the others from the list).
-pub fn existing(recent: &[String]) -> Vec<String> {
-    recent.iter().filter(|p| std::path::Path::new(p).exists()).cloned().collect()
-}
-
 /// The items `plan` touches, and the Open Recent submenu, kept to change later. The mutexes are held only to read
 /// or replace what they hold, never across a hop to the main thread.
 pub struct Handles<R: Runtime> {
@@ -249,9 +244,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
     let help = SubmenuBuilder::new(app, "Help").item(&item("help")?).build()?;
     let menu = Menu::with_items(app, &[&app_menu, &file, &edit, &view, &image, &window, &help])?;
-    let recent = existing(recent);
-    fill_recent(app, &recent_menu, &recent)?;
-    let handles = Handles { items, checks, recent: recent_menu, recent_paths: Mutex::new(recent), shown: Mutex::new(MenuState::default()), last: Mutex::default() };
+    fill_recent(app, &recent_menu, recent)?;
+    let handles = Handles { items, checks, recent: recent_menu, recent_paths: Mutex::new(recent.to_vec()), shown: Mutex::new(MenuState::default()), last: Mutex::default() };
     Ok((menu, handles))
 }
 
@@ -276,7 +270,7 @@ fn fill_recent<R: Runtime>(app: &AppHandle<R>, submenu: &Submenu<R>, recent: &[S
 pub fn set_recent<R: Runtime>(app: &AppHandle<R>, recent: &[String]) {
     let Some(h) = app.try_state::<Handles<R>>() else { return };
     let submenu = h.recent.clone();
-    let recent = existing(recent);
+    let recent = recent.to_vec();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let _ = fill_recent(&handle, &submenu, &recent);
@@ -333,16 +327,15 @@ pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
     }
 }
 
-/// The i-th file of the list Open Recent was built from. One that is gone leaves the list and is still opened, so
-/// it fails the way any missing file does.
+/// The i-th file of the list Open Recent was built from. Nothing here asks the disk whether it is still there (a
+/// stale network mount would stall the main thread): it is opened, and a failed open takes it off the list
+/// (`commands::open_one`).
 fn open_recent<R: Runtime>(app: &AppHandle<R>, at: &str) {
     let Some(h) = app.try_state::<Handles<R>>() else { return };
     let path = at.parse::<usize>().ok().and_then(|i| h.recent_paths.lock().unwrap_or_else(PoisonError::into_inner).get(i).cloned());
-    let Some(path) = path else { return };
-    if !std::path::Path::new(&path).exists() {
-        settings::forget_recent(app, &path);
+    if let Some(path) = path {
+        opens::deliver(app, vec![path]);
     }
-    opens::deliver(app, vec![path]);
 }
 
 /// A command the main window must not get: one for the image while Settings is the key window, or a held key's
@@ -446,13 +439,6 @@ mod tests {
         let paths = ["/Users/t/Desktop/logo.png", "/Users/t/Work/logo.png", "/Users/t/Work/mark.png"].map(String::from);
         assert_eq!(recent_labels(&paths), ["logo.png — Desktop", "logo.png — Work", "mark.png"]);
         assert!(recent_labels(&[]).is_empty());
-    }
-
-    #[test]
-    fn a_recent_file_that_is_gone_is_not_listed() {
-        let here = env!("CARGO_MANIFEST_DIR").to_string();
-        let shown = existing(&[format!("{here}/Cargo.toml"), "/nowhere/gone.png".into(), format!("{here}/build.rs")]);
-        assert_eq!(shown, [format!("{here}/Cargo.toml"), format!("{here}/build.rs")]);
     }
 
     #[test]

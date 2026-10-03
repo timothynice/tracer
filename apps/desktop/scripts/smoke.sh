@@ -36,7 +36,14 @@ restore() {
   trap - EXIT INT TERM
   if [ -z "$PID" ]; then PID="$(pgrep -o -f "$APP/Contents/MacOS/" || true)"; fi
   if alive; then
+    # the trace on open is not exported, so the quit asks first ("Quit Studi0Trace?"): answer Quit, the way a
+    # person would (System Events needs Accessibility; without it the kill below still ends the instance)
     osascript -e 'tell application id "com.studi0.trace" to quit' >/dev/null 2>&1
+    for _ in $(seq 1 30); do
+      alive || break
+      osascript -e "tell application \"System Events\" to tell (first process whose unix id is $PID) to click button \"Quit\" of sheet 1 of window 1" >/dev/null 2>&1 && break
+      sleep 0.1
+    done
     wait_gone 5 || {
       pkill -P "$PID" 2>/dev/null   # its trace workers
       kill "$PID" 2>/dev/null

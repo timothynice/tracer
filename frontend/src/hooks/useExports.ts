@@ -36,7 +36,9 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
           const bytes = kind === "svg" ? new TextEncoder().encode(text) : new Uint8Array(await (await svgToPngBlob(text, target.image.width, target.image.height, scale)).arrayBuffer());
           const name = kind === "svg" ? `${stem}.svg` : scale === 1 ? `${stem}.png` : `${stem}@${scale}x.png`;
           const path = await platform.exportFile({ kind, imageId: target.image.id, name, bytes }, settings);
-          if (path && target.shown) onExported([{ id: target.image.id, key: target.shown }]);
+          // the selected image's bytes came from what is on screen now, so its mark is the trace shown now
+          const key = target.image.id === item?.image.id ? item.shown : target.shown;
+          if (path && key) onExported([{ id: target.image.id, key }]);
           if (path && platform.kind === "native" && !settings.revealAfterExport) {
             toast.success(`Exported ${fileName(path)}`, { action: { label: "Show in Finder", onClick: () => void platform.reveal(path) } });
           }

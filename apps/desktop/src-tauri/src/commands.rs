@@ -27,11 +27,14 @@ pub(crate) fn open_one<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &App
             crate::settings::note_recent(app, &path.display().to_string());
             Outcome::Ok(state.images.insert(image))
         }
-        Err(error) => Outcome::Failed {
-            name: intake::file_name(&path),
-            path: Some(path.display().to_string()),
-            error,
-        },
+        Err(error) => {
+            // a recent file that no longer opens (moved, deleted, unreadable, not an image) leaves Open Recent; one
+            // refused for its size stays, since Downscale opens it
+            if !matches!(error.code(), Some("too_many_pixels" | "too_large")) {
+                crate::settings::forget_recent(app, &path.display().to_string());
+            }
+            Outcome::Failed { name: intake::file_name(&path), path: Some(path.display().to_string()), error }
+        }
     }
 }
 
