@@ -1,5 +1,5 @@
 /** The browser: the Python server over HTTP, a file picker, downloads and localStorage. A development harness. */
-import { ApiError, getEngines, getHealth, getPresets, uploadImage, vectorize as httpVectorize } from "@/lib/api";
+import { ApiError, getEngines, getPresets, uploadImage, vectorize as httpVectorize } from "@/lib/api";
 import { hashFile } from "@/lib/hash";
 import { downloadBlob } from "@/lib/raster";
 import { DEFAULT_SETTINGS, type OpenOutcome, type Platform, type Settings } from "./types";
@@ -39,7 +39,6 @@ export function webPlatform(): Platform {
 
   return {
     kind: "web",
-    health: (signal) => getHealth(signal),
     engines: (signal) => getEngines(signal),
     presets: (signal) => getPresets(signal),
     pickImages: () =>

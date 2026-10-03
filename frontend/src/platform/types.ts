@@ -1,5 +1,5 @@
 /** What differs between the Mac app and a browser, behind one interface the UI calls. */
-import type { ApiError, EngineDescription, Health, ParamValues, Preset, VectorizeResponse } from "@/lib/api";
+import type { ApiError, EngineDescription, ParamValues, Preset, VectorizeResponse } from "@/lib/api";
 
 export interface OpenedImage {
   /** The image's id (a hash of the file): the same file opened twice is one image. */
@@ -97,7 +97,6 @@ export interface ExportFile {
 
 export interface Platform {
   readonly kind: "native" | "web";
-  health(signal?: AbortSignal): Promise<Health>;
   engines(signal?: AbortSignal): Promise<EngineDescription[]>;
   presets(signal?: AbortSignal): Promise<Preset[]>;
   /** The open panel (a file picker in a browser), and what was chosen, opened. */

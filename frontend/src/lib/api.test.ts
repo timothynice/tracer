@@ -1,15 +1,14 @@
 import { http, HttpResponse } from "msw";
 import { afterAll, afterEach, beforeAll } from "vitest";
 
-import { API_URL, ApiError, getEngines, getHealth, uploadImage, vectorize } from "./api";
+import { API_URL, ApiError, getEngines, uploadImage, vectorize } from "./api";
 import { server } from "@/test/server";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
-test("health and engines parse", async () => {
-  expect((await getHealth()).engines).toEqual(["potrace", "vtracer"]);
+test("engines parse", async () => {
   const engines = await getEngines();
   expect(engines[0].id).toBe("vexel");
   expect(engines[0].params.properties.detail.ui?.control).toBe("slider");
@@ -44,7 +43,7 @@ test("422 validation arrays become validation_error with a location", async () =
 });
 
 test("network failures become ApiError('network')", async () => {
-  server.use(http.get(`${API_URL}/health`, () => HttpResponse.error()));
-  const err = (await getHealth().catch((e) => e)) as ApiError;
+  server.use(http.get(`${API_URL}/engines`, () => HttpResponse.error()));
+  const err = (await getEngines().catch((e) => e)) as ApiError;
   expect(err.code).toBe("network");
 });

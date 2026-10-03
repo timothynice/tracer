@@ -10,7 +10,6 @@ vi.mock("@/platform", async () => {
   const types = await vi.importActual<typeof import("@/platform/types")>("@/platform/types");
   const platform = {
     kind: "native",
-    health: async () => ({ status: "ok", version: "0.3.0", engines: ["vexel"] }),
     engines: async () => [VEXEL],
     presets: async () => VEXEL_PRESETS,
     pickImages: async () => [],

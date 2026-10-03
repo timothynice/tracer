@@ -24,8 +24,9 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
   const exportImage = useCallback(
     (kind: "svg" | "png", scale: number, target: ImageItem | null = item) =>
       exclusive(async () => {
-        // the selected image goes as it is on screen, with the layer inspector's edits; any other as its own trace
-        const text = target === item ? svg : target ? shownAnswer(target)?.svg : undefined;
+        // the selected image goes as it is on screen, with the layer inspector's edits; any other as its own trace.
+        // By id: the context menu's item may be an older copy of the selected one (a state update since render).
+        const text = target?.image.id === item?.image.id ? svg : target ? shownAnswer(target)?.svg : undefined;
         if (!target || !text) return;
         const stem = baseName(target.image.name);
         try {

@@ -14,15 +14,6 @@ export class ApiError extends Error {
   }
 }
 
-export interface Health {
-  status: string;
-  version: string;
-  engines: string[];
-  /** Which Vexel implementation is serving: "rust" or "python". Optional so an
-   *  older backend still parses. */
-  vexel?: string;
-}
-
 export interface UiHints {
   control?: "slider" | "select" | "toggle";
   group?: string;
@@ -215,7 +206,6 @@ async function request<T>(path: string, init: RequestInit = {}, signal?: AbortSi
   return (await res.json()) as T;
 }
 
-export const getHealth = (signal?: AbortSignal, timeoutMs = 4000) => request<Health>("/health", {}, signal, timeoutMs);
 
 export const getEngines = (signal?: AbortSignal) => request<EngineDescription[]>("/engines", {}, signal);
 

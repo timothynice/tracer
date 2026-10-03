@@ -3,7 +3,7 @@ import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { ApiError, apiErrorFromBody, type EngineDescription, type Health, type Preset, type VectorizeResponse } from "@/lib/api";
+import { ApiError, apiErrorFromBody, type EngineDescription, type Preset, type VectorizeResponse } from "@/lib/api";
 import { DEFAULT_SETTINGS, type MenuCommand, type OpenOutcome, type Platform, type Settings } from "./types";
 
 interface CommandError {
@@ -88,7 +88,6 @@ export function nativePlatform(): Platform {
 
   return {
     kind: "native",
-    health: () => call<Health>("health"),
     engines: () => call<EngineDescription[]>("engines"),
     presets: () => call<Preset[]>("presets"),
     pickImages: async () => outcomes(await call<OutcomeDto[]>("pick_images")),

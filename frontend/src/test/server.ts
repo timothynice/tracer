@@ -97,7 +97,6 @@ export function autoResult(engine: string): AutoResult {
 }
 
 export const handlers = [
-  http.get(`${API_URL}/health`, () => HttpResponse.json({ status: "ok", version: "0.2.0", engines: ["potrace", "vtracer"], vexel: "rust" })),
   http.get(`${API_URL}/engines`, () => HttpResponse.json([VEXEL])),
   http.get(`${API_URL}/presets`, () => HttpResponse.json(VEXEL_PRESETS)),
   http.post(`${API_URL}/uploads`, () => HttpResponse.json({ image_id: "a".repeat(32), width: 64, height: 64, format: "PNG" })),

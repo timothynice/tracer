@@ -43,4 +43,28 @@ describe("settings in a browser", () => {
     expect(localStorage.getItem("studi0trace.appearance")).toBe("dark");
     server.events.removeListener("request:start", count);
   });
+
+  it("the keys do nothing to the image behind the sheet while it is open", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <App />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Drop images here");
+    const dataTransfer = { types: ["Files"], files: [new File([new Uint8Array([1, 2, 3])], "logo.png", { type: "image/png" })] };
+    fireEvent.dragEnter(document, { dataTransfer });
+    fireEvent.drop(document, { dataTransfer });
+    expect((await screen.findAllByText("logo.png")).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Settings" });
+    fireEvent.keyDown(dialog, { code: "Backspace", key: "Backspace", metaKey: true });
+    fireEvent.keyDown(dialog, { code: "Enter", key: "Enter", metaKey: true });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getAllByText("logo.png").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("img", { name: "Vector result" })).toBeNull();
+    // with the sheet closed, the same key removes it
+    fireEvent.keyDown(window, { code: "Backspace", key: "Backspace", metaKey: true });
+    await screen.findByText("Drop images here");
+  });
 });

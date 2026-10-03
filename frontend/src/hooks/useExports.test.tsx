@@ -61,6 +61,13 @@ describe("useExports", () => {
     expect(mocks.platform.exportFile).toHaveBeenCalledOnce();
   });
 
+  it("knows the selected image by its id, not by the copy of it a context menu kept", async () => {
+    const { result } = renderHook(() => useExports(state(a), a, "<svg edited/>", DEFAULT_SETTINGS));
+    const older = { ...a, job: null }; // the same image, from a render before a state update
+    await act(() => result.current.exportImage("svg", 1, older));
+    expect(text(mocks.platform.exportFile.mock.calls[0][0].bytes)).toBe("<svg edited/>");
+  });
+
   it("names a PNG stem.png at 1× and stem@2x.png at 2×, rendered at that scale", async () => {
     const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS));
     await act(() => result.current.exportImage("png", 1));

@@ -17,6 +17,7 @@ import { useExports } from "./hooks/useExports";
 import { useLayerInspector } from "./hooks/useLayerInspector";
 import { useSettings } from "./hooks/useSettings";
 import { useWindowDrop } from "./hooks/useWindowDrop";
+import { loadSample } from "./lib/samples";
 import { specsFor } from "./lib/schema";
 import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
 import { platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
@@ -24,6 +25,8 @@ import { createLibrary, ENGINE, shownAnswer, type Catalog } from "./state/librar
 import { useLibrary } from "./state/useLibrary";
 
 const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
+// what the empty state lists: the app converts HEIC and TIFF with sips, a browser sends only these five
+const DROP_FORMATS = platform.kind === "native" ? "PNG, JPEG, GIF, WebP, BMP, HEIC or TIFF" : "PNG, JPEG, GIF, WebP or BMP";
 
 export default function App() {
   // in the app, the web's context menu (Reload, Inspect Element) never shows, in either window; text fields keep theirs
@@ -151,7 +154,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} /> : undefined}
     />
   ) : (
-    <EmptyState onOpen={() => void open(platform.pickImages())} onSample={(f) => openFiles([f])} />
+    <EmptyState formats={DROP_FORMATS} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
   );
 
   const exports = useExports(state, item, layers.exportSvg, settings);
@@ -242,13 +245,15 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
     const onKey = (e: KeyboardEvent) => {
       const cmd = commandForKey(e);
       if (!cmd) return;
+      // the Settings sheet is modal: the image behind it is not exported, traced or removed from its keys
+      if (settingsOpen && cmd !== "settings") return;
       if (cmd === "remove" && (e.repeat || isTyping(e.target))) return;
       e.preventDefault();
       dispatch(cmd);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dispatch]);
+  }, [dispatch, settingsOpen]);
 
   const hasItems = state.items.length > 0 || state.failed.length > 0;
   const hasImage = !!item;
