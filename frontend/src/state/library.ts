@@ -95,6 +95,11 @@ export function errorOf(item: Pick<ImageItem, "preset" | "params" | "error" | "e
   return item.error && item.errorKey === traceKey(item) ? item.error : null;
 }
 
+/** The job tracing the settings now on the controls; a job for other settings runs on in the background and is not it. */
+export function currentJob(item: ImageItem): Job | null {
+  return item.job && item.job.key === traceKey(item) ? item.job : null;
+}
+
 export function shownAnswer(item: ImageItem): TraceAnswer | null {
   return item.shown ? (item.traces[item.shown] ?? null) : null;
 }

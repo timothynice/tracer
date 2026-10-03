@@ -22,7 +22,7 @@ import { loadSample } from "./lib/samples";
 import { specsFor } from "./lib/schema";
 import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
 import { platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
-import { createLibrary, ENGINE, errorOf, shownAnswer, unexportedCount, type Catalog } from "./state/library";
+import { createLibrary, ENGINE, currentJob, errorOf, shownAnswer, unexportedCount, type Catalog } from "./state/library";
 import { useLibrary } from "./state/useLibrary";
 
 const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
@@ -136,7 +136,8 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
 
   const layers = useLayerInspector(answer?.svg);
 
-  const busy = item?.job ? (item.job.phase === "queued" ? "Queued…" : item.job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
+  const job = item ? currentJob(item) : null;
+  const busy = job ? (job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
   const viewer = item ? (
     <Viewer
       ref={viewerRef}
@@ -262,7 +263,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const hasImage = !!item;
   const hasVector = !!layers.exportSvg;
   const hasPath = !!item?.image.path;
-  const tracing = !!item?.job;
+  const tracing = !!job;
   const anyTracing = state.items.some((i) => i.job);
   const unexported = unexportedCount(state);
   useEffect(() => {

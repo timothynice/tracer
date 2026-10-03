@@ -50,8 +50,15 @@ describe("TraceButton", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
+  it("a job for other settings is not this button's: it shows the settings' own state", () => {
+    const key = paramsKey({ detail: 6 });
+    render(<TraceButton item={{ ...base, traces: { [key]: answer }, shown: key, job: { id: "j", key: "auto", startedAt: Date.now(), phase: "tracing" } }} candidates={4} onGenerate={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /^Cancel/ })).toBeNull();
+    expect(screen.getByText("Up to date")).toBeInTheDocument();
+  });
+
   it("a queued job says so", () => {
-    render(<TraceButton item={{ ...base, job: { id: "j", key: "x", startedAt: Date.now(), phase: "queued" } }} candidates={4} onGenerate={vi.fn()} onCancel={vi.fn()} />);
+    render(<TraceButton item={{ ...base, job: { id: "j", key: paramsKey({ detail: 6 }), startedAt: Date.now(), phase: "queued" } }} candidates={4} onGenerate={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByText("Queued…")).toBeInTheDocument();
   });
 });

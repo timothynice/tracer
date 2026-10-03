@@ -101,6 +101,47 @@ describe("the Mac app's wiring", () => {
     expect(await screen.findByText("Nothing to open: drop image files or a folder of them.")).toBeInTheDocument();
   });
 
+  it("a trace for other settings runs in the background: the cached trace shown is not busy, the menu and quit know", async () => {
+    const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M0 0H8V8Z" fill="#000"/></svg>';
+    const answer = (svg: string) => ({ success: true, image_id: "x", width: 64, height: 64, results: { vexel: { svg, elapsed_ms: 5000, stats: {} } }, parameters_used: { vexel: {} }, auto: null });
+    let finishAuto: (r: unknown) => void = () => {};
+    vi.mocked(platform.vectorize)
+      .mockImplementationOnce(async () => answer(SVG))
+      .mockImplementationOnce(() => new Promise((resolve) => (finishAuto = resolve)) as never);
+    vi.mocked(platform.vectorize).mockClear();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <App />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Drop images here");
+    await waitFor(() => expect(hooks.opens).not.toBeNull());
+    act(() => hooks.opens!(["/pics/bg.png"]));
+    await screen.findByRole("option", { name: /bg\.png/ });
+    fireEvent.click(screen.getByRole("radio", { name: /^Balanced/ }));
+    act(() => hooks.menu!("generate"));
+    await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ hasVector: true, tracing: false }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Auto/ }));
+    act(() => hooks.menu!("generate"));
+    await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ tracing: true, anyTracing: true }));
+    expect(screen.getAllByText("Queued…").length).toBeGreaterThan(0); // the pill and the button, for the job on screen
+
+    // back to the cached preset while Auto still runs
+    fireEvent.click(screen.getByRole("radio", { name: /^Balanced/ }));
+    await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ tracing: false, anyTracing: true }));
+    expect(screen.queryByText("Queued…")).toBeNull();
+    expect(screen.queryByText(/Tracing…/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Cancel/ })).toBeNull();
+    expect(screen.getByText("Up to date")).toBeInTheDocument();
+
+    // Auto lands: its answer is kept, and Auto shows it at once
+    await act(async () => finishAuto(answer("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'/>")));
+    await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ anyTracing: false }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Auto/ }));
+    expect(screen.getByText("Up to date")).toBeInTheDocument();
+    expect(platform.vectorize).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the web's context menu out of the app, but not out of text fields", async () => {
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>

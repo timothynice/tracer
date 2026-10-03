@@ -57,7 +57,7 @@ function mount() {
 }
 
 describe("what goes wrong after an open", () => {
-  it("says so when Show in Finder cannot find the original, from the menu and from the image's menu", async () => {
+  it("says so when Show in Finder cannot find the original, from the menu bar and from the image's context menu", async () => {
     vi.mocked(platform.reveal).mockRejectedValue(new Error("The original is no longer at /pics/logo.png"));
     mount();
     await screen.findByText("Drop images here");
@@ -65,7 +65,12 @@ describe("what goes wrong after an open", () => {
     act(() => hooks.opens!(["/pics/logo.png"]));
     await screen.findByRole("option", { name: /logo\.png/ });
     act(() => hooks.menu!("reveal"));
-    await waitFor(() => expect(hooks.error).toHaveBeenCalledWith("The original is no longer at /pics/logo.png"));
+    await waitFor(() => expect(hooks.error).toHaveBeenCalledTimes(1));
+    expect(hooks.error).toHaveBeenLastCalledWith("The original is no longer at /pics/logo.png");
+    fireEvent.contextMenu(screen.getByRole("option", { name: /logo\.png/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Show in Finder" }));
+    await waitFor(() => expect(hooks.error).toHaveBeenCalledTimes(2));
+    expect(platform.reveal).toHaveBeenCalledTimes(2);
   });
 
   it("says so when Downscale fails, and keeps the failure card", async () => {
