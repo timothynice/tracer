@@ -26,6 +26,7 @@ const item = (id: string, name: string, traced = true): ImageItem => ({
   exported: null,
   job: null,
   error: null,
+  errorKey: null,
   auto: null,
 });
 const a = item("a", "logo.png");
@@ -92,6 +93,14 @@ describe("useExports", () => {
     rerender({ s: DEFAULT_SETTINGS });
     await act(() => result.current.exportImage("svg", 1));
     expect(mocks.success).not.toHaveBeenCalled();
+  });
+
+  it("says why Show in Finder did nothing when the file has gone", async () => {
+    const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS));
+    await act(() => result.current.exportImage("svg", 1));
+    mocks.platform.reveal.mockRejectedValue(new Error("There is no file at /Users/t/logo.svg"));
+    await act(async () => mocks.success.mock.calls[0][1].action.onClick());
+    expect(mocks.error).toHaveBeenCalledWith("There is no file at /Users/t/logo.svg");
   });
 
   it("says nothing when the save panel was cancelled", async () => {

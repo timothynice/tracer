@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { baseName, svgToPngBlob } from "@/lib/raster";
 import { platform, type Settings } from "@/platform";
+import { revealInFinder } from "./reveal";
 import { shownAnswer, type ExportMark, type ImageItem, type LibraryState } from "@/state/library";
 
 const fileName = (path: string) => path.split("/").pop() ?? path;
@@ -40,7 +41,7 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
           const key = target.image.id === item?.image.id ? item.shown : target.shown;
           if (path && key) onExported([{ id: target.image.id, key }]);
           if (path && platform.kind === "native" && !settings.revealAfterExport) {
-            toast.success(`Exported ${fileName(path)}`, { action: { label: "Show in Finder", onClick: () => void platform.reveal(path) } });
+            toast.success(`Exported ${fileName(path)}`, { action: { label: "Show in Finder", onClick: () => void revealInFinder(path) } });
           }
         } catch (err) {
           toast.error((err as Error).message);

@@ -14,6 +14,7 @@ import { TitleBar } from "./components/TitleBar";
 import { VectorizePanel } from "./components/VectorizePanel";
 import { Viewer, type ViewerHandle } from "./components/Viewer";
 import { useExports } from "./hooks/useExports";
+import { revealInFinder } from "./hooks/reveal";
 import { useLayerInspector } from "./hooks/useLayerInspector";
 import { useSettings } from "./hooks/useSettings";
 import { useWindowDrop } from "./hooks/useWindowDrop";
@@ -21,7 +22,7 @@ import { loadSample } from "./lib/samples";
 import { specsFor } from "./lib/schema";
 import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
 import { platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
-import { createLibrary, ENGINE, shownAnswer, unexportedCount, type Catalog } from "./state/library";
+import { createLibrary, ENGINE, errorOf, shownAnswer, unexportedCount, type Catalog } from "./state/library";
 import { useLibrary } from "./state/useLibrary";
 
 const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
@@ -94,6 +95,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const state = useLibrary(lib);
   const item = state.selected ? (state.items.find((i) => i.image.id === state.selected) ?? null) : null;
   const answer = item ? shownAnswer(item) : null;
+  const visibleError = item ? errorOf(item) : null;
   const [sidebar, setSidebar] = useState(true);
   const [inspectorPane, setInspectorPane] = useState(true);
   const [dragging, setDragging] = useState(false);
@@ -145,7 +147,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       mode={mode}
       onModeChange={setMode}
       busy={busy}
-      errorMessage={item.error?.message}
+      errorMessage={visibleError?.message}
       onRetry={() => lib.generate(item.image.id)}
       display={{ points: layers.state.points, outlines: layers.state.outlines }}
       onDisplayChange={layers.patch}
@@ -155,7 +157,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} /> : undefined}
     />
   ) : (
-    <EmptyState formats={DROP_FORMATS} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
+    <EmptyState formats={DROP_FORMATS} canDownscale={platform.kind === "native"} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
   );
 
   const exports = useExports(state, item, layers.exportSvg, settings, lib.markExported);
@@ -186,7 +188,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
         case "copy-svg":
           return void exports.copySvg();
         case "reveal":
-          if (item?.image.path) void platform.reveal(item.image.path);
+          if (item?.image.path) void revealInFinder(item.image.path);
           return;
         case "zoom-in":
           return viewerRef.current?.zoomIn();
@@ -266,7 +268,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   useEffect(() => {
     platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspector: inspectorPane });
   }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspectorPane]);
-  const invalidField = item?.error?.code === "validation_error" ? (((item.error.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
+  const invalidField = visibleError?.code === "validation_error" ? (((visibleError.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
 
   const panel = item ? (
     <VectorizePanel
@@ -300,7 +302,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
             onSelect={lib.select}
             onSelectNext={lib.selectNext}
             onClear={lib.clear}
-            onDownscale={(i) => void lib.downscale(i)}
+            onDownscale={(i) => void lib.downscale(i).catch((err: Error) => toast.error(err.message))}
             onDismissFailure={lib.dismissFailure}
             wrapCard={(it, card) => (
               <ImageMenu
@@ -308,7 +310,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
                 onSelect={() => lib.select(it.image.id)}
                 onGenerate={() => lib.generate(it.image.id)}
                 onExport={() => void exports.exportImage("svg", 1, it)}
-                onReveal={() => it.image.path && void platform.reveal(it.image.path)}
+                onReveal={() => it.image.path && void revealInFinder(it.image.path)}
                 onRemove={() => lib.remove(it.image.id)}
               >
                 {card}

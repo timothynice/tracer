@@ -4,7 +4,7 @@ import * as Switch from "@radix-ui/react-switch";
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
-import type { ParamSpec } from "@/lib/schema";
+import { sanitize, type ParamSpec } from "@/lib/schema";
 
 export interface ParamControlProps {
   spec: ParamSpec;
@@ -142,15 +142,20 @@ function NumberField({
   disabled?: boolean;
   invalid?: boolean;
 }) {
-  const [text, setText] = useState(String(value));
   // Trailing zeros only go after a decimal point: stripping them unconditionally
   // turns 70 into "7" and 100 into "1".
-  useEffect(() => setText(Number.isFinite(value) ? trim(value.toFixed(decimals(spec.step))) : ""), [value, spec.step]);
-
+  const formatted = Number.isFinite(value) ? trim(value.toFixed(decimals(spec.step))) : "";
+  const [text, setText] = useState(formatted);
+  useEffect(() => setText(formatted), [formatted]);
+  const show = () => setText(formatted);
+  // Only a changed value is a change: leaving a field as it was must not move the settings (it would drop Auto), and
+  // an emptied field (Number("") is 0) or text that is not a number goes back to what it was.
   const commit = () => {
-    const n = Number(text);
-    if (Number.isFinite(n)) onChange(n);
-    else setText(String(value));
+    const n = text.trim() === "" ? NaN : Number(text);
+    if (!Number.isFinite(n)) return show();
+    const next = sanitize(spec, n) as number;
+    if (next === value) return show();
+    onChange(next);
   };
 
   return (

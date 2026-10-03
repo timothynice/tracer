@@ -16,6 +16,7 @@ const item: ImageItem = {
   exported: null,
   job: null,
   error: null,
+  errorKey: null,
   auto: null,
 };
 

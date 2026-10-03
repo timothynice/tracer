@@ -14,13 +14,14 @@ const item = (id: string, patch: Partial<ImageItem> = {}): ImageItem => ({
   exported: null,
   job: null,
   error: null,
+  errorKey: null,
   auto: null,
   ...patch,
 });
 
 function setup(patch: Partial<SidebarProps> = {}) {
   const props: SidebarProps = {
-    items: [item("a"), item("b", { job: { id: "j", key: "auto", startedAt: 0, phase: "queued" } }), item("c", { error: new ApiError("engine_crashed", "The trace crashed (signal 9)") })],
+    items: [item("a"), item("b", { job: { id: "j", key: "auto", startedAt: 0, phase: "queued" } }), item("c", { error: new ApiError("engine_crashed", "The trace crashed (signal 9)"), errorKey: "auto" })],
     failed: [],
     selected: "a",
     formats: "PNG, JPG, HEIC, etc.",
@@ -73,6 +74,29 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[1]);
     expect(props.onDownscale).toHaveBeenCalledWith(0);
     expect(props.onDismissFailure).toHaveBeenCalledWith(1);
+  });
+
+  it("says which limit a file went over, not an area", () => {
+    const failed = [
+      { name: "wide.png", path: "/p/wide.png", error: new ApiError("too_many_pixels", "Image exceeds the 2048x2048 pixel limit") },
+      { name: "raised.png", path: "/p/raised.png", error: new ApiError("too_many_pixels", "Image exceeds the 4096x4096 pixel limit") },
+      { name: "nomsg.png", path: "/p/nomsg.png", error: new ApiError("too_many_pixels", "") },
+      { name: "heavy.png", path: "/p/heavy.png", error: new ApiError("too_large", "File exceeds the 20 MB limit") },
+      { name: "heavier.png", path: "/p/heavier.png", error: new ApiError("too_large", "File exceeds the 50 MB limit") },
+      { name: "area.png", path: "/p/area.png", error: new ApiError("too_many_pixels", "Image exceeds the 16 megapixel limit") },
+      { name: "junk.bin", path: "/p/junk.bin", error: new ApiError("unsupported_format", "File is not a recognised image") },
+    ];
+    setup({ items: [], failed, selected: null });
+    for (const text of [
+      "wide.png is larger than 2048 px on a side.",
+      "raised.png is larger than 4096 px on a side.",
+      "nomsg.png is larger than 2048 px on a side.",
+      "heavy.png is larger than 20 MB.",
+      "heavier.png is larger than 50 MB.",
+      "Image exceeds the 16 megapixel limit",
+      "File is not a recognised image",
+    ])
+      expect(screen.getByText(text)).toBeInTheDocument();
   });
 
   it("does not offer Downscale in a browser, and Clear All is off with nothing to clear", () => {

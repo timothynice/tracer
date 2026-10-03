@@ -14,6 +14,7 @@ const base: ImageItem = {
   exported: null,
   job: null,
   error: null,
+  errorKey: null,
   auto: null,
 };
 const answer = { svg: "<svg/>", elapsedMs: 900, stats: {} };

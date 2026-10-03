@@ -39,7 +39,9 @@ export interface ImageItem {
   /** The key of the trace last exported or copied; null before the first. */
   exported: string | null;
   job: Job | null;
+  /** The last trace that failed, and the settings key it was for: see `errorOf`. */
   error: ApiError | null;
+  errorKey: string | null;
   /** The last Auto run on this image. */
   auto: AutoResult | null;
 }
@@ -86,6 +88,11 @@ export interface ExportMark {
 
 export function traceKey(item: Pick<ImageItem, "preset" | "params">): string {
   return item.preset === "auto" ? "auto" : paramsKey(item.params);
+}
+
+/** The error to show: a failure belongs to the settings that failed, and says nothing about any others. */
+export function errorOf(item: Pick<ImageItem, "preset" | "params" | "error" | "errorKey">): ApiError | null {
+  return item.error && item.errorKey === traceKey(item) ? item.error : null;
 }
 
 export function shownAnswer(item: ImageItem): TraceAnswer | null {
@@ -158,7 +165,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     if (!item || item.job?.id !== jobId) return; // superseded or cancelled
     const answer = answerOf(res);
     if (answer instanceof ApiError) {
-      patch(id, { job: null, error: answer });
+      patch(id, { job: null, error: answer, errorKey: key });
       return;
     }
     const traces = { ...item.traces, [key]: answer };
@@ -176,13 +183,14 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     }
     // settings that moved on while it ran show their own trace if one is known (a candidate, say), else stay as they are
     const now = current ? key : traces[traceKey({ preset: item.preset, params })] ? traceKey({ preset: item.preset, params }) : item.shown;
-    patch(id, { job: null, error: null, traces, shown: now, auto: auto ?? item.auto, params });
+    patch(id, { job: null, error: null, errorKey: null, traces, shown: now, auto: auto ?? item.auto, params });
   };
 
   const fail = (id: string, jobId: string, err: unknown) => {
     const item = find(id);
     if (!item || item.job?.id !== jobId) return;
-    patch(id, isCancel(err) ? { job: null } : { job: null, error: toApiError(err) });
+    // kept with the key it failed for: shown only while the settings are those again
+    patch(id, isCancel(err) ? { job: null } : { job: null, error: toApiError(err), errorKey: item.job.key });
   };
 
   const generate = (id: string) => {
@@ -190,7 +198,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     if (!item) return;
     const key = traceKey(item);
     if (item.traces[key]) {
-      patch(id, { shown: key, error: null });
+      patch(id, { shown: key, error: null, errorKey: null });
       return;
     }
     if (item.job?.key === key) return;
@@ -198,7 +206,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     const jobId = newJobId();
     const controller = new AbortController();
     controllers.set(jobId, controller);
-    patch(id, { job: { id: jobId, key, startedAt: Date.now(), phase: "queued" }, error: null });
+    patch(id, { job: { id: jobId, key, startedAt: Date.now(), phase: "queued" }, error: null, errorKey: null });
     const auto = key === "auto";
     platform
       .vectorize(
@@ -222,11 +230,8 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     if (!item) return;
     const key = traceKey(item);
     if (item.traces[key]) {
-      // a job for other settings has nothing left to say
-      if (item.job && item.job.key !== key) {
-        abortJob(item);
-        patch(id, { shown: key, job: null });
-      } else patch(id, { shown: key });
+      // a job for other settings runs on: its answer is kept as any other, and it takes nothing from the screen
+      patch(id, { shown: key });
       return;
     }
     const last = item.shown ? item.traces[item.shown] : undefined;
@@ -272,7 +277,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
         }
         selected = o.ok.id;
         if (items.some((i) => i.image.id === o.ok.id)) continue;
-        items.push({ image: o.ok, preset: "auto", params: defaults, traces: {}, shown: null, exported: null, job: null, error: null, auto: null });
+        items.push({ image: o.ok, preset: "auto", params: defaults, traces: {}, shown: null, exported: null, job: null, error: null, errorKey: null, auto: null });
         added.push(o.ok.id);
       }
       set({ items, failed, selected });
@@ -334,7 +339,10 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     setParam(id, name, value) {
       const item = find(id);
       if (!item) return;
-      patch(id, { preset: null, params: normalizeValues(specs, { ...item.params, [name]: value }) });
+      const params = normalizeValues(specs, { ...item.params, [name]: value });
+      // a control left as it was moves nothing: the preset (Auto) stays, and nothing traces
+      if (paramsKey(params) === paramsKey(item.params)) return;
+      patch(id, { preset: null, params });
       settle(id, true);
     },
 
