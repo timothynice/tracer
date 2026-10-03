@@ -100,6 +100,7 @@ export function webPlatform(): Platform {
     },
     onMenu: () => () => {},
     onOpenPaths: () => () => {},
+    onOpenFailures: () => () => {},
     onDragState: () => () => {},
     setMenuState: () => {},
     openSettingsWindow: () => false,

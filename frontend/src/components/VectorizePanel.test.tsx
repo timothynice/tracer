@@ -13,6 +13,7 @@ const item: ImageItem = {
   params: { detail: 6, min_region: 8 },
   traces: { [key]: { svg: "<svg/>", elapsedMs: 1530, stats: { paths: 16, nodes: 208, bytes: 4544 } } },
   shown: key,
+  exported: null,
   job: null,
   error: null,
   auto: null,

@@ -37,6 +37,7 @@ vi.mock("@/platform", async () => {
     },
     onMenu: () => () => {},
     onOpenPaths: () => () => {},
+    onOpenFailures: () => () => {},
     onDragState: () => () => {},
     setMenuState: () => {},
     openSettingsWindow: () => true,

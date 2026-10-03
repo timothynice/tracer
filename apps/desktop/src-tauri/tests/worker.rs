@@ -129,6 +129,13 @@ fn a_worker_that_dies_or_babbles_is_a_crashed_trace() {
 }
 
 #[test]
+fn a_worker_whose_binary_is_gone_says_the_app_was_moved() {
+    let q = TraceQueue::new(PathBuf::from("/nowhere/Studi0Trace.app/Contents/MacOS/studi0trace-desktop"));
+    let e = q.submit(job("x", "img", None), || {}).recv_timeout(WAIT).unwrap().unwrap_err();
+    assert_eq!(e.body["detail"]["message"], "Studi0Trace was moved while it was open. Quit and open it again.");
+}
+
+#[test]
 fn hooks_are_ignored_without_the_variable() {
     let q = TraceQueue::new(PathBuf::from(EXE));
     let t = Instant::now();

@@ -81,7 +81,12 @@ export interface MenuState {
   hasVector: boolean;
   anyVector: boolean;
   hasPath: boolean;
+  /** The selected image is tracing. */
   tracing: boolean;
+  /** Any image is tracing (closing or quitting then asks first). */
+  anyTracing: boolean;
+  /** Images whose vector on screen has not been exported or copied since it was traced (closing asks first). */
+  unexported: number;
   mode: ViewMode;
   sidebar: boolean;
   inspector: boolean;
@@ -118,6 +123,8 @@ export interface Platform {
   onMenu(cb: (command: MenuCommand) => void): () => void;
   /** Paths to open from outside the page; the ones that came before the page listened are handed over first. */
   onOpenPaths(cb: (paths: string[]) => void): () => void;
+  /** Opens that failed before reaching the page (a drop with nothing to open). Native only. */
+  onOpenFailures(cb: (failures: OpenFailure[]) => void): () => void;
   /** Files are being dragged over the window (true) or no longer are (false). Native only. */
   onDragState(cb: (over: boolean) => void): () => void;
   setMenuState(state: MenuState): void;

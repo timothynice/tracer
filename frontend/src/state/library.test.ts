@@ -4,7 +4,7 @@ import { ApiError, type EngineDescription, type Preset, type VectorizeResponse }
 import { paramsKey } from "@/lib/schema";
 import type { OpenOutcome, Phase, Platform, TraceRequest } from "@/platform/types";
 import { DEFAULT_SETTINGS } from "@/platform/types";
-import { createLibrary, DEBOUNCE_MS, needsUpdate, traceKey, type Catalog } from "./library";
+import { createLibrary, DEBOUNCE_MS, needsUpdate, traceKey, unexportedCount, type Catalog } from "./library";
 
 const ENGINE: EngineDescription = {
   id: "vexel",
@@ -332,6 +332,40 @@ describe("library", () => {
     const item = lib.getState().items[0];
     expect(item.params).toEqual({ detail: 10, min_region: 16 });
     expect(item.shown).toBe("auto");
+  });
+
+  it("counts the images whose vector on screen has not been exported or copied since it was traced", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, { ...DEFAULT_SETTINGS, liveUpdate: false });
+    lib.add([ok("a"), ok("b")]);
+    expect(unexportedCount(lib.getState())).toBe(0);
+    lib.pickPreset("a", PRESETS[1]);
+    lib.generate("a");
+    // a trace still running has nothing to export yet
+    expect(unexportedCount(lib.getState())).toBe(0);
+    calls[0].resolve(response("<svg>a</svg>", 100));
+    await flush();
+    const first = traceKey(lib.getState().items[0]);
+    expect(lib.getState().items[0].exported).toBeNull();
+    expect(unexportedCount(lib.getState())).toBe(1);
+    lib.markExported([{ id: "a", key: first }, { id: "gone", key: "x" }]);
+    expect(lib.getState().items[0].exported).toBe(first);
+    expect(unexportedCount(lib.getState())).toBe(0);
+    // traced again with other settings: the new vector is not exported
+    lib.setParam("a", "detail", 9);
+    lib.generate("a");
+    calls[1].resolve(response("<svg>a9</svg>", 100));
+    await flush();
+    expect(unexportedCount(lib.getState())).toBe(1);
+    // back to the settings that were exported: that vector was
+    lib.pickPreset("a", PRESETS[1]);
+    expect(lib.getState().items[0].shown).toBe(first);
+    expect(unexportedCount(lib.getState())).toBe(0);
+    // removing the image takes its count with it
+    lib.setParam("a", "detail", 9);
+    expect(unexportedCount(lib.getState())).toBe(1);
+    lib.remove("a");
+    expect(unexportedCount(lib.getState())).toBe(0);
   });
 
   it("notifies subscribers and hands out a new state object on every change", () => {

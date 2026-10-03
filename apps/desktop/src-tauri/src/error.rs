@@ -28,6 +28,16 @@ impl CommandError {
         Self::new(500, "engine_crashed", format!("The trace crashed ({why})"))
     }
 
+    /// The worker could not be started. Its binary is the app's own, found where the app was launched from: gone
+    /// from there, the app was moved (or deleted) while it ran, and only a fresh launch finds it again.
+    pub fn spawn(err: &std::io::Error) -> Self {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            Self::new(500, "app_moved", "Studi0Trace was moved while it was open. Quit and open it again.")
+        } else {
+            Self::crashed(format!("the worker did not start: {err}"))
+        }
+    }
+
     pub fn conversion(name: &str, why: impl std::fmt::Display) -> Self {
         Self::new(400, "conversion_failed", format!("macOS could not convert {name}: {why}"))
     }
@@ -63,6 +73,15 @@ mod tests {
         let e = CommandError::from(refused.clone());
         assert_eq!((e.status, &e.body), (refused.status, &refused.response_body()));
         assert_eq!(e.code(), Some("unsupported_format"));
+    }
+
+    #[test]
+    fn a_worker_that_cannot_be_found_means_the_app_was_moved() {
+        let moved = CommandError::spawn(&std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert_eq!(moved.code(), Some("app_moved"));
+        assert_eq!(moved.body["detail"]["message"], "Studi0Trace was moved while it was open. Quit and open it again.");
+        let other = CommandError::spawn(&std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert_eq!(other.code(), Some("engine_crashed"));
     }
 
     #[test]

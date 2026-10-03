@@ -11,6 +11,7 @@ const item = (id: string, patch: Partial<ImageItem> = {}): ImageItem => ({
   params: {},
   traces: {},
   shown: null,
+  exported: null,
   job: null,
   error: null,
   auto: null,

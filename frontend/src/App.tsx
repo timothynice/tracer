@@ -21,7 +21,7 @@ import { loadSample } from "./lib/samples";
 import { specsFor } from "./lib/schema";
 import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
 import { platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
-import { createLibrary, ENGINE, shownAnswer, type Catalog } from "./state/library";
+import { createLibrary, ENGINE, shownAnswer, unexportedCount, type Catalog } from "./state/library";
 import { useLibrary } from "./state/useLibrary";
 
 const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
@@ -128,6 +128,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   );
   const openFiles = useCallback((files: File[]) => void open(platform.openFiles(files)), [open]);
   useEffect(() => platform.onOpenPaths((paths) => void open(platform.openPaths(paths))), [open]);
+  useEffect(() => platform.onOpenFailures((failures) => lib.add(failures.map((failed) => ({ failed })))), [lib]);
   useEffect(() => platform.onDragState(setDragging), []);
   useWindowDrop(platform.kind === "web", openFiles, setDragging);
 
@@ -157,7 +158,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
     <EmptyState formats={DROP_FORMATS} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
   );
 
-  const exports = useExports(state, item, layers.exportSvg, settings);
+  const exports = useExports(state, item, layers.exportSvg, settings, lib.markExported);
   const anyVector = state.items.some((i) => i.shown !== null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const openSettings = useCallback(() => {
@@ -260,9 +261,11 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const hasVector = !!layers.exportSvg;
   const hasPath = !!item?.image.path;
   const tracing = !!item?.job;
+  const anyTracing = state.items.some((i) => i.job);
+  const unexported = unexportedCount(state);
   useEffect(() => {
-    platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, mode, sidebar, inspector: inspectorPane });
-  }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, mode, sidebar, inspectorPane]);
+    platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspector: inspectorPane });
+  }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspectorPane]);
   const invalidField = item?.error?.code === "validation_error" ? (((item.error.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
 
   const panel = item ? (

@@ -11,6 +11,7 @@ const base: ImageItem = {
   params: { detail: 6 },
   traces: {},
   shown: null,
+  exported: null,
   job: null,
   error: null,
   auto: null,

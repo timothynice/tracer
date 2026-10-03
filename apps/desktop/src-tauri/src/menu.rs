@@ -1,9 +1,11 @@
 //! The menu bar. Each item the UI acts on is sent to it as a `menu` event with the item's id; File ▸ Open…,
-//! Open Recent, Settings and Help are handled here. The UI reports what is possible (`set_menu_state`) and the
-//! items follow.
+//! Open Recent, Settings, Help and Quit are handled here. The UI reports what is possible (`set_menu_state`) and
+//! the items follow.
 use crate::{opens, settings};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 use tauri::menu::{AboutMetadata, CheckMenuItem, CheckMenuItemBuilder, Menu, MenuItem, MenuItemBuilder, PredefinedMenuItem, Submenu, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -20,6 +22,7 @@ const fn e(id: &'static str, label: &'static str, accel: Option<&'static str>) -
 /// Every item of ours (the predefined ones, About, Hide, Copy and so on, are added in `build`).
 pub const MENU: &[Entry] = &[
     e("settings", "Settings…", Some("CmdOrCtrl+,")),
+    e("quit", "Quit Studi0Trace", Some("CmdOrCtrl+Q")),
     e("open", "Open…", Some("CmdOrCtrl+O")),
     e("export-svg", "Export SVG…", Some("CmdOrCtrl+E")),
     e("export-png-1", "1×…", None),
@@ -56,7 +59,12 @@ pub struct MenuState {
     pub has_vector: bool,
     pub any_vector: bool,
     pub has_path: bool,
+    /// The selected image is tracing.
     pub tracing: bool,
+    /// Any image is tracing.
+    pub any_tracing: bool,
+    /// Images whose vector on screen has not been exported or copied since it was traced.
+    pub unexported: u32,
     pub mode: String,
     pub sidebar: bool,
     pub inspector: bool,
@@ -96,13 +104,61 @@ pub fn checks(state: &MenuState) -> Vec<(&'static str, bool)> {
     plan(state).into_iter().filter_map(|(id, _, checked)| checked.map(|on| (id, on))).collect()
 }
 
-/// The items `plan` touches, and the Open Recent submenu, kept to change later.
+/// A repeat of a command that removes images, closer than this to the one before, is a held key, not a choice.
+pub const DEBOUNCE: Duration = Duration::from_millis(400);
+pub const DEBOUNCED: &[&str] = &["remove", "clear"];
+
+/// True when a command arriving `now`, after the last of its kind at `last`, is a key repeat to drop.
+pub fn debounce(last: Option<Instant>, now: Instant) -> bool {
+    last.is_some_and(|l| now.saturating_duration_since(l) < DEBOUNCE)
+}
+
+/// The commands that act on the image in the main window, which must not reach it while Settings is the key
+/// window: everything the UI is sent, View's sidebar and inspector toggles included. Not Open, Settings, Help,
+/// Quit, Open Recent and the app's own windows.
+pub fn acts_on_document(id: &str) -> bool {
+    !matches!(id, "open" | "settings" | "help" | "quit" | "check-updates" | "acknowledgements" | "clear-recent") && !id.starts_with("recent:")
+}
+
+/// Open Recent's labels: the file's name, and its folder's after a dash where two files share a name.
+pub fn recent_labels(paths: &[String]) -> Vec<String> {
+    let name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string());
+    let names: Vec<String> = paths.iter().map(|p| name(p)).collect();
+    paths
+        .iter()
+        .zip(&names)
+        .map(|(path, n)| {
+            if names.iter().filter(|m| *m == n).count() < 2 {
+                return n.clone();
+            }
+            let folder = std::path::Path::new(path).parent().and_then(|d| d.file_name()).map(|d| d.to_string_lossy().into_owned());
+            folder.map_or_else(|| n.clone(), |f| format!("{n} — {f}"))
+        })
+        .collect()
+}
+
+/// The recent files still there (the next save prunes the others from the list).
+pub fn existing(recent: &[String]) -> Vec<String> {
+    recent.iter().filter(|p| std::path::Path::new(p).exists()).cloned().collect()
+}
+
+/// The items `plan` touches, and the Open Recent submenu, kept to change later. The mutexes are held only to read
+/// or replace what they hold, never across a hop to the main thread.
 pub struct Handles<R: Runtime> {
     items: HashMap<&'static str, MenuItem<R>>,
     checks: HashMap<&'static str, CheckMenuItem<R>>,
     recent: Submenu<R>,
-    /// The state last applied, to put the check marks back after a click (held only to read or replace it).
-    shown: std::sync::Mutex<MenuState>,
+    /// The paths Open Recent was last built from: `recent:<i>` is the i-th of these.
+    recent_paths: Mutex<Vec<String>>,
+    /// The state last applied, to put the check marks back after a click, and to know what quitting would lose.
+    shown: Mutex<MenuState>,
+    /// When each debounced command last arrived.
+    last: Mutex<HashMap<String, Instant>>,
+}
+
+/// The state the UI last reported.
+pub fn current<R: Runtime>(app: &AppHandle<R>) -> MenuState {
+    app.try_state::<Handles<R>>().map(|h| h.shown.lock().unwrap_or_else(PoisonError::into_inner).clone()).unwrap_or_default()
 }
 
 fn entry(id: &str) -> &'static Entry {
@@ -150,7 +206,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
         .hide_others()
         .show_all()
         .separator()
-        .quit()
+        .item(&item("quit")?)
         .build()?;
     let recent_menu = SubmenuBuilder::with_id(app, "open-recent", "Open Recent").build()?;
     let png = SubmenuBuilder::new(app, "Export PNG").item(&item("export-png-1")?).item(&item("export-png-2")?).item(&item("export-png-4")?).build()?;
@@ -193,18 +249,19 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
     let help = SubmenuBuilder::new(app, "Help").item(&item("help")?).build()?;
     let menu = Menu::with_items(app, &[&app_menu, &file, &edit, &view, &image, &window, &help])?;
-    let handles = Handles { items, checks, recent: recent_menu, shown: std::sync::Mutex::new(MenuState::default()) };
-    fill_recent(app, &handles.recent, recent)?;
+    let recent = existing(recent);
+    fill_recent(app, &recent_menu, &recent)?;
+    let handles = Handles { items, checks, recent: recent_menu, recent_paths: Mutex::new(recent), shown: Mutex::new(MenuState::default()), last: Mutex::default() };
     Ok((menu, handles))
 }
 
+/// Fills Open Recent with `recent`, which the caller keeps as `Handles::recent_paths`.
 fn fill_recent<R: Runtime>(app: &AppHandle<R>, submenu: &Submenu<R>, recent: &[String]) -> tauri::Result<()> {
     while !submenu.items()?.is_empty() {
         submenu.remove_at(0)?;
     }
-    for (i, path) in recent.iter().enumerate() {
-        let label = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
-        submenu.append(&MenuItemBuilder::with_id(format!("recent-{i}"), label).build(app)?)?;
+    for (i, label) in recent_labels(recent).into_iter().enumerate() {
+        submenu.append(&MenuItemBuilder::with_id(format!("recent:{i}"), label).build(app)?)?;
     }
     if !recent.is_empty() {
         submenu.append(&PredefinedMenuItem::separator(app)?)?;
@@ -219,16 +276,19 @@ fn fill_recent<R: Runtime>(app: &AppHandle<R>, submenu: &Submenu<R>, recent: &[S
 pub fn set_recent<R: Runtime>(app: &AppHandle<R>, recent: &[String]) {
     let Some(h) = app.try_state::<Handles<R>>() else { return };
     let submenu = h.recent.clone();
-    let recent = recent.to_vec();
+    let recent = existing(recent);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let _ = fill_recent(&handle, &submenu, &recent);
+        if let Some(h) = handle.try_state::<Handles<R>>() {
+            *h.recent_paths.lock().unwrap_or_else(PoisonError::into_inner) = recent;
+        }
     });
 }
 
 pub fn apply_state<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
     let Some(h) = app.try_state::<Handles<R>>() else { return };
-    *h.shown.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = state.clone();
+    *h.shown.lock().unwrap_or_else(PoisonError::into_inner) = state.clone();
     for (id, enabled, checked) in plan(state) {
         if let Some(i) = h.items.get(id) {
             let _ = i.set_enabled(enabled);
@@ -254,6 +314,7 @@ pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
                 opens::deliver(&app, paths);
             });
         }
+        "quit" => crate::quit::request(app),
         "clear-recent" => settings::clear_recent(app),
         "settings" => {
             let _ = crate::commands::show_settings_window(app);
@@ -262,17 +323,39 @@ pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
             use tauri_plugin_opener::OpenerExt;
             let _ = app.opener().open_url(HELP_URL, None::<&str>);
         }
-        recent if recent.starts_with("recent-") => {
-            let at: usize = recent["recent-".len()..].parse().unwrap_or(usize::MAX);
-            if let Some(path) = settings::load(app).recent.get(at).cloned() {
-                opens::deliver(app, vec![path]);
-            }
-        }
+        recent if recent.starts_with("recent:") => open_recent(app, &recent["recent:".len()..]),
         other => {
-            let _ = app.emit_to("main", "menu", serde_json::json!({ "id": other }));
+            if !held_back(app, other) {
+                let _ = app.emit_to("main", "menu", serde_json::json!({ "id": other }));
+            }
             restore_checks(app, other);
         }
     }
+}
+
+/// The i-th file of the list Open Recent was built from. One that is gone leaves the list and is still opened, so
+/// it fails the way any missing file does.
+fn open_recent<R: Runtime>(app: &AppHandle<R>, at: &str) {
+    let Some(h) = app.try_state::<Handles<R>>() else { return };
+    let path = at.parse::<usize>().ok().and_then(|i| h.recent_paths.lock().unwrap_or_else(PoisonError::into_inner).get(i).cloned());
+    let Some(path) = path else { return };
+    if !std::path::Path::new(&path).exists() {
+        settings::forget_recent(app, &path);
+    }
+    opens::deliver(app, vec![path]);
+}
+
+/// A command the main window must not get: one for the image while Settings is the key window, or a held key's
+/// repeat of Remove Image or Clear All.
+fn held_back<R: Runtime>(app: &AppHandle<R>, id: &str) -> bool {
+    let repeat = DEBOUNCED.contains(&id)
+        && app.try_state::<Handles<R>>().is_some_and(|h| {
+            let now = Instant::now();
+            let last = h.last.lock().unwrap_or_else(PoisonError::into_inner).insert(id.to_string(), now);
+            debounce(last, now)
+        });
+    let settings_key = app.get_webview_window("settings").is_some_and(|w| w.is_focused().unwrap_or(false));
+    repeat || (settings_key && acts_on_document(id))
 }
 
 /// After a click on a check item, its marks are the last state's again; a change the UI makes arrives as a new
@@ -282,7 +365,7 @@ fn restore_checks<R: Runtime>(app: &AppHandle<R>, clicked: &str) {
     if !h.checks.contains_key(clicked) {
         return;
     }
-    let shown = h.shown.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let shown = h.shown.lock().unwrap_or_else(PoisonError::into_inner).clone();
     for (id, on) in checks(&shown) {
         if let Some(c) = h.checks.get(id) {
             let _ = c.set_checked(on);
@@ -294,6 +377,7 @@ fn restore_checks<R: Runtime>(app: &AppHandle<R>, clicked: &str) {
 mod tests {
     use super::*;
     use std::str::FromStr;
+    use std::time::Duration;
 
     #[test]
     fn every_id_is_unique_and_every_accelerator_parses() {
@@ -312,7 +396,7 @@ mod tests {
         let get = |p: &[(&'static str, bool, Option<bool>)], id: &str| *p.iter().find(|x| x.0 == id).unwrap();
         assert_eq!(get(&none, "export-svg"), ("export-svg", false, None));
         assert_eq!(get(&none, "generate"), ("generate", false, None));
-        let s = MenuState { has_items: true, has_image: true, has_vector: true, any_vector: true, has_path: true, tracing: false, mode: "side".into(), sidebar: true, inspector: false };
+        let s = MenuState { has_items: true, has_image: true, has_vector: true, any_vector: true, has_path: true, mode: "side".into(), sidebar: true, ..MenuState::default() };
         let p = plan(&s);
         assert!(get(&p, "export-svg").1);
         assert!(get(&p, "reveal").1);
@@ -324,6 +408,51 @@ mod tests {
         assert_eq!(get(&p, "toggle-inspector").2, Some(false));
         let tracing = plan(&MenuState { tracing: true, ..s });
         assert_eq!((get(&tracing, "generate").1, get(&tracing, "cancel").1), (false, true));
+    }
+
+    #[test]
+    fn quit_is_ours_and_reads_what_the_ui_reports() {
+        let q = entry("quit");
+        assert_eq!((q.label, q.accel), ("Quit Studi0Trace", Some("CmdOrCtrl+Q")));
+        let s: MenuState = serde_json::from_value(serde_json::json!({"unexported": 2, "anyTracing": true, "tracing": false})).unwrap();
+        assert_eq!((s.unexported, s.any_tracing, s.tracing), (2, true, false));
+        assert_eq!(MenuState::default().unexported, 0);
+    }
+
+    #[test]
+    fn a_held_shortcut_repeats_inside_the_window_and_is_dropped() {
+        let t = Instant::now();
+        assert!(!debounce(None, t));
+        assert!(debounce(Some(t), t + Duration::from_millis(30)));
+        assert!(debounce(Some(t), t + Duration::from_millis(399)));
+        assert!(!debounce(Some(t), t + DEBOUNCE));
+        assert!(!debounce(Some(t), t + Duration::from_secs(2)));
+        assert_eq!(DEBOUNCE, Duration::from_millis(400));
+        assert!(DEBOUNCED.contains(&"remove") && DEBOUNCED.contains(&"clear"));
+    }
+
+    #[test]
+    fn only_the_commands_that_act_on_the_image_wait_for_the_main_window() {
+        for id in ["remove", "clear", "generate", "cancel", "export-svg", "export-png-2", "export-all", "copy-svg", "reveal", "zoom-in", "zoom-fit", "mode-split", "mode-vector", "toggle-sidebar", "toggle-inspector"] {
+            assert!(acts_on_document(id), "{id}");
+        }
+        for id in ["open", "settings", "help", "recent:0", "recent:9", "quit", "check-updates", "acknowledgements", "clear-recent"] {
+            assert!(!acts_on_document(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn two_recent_files_of_one_name_are_told_apart_by_their_folder() {
+        let paths = ["/Users/t/Desktop/logo.png", "/Users/t/Work/logo.png", "/Users/t/Work/mark.png"].map(String::from);
+        assert_eq!(recent_labels(&paths), ["logo.png — Desktop", "logo.png — Work", "mark.png"]);
+        assert!(recent_labels(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_recent_file_that_is_gone_is_not_listed() {
+        let here = env!("CARGO_MANIFEST_DIR").to_string();
+        let shown = existing(&[format!("{here}/Cargo.toml"), "/nowhere/gone.png".into(), format!("{here}/build.rs")]);
+        assert_eq!(shown, [format!("{here}/Cargo.toml"), format!("{here}/build.rs")]);
     }
 
     #[test]

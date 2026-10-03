@@ -32,6 +32,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# already in the tree through tao; used only to answer applicationShouldTerminate: (quit.rs)
+objc2 = "0.6"
+
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 muda = "0.20"

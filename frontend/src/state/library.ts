@@ -36,6 +36,8 @@ export interface ImageItem {
   traces: Record<string, TraceAnswer>;
   /** The key of the answer on screen; null before the first trace. */
   shown: string | null;
+  /** The key of the trace last exported or copied; null before the first. */
+  exported: string | null;
   job: Job | null;
   error: ApiError | null;
   /** The last Auto run on this image. */
@@ -73,6 +75,13 @@ export interface Library {
   generate(id: string): void;
   cancel(id: string): void;
   setSettings(settings: Settings): void;
+  /** These traces were exported or copied (by image id and trace key). */
+  markExported(marks: ExportMark[]): void;
+}
+
+export interface ExportMark {
+  id: string;
+  key: string;
 }
 
 export function traceKey(item: Pick<ImageItem, "preset" | "params">): string {
@@ -81,6 +90,11 @@ export function traceKey(item: Pick<ImageItem, "preset" | "params">): string {
 
 export function shownAnswer(item: ImageItem): TraceAnswer | null {
   return item.shown ? (item.traces[item.shown] ?? null) : null;
+}
+
+/** Images whose vector on screen has not been exported or copied since it was traced: what quitting would lose. */
+export function unexportedCount(state: LibraryState): number {
+  return state.items.filter((i) => i.shown !== null && i.exported !== i.shown).length;
 }
 
 /** The settings have moved since the trace on screen, and no job is tracing them. */
@@ -258,7 +272,7 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
         }
         selected = o.ok.id;
         if (items.some((i) => i.image.id === o.ok.id)) continue;
-        items.push({ image: o.ok, preset: "auto", params: defaults, traces: {}, shown: null, job: null, error: null, auto: null });
+        items.push({ image: o.ok, preset: "auto", params: defaults, traces: {}, shown: null, exported: null, job: null, error: null, auto: null });
         added.push(o.ok.id);
       }
       set({ items, failed, selected });
@@ -337,6 +351,12 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     setSettings(next) {
       settings = next;
       if (!settings.liveUpdate) [...timers.keys()].forEach(clearTimer);
+    },
+
+    markExported(marks) {
+      const byId = new Map(marks.map((m) => [m.id, m.key]));
+      if (!state.items.some((i) => byId.has(i.image.id))) return;
+      set({ ...state, items: state.items.map((i) => (byId.has(i.image.id) ? { ...i, exported: byId.get(i.image.id)! } : i)) });
     },
   };
   return lib;

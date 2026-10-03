@@ -87,6 +87,17 @@ describe("native platform", () => {
     expect(calls[0].payload).toEqual(bytes);
   });
 
+  it("hands the app's open failures over as failures with their code", async () => {
+    ipc(() => null);
+    const got: unknown[] = [];
+    const off = nativePlatform().onOpenFailures((f) => got.push(...f));
+    await new Promise((r) => setTimeout(r, 0));
+    await emit("open-failures", [{ name: "Dropped items", path: null, error: { status: 400, body: { detail: { code: "nothing_to_open", message: "Nothing to open: drop image files or a folder of them." } } } }]);
+    off();
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ name: "Dropped items", path: null, error: { code: "nothing_to_open", message: "Nothing to open: drop image files or a folder of them." } });
+  });
+
   it("hands over paths that arrived before the page listened, then new ones", async () => {
     // the mock keeps a listener its unlisten should have dropped (it reads `id` where the API sends `eventId`), and
     // the API has already forgotten the callback: the warning is the mock's, nothing is delivered

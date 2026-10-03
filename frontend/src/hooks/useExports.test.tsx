@@ -23,6 +23,7 @@ const item = (id: string, name: string, traced = true): ImageItem => ({
   params: { detail: 6 },
   traces: traced ? { [key]: { svg: `<svg id="${id}"/>`, elapsedMs: 1, stats: {} } } : {},
   shown: traced ? key : null,
+  exported: null,
   job: null,
   error: null,
   auto: null,
@@ -135,6 +136,25 @@ describe("useExports", () => {
     const { result } = renderHook(() => useExports(state(c), c, undefined, DEFAULT_SETTINGS));
     await act(() => result.current.exportAll());
     expect(mocks.platform.exportAll).not.toHaveBeenCalled();
+  });
+
+  it("tells the library what was exported or copied, by the trace it was, and nothing when the panel was cancelled", async () => {
+    const marked = vi.fn();
+    const { result } = renderHook(() => useExports(state(a, b, c), a, "<svg edited/>", DEFAULT_SETTINGS, marked));
+    await act(() => result.current.exportImage("png", 2, b));
+    expect(marked).toHaveBeenLastCalledWith([{ id: "b", key }]);
+    await act(() => result.current.copySvg());
+    expect(marked).toHaveBeenLastCalledWith([{ id: "a", key }]);
+    await act(() => result.current.exportAll());
+    expect(marked).toHaveBeenLastCalledWith([{ id: "a", key }, { id: "b", key }]);
+    marked.mockClear();
+    mocks.platform.exportFile.mockResolvedValue(null);
+    mocks.platform.exportAll.mockResolvedValue(null);
+    mocks.platform.copyText.mockRejectedValue(new Error("clipboard blocked"));
+    await act(() => result.current.exportImage("svg", 1));
+    await act(() => result.current.exportAll());
+    await act(() => result.current.copySvg());
+    expect(marked).not.toHaveBeenCalled();
   });
 
   it("ignores an export asked for while a save panel is still open", async () => {
