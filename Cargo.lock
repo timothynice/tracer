@@ -3737,6 +3737,7 @@ dependencies = [
  "muda",
  "serde",
  "serde_json",
+ "sha2",
  "studi0trace-core",
  "tauri",
  "tauri-build",

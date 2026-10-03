@@ -30,6 +30,7 @@ tauri-plugin-opener = "2.7"
 studi0trace-core = { path = "../../../crates/studi0trace-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

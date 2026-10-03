@@ -1,5 +1,5 @@
-//! The images open in the window: the core's id (a hash of the file) to the file's bytes and where it came
-//! from. The bytes are the compressed file, a few megabytes at most, so every open image is kept until the UI
+//! The images open in the window: the desktop's id (`intake::image_id`: the core's hash of the bytes, and of
+//! the path too when there is one) to the file's bytes and where it came from. The bytes are the compressed file, a few megabytes at most, so every open image is kept until the UI
 //! closes it; a trace hands them to its worker.
 use serde::Serialize;
 use std::collections::HashMap;
@@ -52,14 +52,11 @@ impl Images {
         self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Keep `image`; the same file opened again is the same entry, and learns a path it did not have.
+    /// Keep `image`; the same id again (the same file at the same path, or the same bytes without one) is the
+    /// same entry. The same bytes at two paths are two ids, so each keeps its own folder.
     pub fn insert(&self, image: OpenImage) -> Opened {
         let mut map = self.lock();
-        let entry = map.entry(image.id.clone()).or_insert_with(|| image.clone());
-        if entry.path.is_none() && image.path.is_some() {
-            entry.path = image.path;
-        }
-        Opened::from(&*entry)
+        Opened::from(&*map.entry(image.id.clone()).or_insert(image))
     }
 
     pub fn get(&self, id: &str) -> Option<OpenImage> {
@@ -96,10 +93,13 @@ mod tests {
         let images = Images::default();
         let opened = images.insert(image("a", None));
         assert_eq!((opened.id.as_str(), opened.width, opened.path.as_deref()), ("a", 4, None));
-        // the same file again, now from a path: one entry, which learns the path
+        // the same id again: one entry, the first
         images.insert(image("a", Some("/pics/a.png")));
         assert_eq!(images.len(), 1);
-        assert_eq!(images.get("a").unwrap().path.as_deref(), Some(std::path::Path::new("/pics/a.png")));
+        assert_eq!(images.get("a").unwrap().path, None);
+        images.insert(image("b", Some("/pics/a.png")));
+        assert_eq!(images.get("b").unwrap().path.as_deref(), Some(std::path::Path::new("/pics/a.png")));
+        assert!(images.remove("b"));
         assert_eq!(images.bytes("a").unwrap().as_slice(), &[1, 2, 3]);
         assert!(images.remove("a"));
         assert!(!images.remove("a"));
