@@ -14,8 +14,6 @@ pub const LATER: &str = "Later";
 pub const UP_TO_DATE: &str = "Studi0Trace is up to date";
 pub const CHECK_FAILED: &str = "Could not check for updates";
 pub const INSTALL_FAILED: &str = "The update could not be installed.";
-pub const RELAUNCH_TITLE: &str = "Relaunch Studi0Trace?";
-pub const RELAUNCH: &str = "Relaunch";
 /// The most of a release's notes the alert shows, in characters.
 pub const NOTES_MAX: usize = 600;
 
@@ -57,6 +55,21 @@ pub fn release_notes(current: &str, body: Option<&str>) -> String {
     out
 }
 
+/// The offer's message: `release_notes`, then, when installing would lose traced images that were not exported
+/// (installing relaunches), a last line that says so. It is said before any download, so Install and Relaunch
+/// is the answer to it and nothing asks again.
+pub fn offer_message(current: &str, body: Option<&str>, unexported: u32) -> String {
+    let mut out = release_notes(current, body);
+    let lost = match unexported {
+        0 => return out,
+        1 => "1 traced image has not been exported.".to_string(),
+        n => format!("{n} traced images have not been exported."),
+    };
+    out.push_str("\n\nInstalling relaunches Studi0Trace; ");
+    out.push_str(&lost);
+    out
+}
+
 /// The check running and how its answer is shown; None when none runs. It stays set while the answer is on
 /// screen and while an update downloads, so a second request cannot stack a second alert or a second download.
 static RUNNING: Mutex<Option<How>> = Mutex::new(None);
@@ -76,6 +89,18 @@ fn begin(running: &mut Option<How>, how: How) -> bool {
             true
         }
     }
+}
+
+/// A check has its answer: true when it is shown (the check stays running until it is dismissed), false when it
+/// is quiet (the check ends here). Decided and released under the one guard the caller holds, so a Manual request
+/// joining at this moment either is read here or finds no check running and starts its own.
+fn settle(running: &mut Option<How>, outcome: Outcome) -> bool {
+    let how = running.unwrap_or(How::Automatic);
+    if quiet(how, outcome) {
+        *running = None;
+        return false;
+    }
+    true
 }
 
 fn running() -> MutexGuard<'static, Option<How>> {
@@ -98,23 +123,25 @@ pub fn check<R: Runtime>(app: &AppHandle<R>, how: How) {
             Ok(updater) => updater.check().await,
             Err(e) => Err(e),
         };
+        if let Err(e) = &found {
+            eprintln!("studi0trace: could not check for updates: {e}");
+        }
+        let outcome = match &found {
+            Ok(Some(_)) => Outcome::Available,
+            Ok(None) => Outcome::UpToDate,
+            Err(_) => Outcome::Error,
+        };
         // read now, not at the start: a Manual request may have joined this check while it ran
-        let how = running().unwrap_or(How::Automatic);
+        if !settle(&mut running(), outcome) {
+            return;
+        }
         match found {
             Ok(Some(update)) => offer(&app, update),
-            Ok(None) if !quiet(how, Outcome::UpToDate) => {
+            Ok(None) => {
                 let current = app.package_info().version.to_string();
                 tell(&app, MessageDialogKind::Info, UP_TO_DATE, format!("You have the newest version, {current}."));
             }
-            Err(e) => {
-                eprintln!("studi0trace: could not check for updates: {e}");
-                if quiet(how, Outcome::Error) {
-                    done();
-                } else {
-                    tell(&app, MessageDialogKind::Error, CHECK_FAILED, e.to_string());
-                }
-            }
-            Ok(None) => done(),
+            Err(e) => tell(&app, MessageDialogKind::Error, CHECK_FAILED, e.to_string()),
         }
     });
 }
@@ -134,10 +161,11 @@ fn tell<R: Runtime>(app: &AppHandle<R>, kind: MessageDialogKind, title: &str, me
     alert(app, kind, title, message).buttons(MessageDialogButtons::Ok).show(|_| done());
 }
 
-/// Offer the update: Install and Relaunch downloads and installs it, then relaunches; Later leaves it.
+/// Offer the update: Install and Relaunch downloads and installs it, then relaunches; Later leaves it. What a
+/// relaunch would lose is said in the offer (`offer_message`), so the relaunch does not ask again.
 fn offer<R: Runtime>(app: &AppHandle<R>, update: Update) {
     let title = format!("Studi0Trace {} is available", update.version);
-    let message = release_notes(&update.current_version, update.body.as_deref());
+    let message = offer_message(&update.current_version, update.body.as_deref(), crate::menu::current(app).unexported);
     let handle = app.clone();
     alert(app, MessageDialogKind::Info, &title, message).buttons(MessageDialogButtons::OkCancelCustom(INSTALL.into(), LATER.into())).show(move |install| {
         if !install {
@@ -146,33 +174,17 @@ fn offer<R: Runtime>(app: &AppHandle<R>, update: Update) {
         }
         tauri::async_runtime::spawn(async move {
             match update.download_and_install(|_, _| {}, || {}).await {
-                Ok(()) => relaunch(&handle),
+                Ok(()) => {
+                    // answered in the offer: `quit` must not ask again on the way out
+                    crate::quit::leaving();
+                    handle.request_restart();
+                }
                 Err(e) => {
                     eprintln!("studi0trace: the update could not be installed: {e}");
                     tell(&handle, MessageDialogKind::Error, INSTALL_FAILED, e.to_string());
                 }
             }
         });
-    });
-}
-
-/// The update is on disk: relaunch into it. A relaunch is a quit, so it asks first when work would be lost
-/// (`quit::hold`); Later keeps the window as it is, and the new version opens next time.
-fn relaunch<R: Runtime>(app: &AppHandle<R>) {
-    let Some(lost) = crate::quit::hold(app) else {
-        crate::quit::leaving();
-        app.request_restart();
-        return;
-    };
-    let message = format!("The update is installed and opens with Studi0Trace's next launch. {lost}");
-    let handle = app.clone();
-    alert(app, MessageDialogKind::Warning, RELAUNCH_TITLE, message).buttons(MessageDialogButtons::OkCancelCustom(RELAUNCH.into(), LATER.into())).show(move |now| {
-        if now {
-            crate::quit::leaving();
-            handle.request_restart();
-        } else {
-            done();
-        }
     });
 }
 
@@ -235,6 +247,44 @@ mod tests {
         let mut idle = None;
         assert!(begin(&mut idle, How::Manual));
         assert_eq!(idle, Some(How::Manual));
-        assert_eq!((INSTALL, LATER, UP_TO_DATE, CHECK_FAILED), ("Install and Relaunch", "Later", "Studi0Trace is up to date", "Could not check for updates"));
+    }
+
+    #[test]
+    fn a_quiet_answer_ends_the_check_and_a_shown_one_keeps_it_until_dismissed() {
+        // decided and released under one guard: a Manual request cannot slip in between and be wiped
+        let mut state = Some(How::Automatic);
+        assert!(!settle(&mut state, Outcome::UpToDate));
+        assert_eq!(state, None);
+        let mut state = Some(How::Automatic);
+        assert!(!settle(&mut state, Outcome::Error));
+        assert_eq!(state, None);
+        let mut state = Some(How::Automatic);
+        assert!(settle(&mut state, Outcome::Available));
+        assert_eq!(state, Some(How::Automatic));
+        // an Automatic check a Manual request joined is shown
+        let mut state = Some(How::Automatic);
+        assert!(!begin(&mut state, How::Manual));
+        assert!(settle(&mut state, Outcome::Error));
+        assert_eq!(state, Some(How::Manual));
+        for outcome in [Outcome::Available, Outcome::UpToDate, Outcome::Error] {
+            let mut state = Some(How::Manual);
+            assert!(settle(&mut state, outcome), "{outcome:?}");
+            assert_eq!(state, Some(How::Manual));
+        }
+    }
+
+    #[test]
+    fn the_offer_warns_before_any_download_when_traces_would_be_lost() {
+        assert_eq!(offer_message("0.3.0", Some("Faster."), 0), "You have 0.3.0.\n\nFaster.");
+        assert_eq!(offer_message("0.3.0", None, 1), "You have 0.3.0.\n\nInstalling relaunches Studi0Trace; 1 traced image has not been exported.");
+        assert_eq!(
+            offer_message("0.3.0", Some("Faster."), 3),
+            "You have 0.3.0.\n\nFaster.\n\nInstalling relaunches Studi0Trace; 3 traced images have not been exported."
+        );
+    }
+
+    #[test]
+    fn the_copy() {
+        assert_eq!((INSTALL, LATER, UP_TO_DATE, CHECK_FAILED, INSTALL_FAILED), ("Install and Relaunch", "Later", "Studi0Trace is up to date", "Could not check for updates", "The update could not be installed."));
     }
 }

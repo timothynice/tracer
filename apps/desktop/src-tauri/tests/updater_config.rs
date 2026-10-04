@@ -14,6 +14,9 @@ fn json(file: &str) -> serde_json::Value {
 fn updates_come_from_the_latest_github_release_signed_with_the_apps_key() {
     let conf = json("tauri.conf.json");
     let updater = &conf["plugins"]["updater"];
+    // the signature's trusted comment carries the version it was signed for: a crafted latest.json cannot pair a
+    // higher version with an older, genuinely signed artifact
+    assert_eq!(updater["requireSignedVersion"], true);
     assert_eq!(updater["endpoints"], serde_json::json!(["https://github.com/timothynice/tracer/releases/latest/download/latest.json"]));
     assert_eq!(
         updater["pubkey"],
