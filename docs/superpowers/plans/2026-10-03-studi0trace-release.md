@@ -359,3 +359,33 @@ changes.
 ### Task B8: Final verification
 
 - [ ] Full suites (frontend, cargo workspace, Python), clippy, `CI=true npm run build` and `npm run smoke`, the universal build's `lipo`/`codesign` checks, and a native pass over the bug-hunt checklist (`scratchpad/qa-native/report.md`'s checklist) on the built app with screenshots in light and dark.
+
+---
+
+## Status (2026-10-03, paused at Tim's request)
+
+Branch `claude/mac-app-release` (from `main` 6105856), head `454f7ba`, not merged, not pushed. Executed
+subagent-driven; the detailed ledger (reviews, deferred minors) is `.superpowers/sdd/2026-10-03-studi0trace-release/progress.md`
+(git-ignored, on this machine only).
+
+**Done (implemented, reviewed, tests green):**
+- A1 intake `bc0171a` · A2 close/quit/menu `8b0212d 0a7e313` · A3 exports `54e72a3 9b02c7a` · A4 library `558e4fb 5e82374`
+  · A5 viewer/inspector `e3f73ce 0dd1ba7` · A6 window theme `4ede70f` · A7 polish `3163079`
+- B1 one version `48dd8c8` (+ `af143d1`) · B2 universal ad-hoc `3bf3f7e` · B3 updater `a52e466 d02dca4`
+  · B4 licence notices `0be6c18 63c3e68` · B5 CI + release workflows `88bb638` · B6 retirement `195063f 454f7ba`
+
+**Left:**
+1. **B7 docs**: README as the download page, CONTRIBUTING, CLAUDE.md (drop the Docker/lock text, add version.sh,
+   updater, notices.sh, workflows, FastAPI = developer tool), roadmap status line. Brief:
+   `.superpowers/sdd/2026-10-03-studi0trace-release/task-B7-brief.md` (same text as Task B7 above). A dark-mode
+   screenshot of the built app with a traced logo is in the session scratchpad (`a7/traced.png`, 2560×2702); take a
+   fresh one if it is gone. Leftover mentions of Dockerfile/render.yaml/sync_vexel_lock: README.md, CONTRIBUTING.md,
+   CLAUDE.md (historical docs under `docs/superpowers/` stay as they are).
+2. **B8 final verification**: full suites (frontend, `cargo test --workspace --release`, Python), clippy, `CI=true npm run build`,
+   `npm run smoke`, the universal build's lipo/codesign checks, a native pass in light and dark.
+3. **Final whole-branch review** (most capable model), with the ledger's deferred minors handed to it for triage; one fix wave.
+4. **Tim's steps** (not for an agent): merge to `main` and push; add the repo secret
+   `gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/studi0trace.key` (back up that key — losing it means
+   installed copies can't verify updates); suspend the two Render services in the Render dashboard; then tag `v0.3.0`
+   (or bump with `apps/desktop/scripts/version.sh`), push the tag, read and publish the draft release, and exercise
+   one real update (install → relaunch) from the first release to the second.
