@@ -150,7 +150,7 @@ mod tests {
         let too_long = std::io::Error::from_raw_os_error(63); // ENAMETOOLONG
         let m = words(&CommandError::io_write(p, &too_long)).to_string();
         assert!(m.starts_with("\u{201c}long.svg\u{201d}: ") && !m.contains("os error") && !m.contains("/a/b"), "{m}");
-        let plain = std::io::Error::new(std::io::ErrorKind::Other, "disk is on fire");
+        let plain = std::io::Error::other("disk is on fire");
         assert_eq!(words(&CommandError::io(p, &plain)), "\u{201c}long.svg\u{201d}: disk is on fire");
     }
 
