@@ -142,6 +142,15 @@ times out (no Automation permission for Finder, or no one logged in at the
 screen) the build fails after the `.app` is made, and `CI=true npm run build`
 makes the same `.dmg` with a plain window.
 
+**Third-party notices.** `apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.html`
+is generated and committed, bundled into the app and shown by Help ▸
+Acknowledgements. It lists the Rust crates (cargo-about) and the frontend's
+production npm packages and font, with their licence texts. Regenerate it after a
+dependency change with `bash apps/desktop/scripts/notices.sh` (needs
+`cargo install cargo-about --locked --version 0.9.2 --features cli` and
+`npm ci` in `frontend/`); the same lockfiles give the same bytes. A new licence in
+the Rust tree fails the run until `apps/desktop/about.toml` accepts it.
+
 **The app is not signed**, so macOS stops it the first time. On macOS 13 and 14,
 right-click the app and choose Open (or open System Settings ▸ Privacy & Security
 and click Open Anyway). On macOS 15 and later, only the second works: try to open

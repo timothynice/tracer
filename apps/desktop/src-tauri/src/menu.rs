@@ -48,6 +48,7 @@ pub const MENU: &[Entry] = &[
     e("clear", "Clear All", None),
     e("clear-recent", "Clear Menu", None),
     e("help", "Studi0Trace Help", None),
+    e("acknowledgements", "Acknowledgements", None),
 ];
 
 const HELP_URL: &str = "https://github.com/timothynice/tracer#readme";
@@ -244,7 +245,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
         .item(&item("clear")?)
         .build()?;
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
-    let help = SubmenuBuilder::new(app, "Help").item(&item("help")?).build()?;
+    let help = SubmenuBuilder::new(app, "Help").item(&item("help")?).item(&item("acknowledgements")?).build()?;
     let menu = Menu::with_items(app, &[&app_menu, &file, &edit, &view, &image, &window, &help])?;
     fill_recent(app, &recent_menu, recent)?;
     let handles = Handles { items, checks, recent: recent_menu, recent_paths: Mutex::new(recent.to_vec()), shown: Mutex::new(MenuState::default()), last: Mutex::default() };
@@ -320,6 +321,7 @@ pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
             use tauri_plugin_opener::OpenerExt;
             let _ = app.opener().open_url(HELP_URL, None::<&str>);
         }
+        "acknowledgements" => show_acknowledgements(app),
         recent if recent.starts_with("recent:") => open_recent(app, &recent["recent:".len()..]),
         other => {
             if !held_back(app, other) {
@@ -327,6 +329,21 @@ pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
             }
             restore_checks(app, other);
         }
+    }
+}
+
+/// The file of third-party notices the bundle carries (`bundle.resources`), under Resources.
+pub const NOTICES_FILE: &str = "THIRD_PARTY_NOTICES.html";
+
+/// Help ▸ Acknowledgements: the notices open in the default browser; a failure is a native alert, shown without
+/// blocking the main thread.
+fn show_acknowledgements<R: Runtime>(app: &AppHandle<R>) {
+    use tauri::path::BaseDirectory;
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    use tauri_plugin_opener::OpenerExt;
+    let opened = app.path().resolve(NOTICES_FILE, BaseDirectory::Resource).map_err(|e| e.to_string()).and_then(|path| app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|e| e.to_string()));
+    if let Err(why) = opened {
+        app.dialog().message(format!("The third-party notices could not be opened. {why}")).title("Could not open Acknowledgements").kind(MessageDialogKind::Error).buttons(MessageDialogButtons::Ok).show(|_| {});
     }
 }
 
@@ -404,6 +421,13 @@ mod tests {
         assert_eq!(get(&p, "toggle-inspector").2, Some(false));
         let tracing = plan(&MenuState { tracing: true, ..s });
         assert_eq!((get(&tracing, "generate").1, get(&tracing, "cancel").1), (false, true));
+    }
+
+    #[test]
+    fn acknowledgements_is_a_help_item_the_rust_side_handles() {
+        let a = entry("acknowledgements");
+        assert_eq!((a.label, a.accel), ("Acknowledgements", None));
+        assert_eq!(NOTICES_FILE, "THIRD_PARTY_NOTICES.html");
     }
 
     #[test]
