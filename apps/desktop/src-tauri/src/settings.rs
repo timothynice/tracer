@@ -4,7 +4,7 @@
 use crate::error::CommandError;
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, PoisonError};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 
 pub const MAX_RECENT: usize = 10;
@@ -65,6 +65,24 @@ impl Settings {
     }
 }
 
+/// The native theme an Appearance setting asks for: `None` is "follow the system". It is what vibrancy, the title
+/// bar, the traffic lights and WebKit's `prefers-color-scheme` all follow, so the window is set rather than the page.
+pub fn theme_for(appearance: &str) -> Option<tauri::Theme> {
+    match appearance {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        _ => None,
+    }
+}
+
+/// Puts every window on the theme the setting asks for (each of them, Settings included).
+pub fn apply_theme<R: Runtime>(app: &AppHandle<R>, appearance: &str) {
+    let theme = theme_for(appearance);
+    for window in app.webview_windows().values() {
+        let _ = window.set_theme(theme);
+    }
+}
+
 pub fn load<R: Runtime>(app: &AppHandle<R>) -> Settings {
     app.store(FILE).ok().and_then(|s| s.get(KEY)).map(|v| Settings::from_value(&v)).unwrap_or_default()
 }
@@ -86,6 +104,7 @@ fn save<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Result<(), Comma
     let store = app.store(FILE).map_err(|e| CommandError::new(500, "io_error", e.to_string()))?;
     store.set(KEY, serde_json::to_value(settings).expect("settings are JSON"));
     store.save().map_err(|e| CommandError::new(500, "io_error", e.to_string()))?;
+    apply_theme(app, &settings.appearance);
     let _ = app.emit("settings-changed", settings);
     crate::menu::set_recent(app, &settings.recent);
     Ok(())
@@ -110,6 +129,17 @@ pub fn clear_recent<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_follows_the_appearance_setting() {
+        assert_eq!(theme_for("light"), Some(tauri::Theme::Light));
+        assert_eq!(theme_for("dark"), Some(tauri::Theme::Dark));
+        // "system", and anything a hand-edited file might hold, follows the Mac
+        for other in ["system", "", "Dark", "auto"] {
+            assert_eq!(theme_for(other), None, "{other:?}");
+        }
+        assert_eq!(theme_for(&Settings::default().appearance), None);
+    }
 
     #[test]
     fn defaults_and_camel_case() {

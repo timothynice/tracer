@@ -231,6 +231,7 @@ pub(crate) fn show_settings_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
         .resizable(false)
         .minimizable(false)
         .maximizable(false)
+        .theme(crate::settings::theme_for(&settings::load(app).appearance))
         .build()?;
     Ok(())
 }

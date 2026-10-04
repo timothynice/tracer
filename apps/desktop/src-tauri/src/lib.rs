@@ -61,6 +61,8 @@ pub fn run() {
             let (menu, handles) = menu::build(app.handle(), &settings::load(app.handle()).recent)?;
             app.set_menu(menu)?;
             app.manage(handles);
+            // the windows follow the Appearance setting, not only the page (vibrancy, title bar, traffic lights)
+            settings::apply_theme(app.handle(), &settings::load(app.handle()).appearance);
             // nothing is possible until the UI says so
             menu::apply_state(app.handle(), &menu::MenuState::default());
             #[cfg(target_os = "macos")]
