@@ -5,11 +5,11 @@
 #   2. the sample is first in the recent files: the path reached the page, the page opened it, Rust kept it.
 # The user's settings are put back afterwards, once the instance is gone. The script refuses to run while any
 # Studi0Trace is already running (it would share the settings file). Run from apps/desktop: `npm run smoke`
-# (SKIP_BUILD=1 to reuse a build).
+# (SKIP_BUILD=1 to reuse a build; SMOKE_APP=<path to a .app> checks that bundle instead, e.g. the universal one, and skips the build).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP="$(cd ../.. && pwd)/target/release/bundle/macos/Studi0Trace.app"
+APP="${SMOKE_APP:-$(cd ../.. && pwd)/target/release/bundle/macos/Studi0Trace.app}"
 SUPPORT="$HOME/Library/Application Support/com.studi0.trace"
 SETTINGS="$SUPPORT/settings.json"
 SAMPLE="$(cd ../../frontend/public/samples && pwd)/logo.png"
@@ -20,7 +20,7 @@ if pgrep -f "Studi0Trace.app/Contents/MacOS" >/dev/null; then
   exit 1
 fi
 
-[ "${SKIP_BUILD:-0}" = 1 ] || npx tauri build --bundles app
+[ "${SKIP_BUILD:-0}" = 1 ] || [ -n "${SMOKE_APP:-}" ] || npx tauri build --bundles app
 
 mkdir -p "$SUPPORT"
 BACKUP=""
