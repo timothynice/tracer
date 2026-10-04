@@ -168,6 +168,20 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
     if (!platform.openSettingsWindow()) setSettingsOpen(true);
   }, []);
 
+  // Clear All asks first when a traced vector would be lost (the menu item and the sidebar's button both come here).
+  const asking = useRef(false);
+  const clearAll = useCallback(async () => {
+    if (asking.current) return;
+    const lost = unexportedCount(lib.getState());
+    if (lost > 0) {
+      asking.current = true;
+      const clear = await platform.confirmClear(lost).catch(() => false);
+      asking.current = false;
+      if (!clear) return;
+    }
+    lib.clear();
+  }, [lib]);
+
   const run = useCallback(
     (cmd: Command) => {
       const id = item?.image.id;
@@ -218,10 +232,10 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
           if (id) lib.remove(id);
           return;
         case "clear":
-          return lib.clear();
+          return clearAll();
       }
     },
-    [item, open, openSettings, exports, setMode, lib],
+    [item, open, openSettings, exports, setMode, lib, clearAll],
   );
   // the listeners subscribe once and call whatever `run` is now
   const runRef = useRef(run);
@@ -302,7 +316,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
             onAdd={() => void open(platform.pickImages())}
             onSelect={lib.select}
             onSelectNext={lib.selectNext}
-            onClear={lib.clear}
+            onClear={() => void clearAll()}
             onDownscale={(i) => void lib.downscale(i).catch((err: Error) => toast.error(err.message))}
             onDismissFailure={lib.dismissFailure}
             wrapCard={(it, card) => (

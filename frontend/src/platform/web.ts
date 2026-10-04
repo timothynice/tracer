@@ -103,6 +103,8 @@ export function webPlatform(): Platform {
     onOpenFailures: () => () => {},
     onDragState: () => () => {},
     setMenuState: () => {},
+    confirmClear: async (unexported) =>
+      window.confirm(`Clear all images?\n\n${unexported === 1 ? "1 traced image has not been exported." : `${unexported} traced images have not been exported.`}`),
     openSettingsWindow: () => false,
     windowRole: () => "main",
   };

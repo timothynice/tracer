@@ -135,6 +135,8 @@ export interface Platform {
   /** Files are being dragged over the window (true) or no longer are (false). Native only. */
   onDragState(cb: (over: boolean) => void): () => void;
   setMenuState(state: MenuState): void;
+  /** Clear All's question when `unexported` traced images would be lost; true to clear. A native alert in the app, `window.confirm` in a browser. */
+  confirmClear(unexported: number): Promise<boolean>;
   /** Settings in a window of its own; false where there is none (a browser shows its own sheet). */
   openSettingsWindow(): boolean;
   windowRole(): "main" | "settings";

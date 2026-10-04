@@ -232,7 +232,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
         .item(&check("toggle-sidebar")?)
         .item(&check("toggle-inspector")?)
         .separator()
-        .fullscreen()
+        .item(&PredefinedMenuItem::fullscreen(app, Some("Enter Full Screen"))?)
         .build()?;
     let image = SubmenuBuilder::new(app, "Image")
         .item(&item("generate")?)

@@ -167,6 +167,7 @@ export function nativePlatform(): Platform {
     onOpenFailures: (cb) => on<FailureDto[]>("open-failures", (ds) => cb(ds.map(toFailure))),
     onDragState: (cb) => on<boolean>("drag-state", cb),
     setMenuState: (state) => void invoke("set_menu_state", { state }).catch(() => {}),
+    confirmClear: (unexported) => call<boolean>("confirm_clear", { unexported }),
     openSettingsWindow: () => {
       void invoke("open_settings_window").catch(() => {});
       return true;

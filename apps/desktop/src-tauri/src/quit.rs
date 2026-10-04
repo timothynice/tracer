@@ -88,7 +88,7 @@ pub fn ask<R: Runtime>(app: &AppHandle<R>, message: String) {
 }
 
 /// Show the app and the main window, unminimised and key, so a sheet on it is seen.
-fn bring_up<R: Runtime>(app: &AppHandle<R>, main: &tauri::WebviewWindow<R>) {
+pub(crate) fn bring_up<R: Runtime>(app: &AppHandle<R>, main: &tauri::WebviewWindow<R>) {
     #[cfg(target_os = "macos")]
     let _ = app.show();
     #[cfg(not(target_os = "macos"))]

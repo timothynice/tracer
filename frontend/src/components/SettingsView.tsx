@@ -1,4 +1,4 @@
-import * as Switch from "@radix-ui/react-switch";
+import { Switch } from "./Switch";
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import type { Settings } from "@/platform/types";
@@ -64,16 +64,7 @@ function Choice<T extends string>({ label, value, options, onChange }: { label: 
 }
 
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <Switch.Root
-      aria-label={label}
-      checked={checked}
-      onCheckedChange={onChange}
-      className="relative h-[22px] w-[38px] shrink-0 rounded-full bg-muted-foreground/30 transition-colors data-[state=checked]:bg-[var(--accent-mac)]"
-    >
-      <Switch.Thumb className="block h-[18px] w-[18px] translate-x-[2px] rounded-full bg-white shadow transition-transform data-[state=checked]:translate-x-[18px]" />
-    </Switch.Root>
-  );
+  return <Switch aria-label={label} checked={checked} onCheckedChange={onChange} />;
 }
 
 /** The settings, as grouped rows in the manner of System Settings. */
@@ -81,7 +72,7 @@ export function SettingsView({ settings, onChange }: SettingsViewProps) {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   return (
     <div className="space-y-5 p-5">
-      <Group title="Appearance">
+      <Group title="General">
         <Row label="Appearance">
           <Choice label="Appearance" value={settings.appearance} options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]} onChange={(v) => set("appearance", v)} />
         </Row>

@@ -38,6 +38,7 @@ vi.mock("@/platform", async () => {
     },
     onDragState: () => () => {},
     setMenuState: (s: unknown) => hooks.states.push(s),
+    confirmClear: vi.fn(async () => true),
     openSettingsWindow: () => true,
     windowRole: () => "main",
   };
@@ -99,6 +100,60 @@ describe("the Mac app's wiring", () => {
     await waitFor(() => expect(hooks.failures).not.toBeNull());
     act(() => hooks.failures!([{ name: "Dropped items", path: null, error: { code: "nothing_to_open", message: "Nothing to open: drop image files or a folder of them." } }]));
     expect(await screen.findByText("Nothing to open: drop image files or a folder of them.")).toBeInTheDocument();
+  });
+
+  it("Clear All asks first when a traced vector would be lost, from the menu and from the sidebar, and not otherwise", async () => {
+    const traced = () =>
+      vi.mocked(platform.vectorize).mockImplementationOnce(async () => ({
+        success: true,
+        image_id: "x",
+        width: 64,
+        height: 64,
+        results: { vexel: { svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M0 0H8V8Z" fill="#000"/></svg>', elapsed_ms: 5000, stats: {} } },
+        parameters_used: { vexel: {} },
+        auto: null,
+      }));
+    traced();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <App />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Drop images here");
+    await waitFor(() => expect(hooks.opens).not.toBeNull());
+    act(() => hooks.opens!(["/pics/mark.png"]));
+    await screen.findByRole("option", { name: /mark\.png/ });
+    act(() => hooks.menu!("generate"));
+    await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ unexported: 1 }));
+    const confirm = vi.mocked(platform.confirmClear);
+    confirm.mockClear();
+
+    // Cancel keeps everything, on both roads
+    confirm.mockResolvedValueOnce(false);
+    act(() => hooks.menu!("clear"));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(1));
+    confirm.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getAllByRole("button", { name: /Clear All/ }).at(-1)!);
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("option", { name: /mark\.png/ })).toBeInTheDocument();
+
+    // Clear All clears
+    confirm.mockResolvedValueOnce(true);
+    fireEvent.click(screen.getAllByRole("button", { name: /Clear All/ }).at(-1)!);
+    await waitFor(() => expect(screen.queryByRole("option", { name: /mark\.png/ })).toBeNull());
+
+    // an exported vector is nothing to lose: no question
+    traced();
+    act(() => hooks.opens!(["/pics/other.png"]));
+    await screen.findByRole("option", { name: /other\.png/ });
+    act(() => hooks.menu!("generate"));
+    await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ unexported: 1 }));
+    act(() => hooks.menu!("copy-svg"));
+    await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ unexported: 0 }));
+    confirm.mockClear();
+    act(() => hooks.menu!("clear"));
+    await waitFor(() => expect(screen.queryByRole("option", { name: /other\.png/ })).toBeNull());
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("a trace for other settings runs in the background: the cached trace shown is not busy, the menu and quit know", async () => {

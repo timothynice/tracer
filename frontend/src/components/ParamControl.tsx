@@ -1,6 +1,6 @@
 import * as Select from "@radix-ui/react-select";
 import * as Slider from "@radix-ui/react-slider";
-import * as Switch from "@radix-ui/react-switch";
+import { Switch } from "./Switch";
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
@@ -47,16 +47,7 @@ export function ParamControl({ spec, value, onChange, disabled, invalid }: Param
           <label id={labelId} htmlFor={id} className="text-sm font-medium">
             {spec.label}
           </label>
-          <Switch.Root
-            id={id}
-            checked={Boolean(value)}
-            onCheckedChange={onChange}
-            disabled={disabled}
-            aria-describedby={descId}
-            className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary disabled:opacity-50"
-          >
-            <Switch.Thumb className="block h-5 w-5 translate-x-0.5 rounded-full bg-background shadow-sm transition-transform data-[state=checked]:translate-x-[22px] data-[state=checked]:bg-primary-foreground" />
-          </Switch.Root>
+          <Switch id={id} checked={Boolean(value)} onCheckedChange={onChange} disabled={disabled} aria-describedby={descId} />
         </div>
       ) : (
         head
@@ -173,7 +164,7 @@ function NumberField({
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === "Enter" && commit()}
-        className={`tabular h-7 w-16 rounded-md border border-input bg-background px-2 text-right text-xs text-foreground focus-visible:ring-2 focus-visible:ring-ring ${invalid ? "border-destructive" : ""}`}
+        className={`tabular h-7 w-16 rounded-md border border-input bg-background pl-2 pr-2.5 text-right text-xs text-foreground focus-visible:ring-2 focus-visible:ring-ring ${invalid ? "border-destructive" : ""}`}
       />
       {spec.unit && <span aria-hidden="true">{spec.unit}</span>}
     </span>

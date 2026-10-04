@@ -209,6 +209,38 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<
     settings::update(&app, |stored| stored.merged(settings))
 }
 
+pub const CLEAR_TITLE: &str = "Clear all images?";
+pub const CLEAR: &str = "Clear All";
+
+/// What Clear All would lose, as the alert's message; None when nothing would be (it then clears without asking).
+pub fn clear_prompt(unexported: u32) -> Option<String> {
+    match unexported {
+        0 => None,
+        1 => Some("1 traced image has not been exported.".to_string()),
+        n => Some(format!("{n} traced images have not been exported.")),
+    }
+}
+
+/// Clear All's question, for the menu item and the sidebar's button alike: true to clear. A sheet on the main
+/// window, as Quit's is; the answer comes back once it is chosen.
+#[tauri::command]
+pub async fn confirm_clear(app: tauri::AppHandle, unexported: u32) -> bool {
+    use tauri::Manager;
+    use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind};
+    let Some(message) = clear_prompt(unexported) else { return true };
+    let mut dialog = app
+        .dialog()
+        .message(message)
+        .title(CLEAR_TITLE)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(CLEAR.into(), crate::quit::CANCEL.into()));
+    if let Some(main) = app.get_webview_window(crate::opens::MAIN) {
+        crate::quit::bring_up(&app, &main);
+        dialog = dialog.parent(&main);
+    }
+    dialog.blocking_show()
+}
+
 #[tauri::command]
 pub fn set_menu_state(app: tauri::AppHandle, state: MenuState) {
     crate::menu::apply_state(&app, &state);
@@ -239,4 +271,17 @@ pub(crate) fn show_settings_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
 #[tauri::command]
 pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), CommandError> {
     show_settings_window(&app).map_err(|e| CommandError::new(500, "io_error", e.to_string()))
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn clear_all_asks_only_when_a_vector_would_be_lost() {
+        assert_eq!(clear_prompt(0), None);
+        assert_eq!(clear_prompt(1).as_deref(), Some("1 traced image has not been exported."));
+        assert_eq!(clear_prompt(4).as_deref(), Some("4 traced images have not been exported."));
+        assert_eq!((CLEAR_TITLE, CLEAR), ("Clear all images?", "Clear All"));
+    }
 }

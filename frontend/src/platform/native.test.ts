@@ -95,6 +95,15 @@ describe("native platform", () => {
     expect(calls[0].payload).toEqual({ items: files, reveal: false });
   });
 
+  it("asks the app to confirm Clear All with the count it would lose", async () => {
+    ipc((cmd) => {
+      if (cmd === "confirm_clear") return false;
+      throw new Error(`unexpected ${cmd}`);
+    });
+    await expect(nativePlatform().confirmClear(3)).resolves.toBe(false);
+    expect(calls[0]).toMatchObject({ cmd: "confirm_clear", payload: { unexported: 3 } });
+  });
+
   it("hands the app's open failures over as failures with their code", async () => {
     ipc(() => null);
     const got: unknown[] = [];

@@ -19,6 +19,11 @@ describe("SettingsView", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Show in Finder after export" }));
     expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, revealAfterExport: true });
   });
+  it("names its sections General, Export and Tracing, never the same word as the first row", () => {
+    render(<SettingsView settings={DEFAULT_SETTINGS} onChange={vi.fn()} />);
+    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["General", "Export", "Tracing"]);
+    expect(screen.getAllByText("Appearance")).toHaveLength(1);
+  });
   it("a radiogroup is one tab stop, moved between its options by the arrow keys", () => {
     const onChange = vi.fn();
     render(<SettingsView settings={DEFAULT_SETTINGS} onChange={onChange} />);

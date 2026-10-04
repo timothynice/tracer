@@ -53,6 +53,7 @@ pub fn run() {
             commands::load_settings,
             commands::save_settings,
             commands::set_menu_state,
+            commands::confirm_clear,
             commands::take_pending_opens,
             commands::open_settings_window,
         ])
