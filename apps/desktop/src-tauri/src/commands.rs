@@ -259,7 +259,7 @@ pub(crate) fn show_settings_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
     }
     tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
         .title("Settings")
-        .inner_size(520.0, 480.0)
+        .inner_size(520.0, 500.0)
         .resizable(false)
         .minimizable(false)
         .maximizable(false)

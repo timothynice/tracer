@@ -19,12 +19,14 @@ pub struct Settings {
     pub reveal_after_export: bool,
     pub trace_on_open: bool,
     pub live_update: bool,
+    /// Check for an update at launch, quietly (`updates::check`, Automatic).
+    pub check_for_updates: bool,
     pub recent: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { appearance: "system".into(), export_to: "ask".into(), reveal_after_export: false, trace_on_open: false, live_update: true, recent: Vec::new() }
+        Settings { appearance: "system".into(), export_to: "ask".into(), reveal_after_export: false, trace_on_open: false, live_update: true, check_for_updates: true, recent: Vec::new() }
     }
 }
 
@@ -43,6 +45,7 @@ impl Settings {
         take(value, "revealAfterExport", &mut s.reveal_after_export);
         take(value, "traceOnOpen", &mut s.trace_on_open);
         take(value, "liveUpdate", &mut s.live_update);
+        take(value, "checkForUpdates", &mut s.check_for_updates);
         take(value, "recent", &mut s.recent);
         s
     }
@@ -144,10 +147,12 @@ mod tests {
     #[test]
     fn defaults_and_camel_case() {
         let v = serde_json::to_value(Settings::default()).unwrap();
-        assert_eq!(v, serde_json::json!({"appearance": "system", "exportTo": "ask", "revealAfterExport": false, "traceOnOpen": false, "liveUpdate": true, "recent": []}));
-        // a file from an older version, missing keys, still reads
+        assert_eq!(v, serde_json::json!({"appearance": "system", "exportTo": "ask", "revealAfterExport": false, "traceOnOpen": false, "liveUpdate": true, "checkForUpdates": true, "recent": []}));
+        // a file from an older version, missing keys, still reads, and checks for updates
         let old: Settings = serde_json::from_value(serde_json::json!({"appearance": "dark"})).unwrap();
-        assert_eq!((old.appearance.as_str(), old.live_update), ("dark", true));
+        assert_eq!((old.appearance.as_str(), old.live_update, old.check_for_updates), ("dark", true, true));
+        let old = Settings::from_value(&serde_json::json!({"appearance": "dark", "liveUpdate": false}));
+        assert!(old.check_for_updates);
     }
 
     #[test]
@@ -156,6 +161,10 @@ mod tests {
         assert_eq!((s.appearance.as_str(), s.recent.as_slice(), s.live_update), ("system", ["/a.png".to_string()].as_slice(), false));
         let s = Settings::from_value(&serde_json::json!({"recent": "nope", "exportTo": "beside", "traceOnOpen": "yes", "revealAfterExport": true}));
         assert_eq!((s.export_to.as_str(), s.recent.len(), s.trace_on_open, s.reveal_after_export), ("beside", 0, false, true));
+        let s = Settings::from_value(&serde_json::json!({"checkForUpdates": "no"}));
+        assert!(s.check_for_updates);
+        let s = Settings::from_value(&serde_json::json!({"checkForUpdates": false}));
+        assert!(!s.check_for_updates);
         assert_eq!(Settings::from_value(&serde_json::json!([1, 2])), Settings::default());
         assert_eq!(Settings::from_value(&serde_json::json!({})), Settings::default());
     }

@@ -66,7 +66,7 @@ restore() {
 trap restore EXIT
 trap 'exit 130' INT TERM
 
-printf '{"settings":{"appearance":"system","exportTo":"ask","revealAfterExport":false,"traceOnOpen":true,"liveUpdate":true,"recent":[]}}' > "$SETTINGS"
+printf '{"settings":{"appearance":"system","exportTo":"ask","revealAfterExport":false,"traceOnOpen":true,"liveUpdate":true,"checkForUpdates":false,"recent":[]}}' > "$SETTINGS"
 open -n -a "$APP" "$SAMPLE"
 
 worker=0

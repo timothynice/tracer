@@ -44,11 +44,13 @@ export interface Settings {
   revealAfterExport: boolean;
   traceOnOpen: boolean;
   liveUpdate: boolean;
+  /** Check for an update at launch, quietly (the Mac app; the browser harness has no updater). */
+  checkForUpdates: boolean;
   /** Paths, most recent first; only the app changes it. */
   recent: string[];
 }
 
-export const DEFAULT_SETTINGS: Settings = { appearance: "system", exportTo: "ask", revealAfterExport: false, traceOnOpen: false, liveUpdate: true, recent: [] };
+export const DEFAULT_SETTINGS: Settings = { appearance: "system", exportTo: "ask", revealAfterExport: false, traceOnOpen: false, liveUpdate: true, checkForUpdates: true, recent: [] };
 
 export type ViewMode = "split" | "side" | "overlay" | "vector";
 

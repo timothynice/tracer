@@ -1,6 +1,6 @@
 //! The menu bar. Each item the UI acts on is sent to it as a `menu` event with the item's id; File ▸ Open…,
-//! Open Recent, Settings, Help and Quit are handled here. The UI reports what is possible (`set_menu_state`) and
-//! the items follow.
+//! Open Recent, Check for Updates…, Settings, Help and Quit are handled here. The UI reports what is possible
+//! (`set_menu_state`) and the items follow.
 use crate::{opens, settings};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -21,6 +21,7 @@ const fn e(id: &'static str, label: &'static str, accel: Option<&'static str>) -
 
 /// Every item of ours (the predefined ones, About, Hide, Copy and so on, are added in `build`).
 pub const MENU: &[Entry] = &[
+    e("check-updates", "Check for Updates…", None),
     e("settings", "Settings…", Some("CmdOrCtrl+,")),
     e("quit", "Quit Studi0Trace", Some("CmdOrCtrl+Q")),
     e("open", "Open…", Some("CmdOrCtrl+O")),
@@ -192,6 +193,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
     };
     let app_menu = SubmenuBuilder::new(app, "Studi0Trace")
         .about(Some(about))
+        .item(&item("check-updates")?)
         .separator()
         .item(&item("settings")?)
         .separator()
@@ -309,6 +311,7 @@ pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
             });
         }
         "quit" => crate::quit::request(app),
+        "check-updates" => crate::updates::check(app, crate::updates::How::Manual),
         "clear-recent" => settings::clear_recent(app),
         "settings" => {
             let _ = crate::commands::show_settings_window(app);
@@ -401,6 +404,12 @@ mod tests {
         assert_eq!(get(&p, "toggle-inspector").2, Some(false));
         let tracing = plan(&MenuState { tracing: true, ..s });
         assert_eq!((get(&tracing, "generate").1, get(&tracing, "cancel").1), (false, true));
+    }
+
+    #[test]
+    fn check_for_updates_is_ours_and_asks_for_more() {
+        let c = entry("check-updates");
+        assert_eq!((c.label, c.accel), ("Check for Updates…", None));
     }
 
     #[test]

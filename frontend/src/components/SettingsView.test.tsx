@@ -19,6 +19,15 @@ describe("SettingsView", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Show in Finder after export" }));
     expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, revealAfterExport: true });
   });
+  it("checks for updates by default, and the switch turns it off", () => {
+    expect(DEFAULT_SETTINGS.checkForUpdates).toBe(true);
+    const onChange = vi.fn();
+    render(<SettingsView settings={DEFAULT_SETTINGS} onChange={onChange} />);
+    const toggle = screen.getByRole("switch", { name: "Check for updates automatically" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, checkForUpdates: false });
+  });
   it("names its sections General, Export and Tracing, never the same word as the first row", () => {
     render(<SettingsView settings={DEFAULT_SETTINGS} onChange={vi.fn()} />);
     expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["General", "Export", "Tracing"]);

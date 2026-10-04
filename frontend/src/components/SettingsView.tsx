@@ -76,6 +76,9 @@ export function SettingsView({ settings, onChange }: SettingsViewProps) {
         <Row label="Appearance">
           <Choice label="Appearance" value={settings.appearance} options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]} onChange={(v) => set("appearance", v)} />
         </Row>
+        <Row label="Check for updates automatically" hint="When Studi0Trace opens">
+          <Toggle label="Check for updates automatically" checked={settings.checkForUpdates} onChange={(v) => set("checkForUpdates", v)} />
+        </Row>
       </Group>
       <Group title="Export">
         <Row label="Save exports">

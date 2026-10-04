@@ -9,6 +9,7 @@ pub mod queue;
 pub mod quit;
 pub mod settings;
 pub mod store;
+pub mod updates;
 pub mod worker;
 
 use studi0trace_core::api::Core;
@@ -29,6 +30,8 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        // driven from Rust only (updates.rs): the webview has no updater permission
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(std::sync::Mutex::new(opens::Opens::default()))
         // The parent's core validates what is opened and answers engines and presets; the worker traces with a
         // core of its own, from the bytes in `images`. A cache of 0 bytes keeps only the last image decoded
@@ -68,6 +71,11 @@ pub fn run() {
             menu::apply_state(app.handle(), &menu::MenuState::default());
             #[cfg(target_os = "macos")]
             quit::install_terminate_hook(app.handle());
+            // the windows of tauri.conf.json exist by now; the check runs on the async runtime (`updates::check`
+            // spawns it) and says nothing unless there is an update
+            if settings::load(app.handle()).check_for_updates {
+                updates::check(app.handle(), updates::How::Automatic);
+            }
             Ok(())
         })
         .on_menu_event(|app, event| menu::on_menu(app, event.id().as_ref()))
