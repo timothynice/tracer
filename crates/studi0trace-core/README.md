@@ -147,9 +147,8 @@ without the module.
   the calling thread, on whatever stack it has (1 MiB on wasm by default); plan 3 must
   measure that.
 - **The release profile** (`opt-level = 3`, `lto = "fat"`, `codegen-units = 1`) is in the
-  root `Cargo.toml`, the workspace's. `backend/Dockerfile` builds the engine alone from
-  the `backend/` context, which has no root manifest, so it carries the same profile in
-  `CARGO_PROFILE_RELEASE_*` environment variables; change one, change the other.
+  root `Cargo.toml`, the workspace's, and nowhere else (the Docker image that carried a copy
+  was retired with the server deploy in plan 4).
 - **Test seams** are public (the integration tests are another crate) but not part of the
   API, and `#[doc(hidden)]`: `Core::with_tracer`, `auto::run_with` and `auto::run_with_scorer`
   (with the `auto::Tracer` and `auto::Scorer` types) let a test replace the engine, and the
