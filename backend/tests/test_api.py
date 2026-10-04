@@ -31,7 +31,7 @@ def upload(client: TestClient, data: bytes, **form):
 def test_health_lists_engines(client):
     body = client.get("/health").json()
     assert body["status"] == "ok"
-    assert {"potrace", "vtracer"} <= set(body["engines"])
+    assert body["engines"][0] == "vexel"
 
 
 def test_health_names_the_vexel_backend(client):
@@ -42,21 +42,20 @@ def test_health_names_the_vexel_backend(client):
 
 def test_engines_expose_schema_and_defaults(client):
     body = client.get("/engines").json()
-    potrace = next(e for e in body if e["id"] == "potrace")
-    assert potrace["params"]["properties"]["threshold"]["ui"]["control"] == "slider"
-    assert potrace["defaults"]["threshold"] == 128
+    vexel = next(e for e in body if e["id"] == "vexel")
+    assert vexel["params"]["properties"]["detail"]["ui"]["control"] == "slider"
+    assert vexel["defaults"]["detail"] == 6.0
 
 
-def test_vectorize_with_file_runs_all_engines(client):
+def test_vectorize_with_file_runs_vexel_by_default(client):
     r = upload(client, black_square_on_transparent())
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] and body["width"] == 64
     assert len(body["image_id"]) == 32
-    for eid in ("potrace", "vtracer"):
-        assert body["results"][eid]["svg"].startswith("<")
-        assert body["results"][eid]["stats"]["paths"] >= 1
-    assert body["parameters_used"]["potrace"]["threshold"] == 128
+    assert body["results"]["vexel"]["svg"].startswith("<")
+    assert body["results"]["vexel"]["stats"]["paths"] >= 1
+    assert body["parameters_used"]["vexel"]["detail"] == 6.0
     assert "vectorized" not in body and "original_image" not in body
 
 
@@ -64,17 +63,17 @@ def test_upload_then_vectorize_by_id(client):
     up = client.post("/uploads", files={"file": ("x.png", black_square_on_transparent(), "image/png")}).json()
     assert up["width"] == 64 and up["format"] == "PNG" and len(up["image_id"]) == 32
 
-    r = client.post("/vectorize", data={"image_id": up["image_id"], "engines": "potrace"})
+    r = client.post("/vectorize", data={"image_id": up["image_id"], "engines": "vexel"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["image_id"] == up["image_id"]
-    assert set(body["results"]) == {"potrace"}
+    assert set(body["results"]) == {"vexel"}
 
 
-def test_file_response_id_is_reusable(client):
-    first = upload(client, make_png(), engines="potrace").json()
-    again = client.post("/vectorize", data={"image_id": first["image_id"], "engines": "vtracer"}).json()
-    assert set(again["results"]) == {"vtracer"}
+def test_file_response_id_is_reusable(client, moody):
+    first = upload(client, make_png(), engines="vexel").json()
+    again = client.post("/vectorize", data={"image_id": first["image_id"], "engines": "moody"}).json()
+    assert set(again["results"]) == {"moody"}
 
 
 def test_unknown_image_id_is_404(client):
@@ -84,24 +83,25 @@ def test_unknown_image_id_is_404(client):
 
 
 def test_no_image_is_400(client):
-    r = client.post("/vectorize", data={"engines": "potrace"})
+    r = client.post("/vectorize", data={"engines": "vexel"})
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "no_image"
 
 
-def test_engines_list_filters(client):
-    assert set(upload(client, make_png(), engines="vtracer").json()["results"]) == {"vtracer"}
+def test_engines_list_filters(client, moody):
+    assert set(upload(client, make_png(), engines="moody").json()["results"]) == {"moody"}
+    assert set(upload(client, make_png(), engines="vexel").json()["results"]) == {"vexel"}
 
 
 def test_parameters_are_applied(client):
-    body = upload(client, make_png(), engines="potrace", parameters=json.dumps({"potrace": {"threshold": 200}})).json()
-    assert body["parameters_used"]["potrace"]["threshold"] == 200
+    body = upload(client, make_png(), engines="vexel", parameters=json.dumps({"vexel": {"detail": 12}})).json()
+    assert body["parameters_used"]["vexel"]["detail"] == 12
 
 
 def test_bad_parameter_is_422_with_cors(client):
-    r = upload(client, make_png(), parameters=json.dumps({"potrace": {"alphamax": 5}}))
+    r = upload(client, make_png(), parameters=json.dumps({"vexel": {"detail": 500}}))
     assert r.status_code == 422
-    assert r.json()["detail"][0]["loc"][:2] == ["potrace", "alphamax"]
+    assert r.json()["detail"][0]["loc"][:2] == ["vexel", "detail"]
     assert r.headers["access-control-allow-origin"] == ORIGIN
 
 
@@ -155,11 +155,11 @@ def test_engine_failure_is_isolated(client):
 
     registry.register(Boom())
     try:
-        body = upload(client, make_png(), engines="boom,potrace").json()
+        body = upload(client, make_png(), engines="boom,vexel").json()
     finally:
         registry.unregister("boom")
     assert body["results"]["boom"]["error"]["code"] == "engine_crashed"
-    assert body["results"]["potrace"]["svg"]
+    assert body["results"]["vexel"]["svg"]
 
 
 def test_engines_run_off_the_event_loop_and_in_parallel(client):
@@ -246,6 +246,18 @@ class Moody:
         return finish(SQUARE.format(fill=params.fill), image, started)
 
 
+class Plain(Moody):
+    """An engine Auto has no candidates for."""
+    id, label, description = "plain", "Plain", "no presets"
+
+
+@pytest.fixture
+def plain():
+    registry.register(Plain())
+    yield
+    registry.unregister("plain")
+
+
 @pytest.fixture
 def moody(monkeypatch):
     """Registers Moody and makes Auto try the given candidates for it."""
@@ -279,9 +291,9 @@ def test_auto_returns_every_candidate_the_pick_and_why(client):
 
 
 def test_without_auto_the_response_is_unchanged(client):
-    body = upload(client, make_png(), engines="potrace").json()
+    body = upload(client, make_png(), engines="vexel").json()
     assert body.get("auto") is None
-    assert set(body["results"]) == {"potrace"}
+    assert set(body["results"]) == {"vexel"}
 
 
 def test_auto_picks_the_cleanest_of_the_most_faithful(client, moody):
@@ -294,17 +306,17 @@ def test_auto_picks_the_cleanest_of_the_most_faithful(client, moody):
     assert {c["preset"]: c["scores"]["delta_e"] for c in auto["candidates"]}["white"] > 50
 
 
-def test_one_failing_candidate_does_not_fail_the_request(client, moody):
+def test_one_failing_candidate_does_not_fail_the_request(client, moody, plain):
     moody(("crash", {"mode": "crash"}), ("fail", {"mode": "fail"}), ("ok", {"mode": "ok"}))
-    r = upload(client, make_png(), engines="moody,potrace", auto="true")
+    r = upload(client, make_png(), engines="moody,plain", auto="true")
     assert r.status_code == 200, r.text
     body = r.json()
     cands = {c["preset"]: c for c in body["auto"]["moody"]["candidates"]}
     assert cands["crash"]["error"]["code"] == "engine_crashed" and cands["crash"]["svg"] is None
     assert cands["fail"]["error"]["code"] == "engine_failed"
     assert body["auto"]["moody"]["pick"] == "ok"
-    assert body["results"]["moody"]["svg"] and body["results"]["potrace"]["svg"]
-    assert "potrace" not in body["auto"], "an engine without candidates is traced as usual"
+    assert body["results"]["moody"]["svg"] and body["results"]["plain"]["svg"]
+    assert "plain" not in body["auto"], "an engine without candidates is traced as usual"
 
 
 def test_every_candidate_failing_is_an_engine_error_not_a_500(client, moody):
@@ -338,8 +350,8 @@ def test_auto_candidates_trace_concurrently(client, moody):
     assert wall < 1.0, f"three 0.4 s candidates took {wall:.2f} s - they ran one after another"
 
 
-def test_auto_for_an_engine_without_candidates_is_400_with_cors(client):
-    r = upload(client, make_png(), engines="potrace", auto="true")
+def test_auto_for_an_engine_without_candidates_is_400_with_cors(client, plain):
+    r = upload(client, make_png(), engines="plain", auto="true")
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "auto_unavailable"
     assert r.headers["access-control-allow-origin"] == ORIGIN

@@ -9,6 +9,7 @@ import pytest
 from bench.corpus import load_corpus
 from bench.runner import compare, load_results, run
 from bench.synth import generate
+from tests.conftest import needs_vtracer
 
 
 @pytest.fixture(scope="module")
@@ -18,6 +19,7 @@ def corpus(tmp_path_factory) -> Path:
     return root
 
 
+@needs_vtracer
 def test_run_writes_results_and_report(corpus: Path, tmp_path: Path):
     items = load_corpus(corpus, ids=["logo/ring-48", "gradient/linear-frame-48"])
     out = tmp_path / "r"
@@ -42,6 +44,7 @@ def test_run_writes_results_and_report(corpus: Path, tmp_path: Path):
     assert (out / "media.json").exists()
 
 
+@needs_vtracer
 def test_params_are_applied_and_recorded(corpus: Path, tmp_path: Path):
     items = load_corpus(corpus, ids=["flat/mosaic-48"])
     results = load_results(run(items, ["vtracer"], params={"vtracer": {"color_precision": 3}}, out_dir=tmp_path / "p", media=False))

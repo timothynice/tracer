@@ -1,3 +1,4 @@
+import ast
 import io
 import shutil
 import xml.etree.ElementTree as ET
@@ -8,12 +9,15 @@ from pydantic import BaseModel, ValidationError
 
 from studi0trace.engines import registry
 from studi0trace.engines.base import Engine, TraceInput, TraceResult, finish
-from studi0trace.engines.potrace import PotraceEngine, PotraceParams
-from studi0trace.engines.vtracer import VTracerEngine, VTracerParams
+from bench.engines.potrace import PotraceEngine, PotraceParams
 from studi0trace.imaging.intake import load_upload
-from tests.conftest import black_square_on_transparent, encode, make_png, two_colour_image
+from tests.conftest import black_square_on_transparent, encode, make_png, needs_vtracer, two_colour_image
 
 LIMITS = dict(max_bytes=20 * 1024 * 1024, max_pixels=40_000_000)
+try:
+    from bench.engines.vtracer import VTracerEngine, VTracerParams
+except ImportError:  # the bench extra is not installed; the tests below that need it skip
+    VTracerEngine = VTracerParams = None
 needs_potrace = pytest.mark.skipif(shutil.which("potrace") is None, reason="potrace binary not installed")
 
 
@@ -69,9 +73,28 @@ def test_registry_roundtrip():
         registry.get("fake")
 
 
+def _ids_in_a_fresh_interpreter(*statements: str) -> list[str]:
+    """The registry's ids after running `statements` in a process of their own: this one has imported
+    bench.engines already (for the Potrace and VTracer tests below), which registers them."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    probe = "\n".join(["from studi0trace.engines import registry", "registry.load_builtin()", *statements,
+                       "print(registry.ids())"])
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True,
+                         cwd=Path(__file__).resolve().parents[1]).stdout.strip()
+    return ast.literal_eval(out)
+
+
 def test_builtin_engines_registered():
-    registry.load_builtin()
-    assert {"potrace", "vtracer"} <= set(registry.ids())
+    """The service serves Vexel alone."""
+    assert _ids_in_a_fresh_interpreter() == ["vexel"]
+
+
+def test_the_bench_engines_register_when_the_bench_package_is_imported():
+    ids = _ids_in_a_fresh_interpreter("import bench.engines")
+    assert ids[:2] == ["vexel", "potrace"] and (ids[2:] == ["vtracer"] or VTracerEngine is None)
 
 
 # --- potrace ------------------------------------------------------------------
@@ -127,6 +150,7 @@ def test_potrace_schema_carries_ui_hints():
 # --- vtracer ------------------------------------------------------------------
 
 
+@needs_vtracer
 def test_vtracer_traces_two_colours():
     result = VTracerEngine().trace(inp(two_colour_image(64)), VTracerParams())
     assert_well_formed(result, 64, 64)
@@ -134,6 +158,7 @@ def test_vtracer_traces_two_colours():
     assert result.stats.unique_fills >= 2
 
 
+@needs_vtracer
 def test_vtracer_preserves_transparency():
     import resvg_py
 
@@ -144,11 +169,13 @@ def test_vtracer_preserves_transparency():
     assert rendered.getpixel((32, 32))[3] == 255
 
 
+@needs_vtracer
 def test_vtracer_binary_mode():
     result = VTracerEngine().trace(inp(two_colour_image(64)), VTracerParams(colormode="binary"))
     assert result.stats.unique_fills <= 2
 
 
+@needs_vtracer
 def test_vtracer_params_bounds():
     with pytest.raises(ValidationError):
         VTracerParams(color_precision=9)

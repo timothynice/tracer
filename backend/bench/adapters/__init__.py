@@ -3,7 +3,9 @@
 These register into the same engine registry the service uses, but only when
 the bench imports this package (`load()`); `studi0trace.engines.registry.load_builtin`
 never does, so nothing here is a runtime dependency of the app, and none of
-them appear in `GET /engines`.
+them appear in `GET /engines`. (Potrace and VTracer, which are not adapters of an
+external tool but engines of their own, live in `bench.engines`; `load()`
+imports that too.)
 
   autotrace     the `autotrace` CLI (brew install autotrace), colour mode
   imagetracer   ImageTracer.js under Node (npm install imagetracerjs pngjs),
@@ -35,6 +37,7 @@ def load() -> dict[str, str]:
     from bench.adapters import autotrace, imagetracer, vexel_auto
 
     registry.load_builtin()
+    import bench.engines  # noqa: F401 - registers Potrace and VTracer, which the service no longer serves
     _REASONS.clear()
     for mod in (autotrace, imagetracer, vexel_auto):
         engine = mod.ENGINE

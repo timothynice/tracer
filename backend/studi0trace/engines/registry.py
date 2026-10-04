@@ -52,7 +52,9 @@ def describe(engine: Engine) -> dict:
 
 
 def load_builtin() -> None:
-    """Import the built-in engines so they register. Safe to call repeatedly."""
-    # Registration order is the order GET /engines lists them; the UI defaults to the first.
+    """Import the built-in engine, Vexel, so it registers. Safe to call repeatedly.
+
+    Potrace and VTracer are bench competitors and live in `bench.engines`; the
+    service never loads them.
+    """
     from studi0trace.engines.vexel import engine as vexel  # noqa: F401
-    from studi0trace.engines import potrace, vtracer  # noqa: F401

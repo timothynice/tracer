@@ -2332,7 +2332,9 @@ def _api() -> None:
     #   image_id    -> "<image_id>" (the Python's is uuid4().hex, random; the Rust one is a content hash; both are
     #                  32 lowercase hex digits, which the test checks apart)
     #   version     -> "<version>" (the crate's own)
-    # The Python app serves three engines; the core describes one, so `engines` keeps only Vexel.
+    # The Python app serves one engine, Vexel (Potrace and VTracer moved to the bench), as the core does, so the
+    # `engines` filter below changes nothing now; it stays so an engine added to the app cannot leak into the fixture.
+    # `python_engines` records what the app listed when the fixture was exported.
     ID_FORMAT = r"^[0-9a-f]{32}$"
     wordmark = "bench/corpus/real/logo/vexel-wordmark-512.png"  # relative to backend/, as the other fixtures name a corpus image
     mark = "bench/corpus/real/logo/studi0trace-mark-128.png"

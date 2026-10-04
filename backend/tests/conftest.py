@@ -1,11 +1,15 @@
 """Shared fixtures: small in-memory images so tests need no binary assets."""
 from __future__ import annotations
 
+import importlib.util
 import io
 
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
+
+# VTracer is the optional `bench` extra (`pip install -e '.[bench]'`); what needs it skips without it.
+needs_vtracer = pytest.mark.skipif(importlib.util.find_spec("vtracer") is None, reason="vtracer not installed (the bench extra)")
 
 
 def encode(img: Image.Image, fmt: str = "PNG", **kwargs) -> bytes:
