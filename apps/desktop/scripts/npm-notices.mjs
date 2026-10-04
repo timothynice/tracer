@@ -63,9 +63,98 @@ function licenceText(dir) {
   return "";
 }
 
+/** The package's author as a string ("Name <email>" kept as written), or "". */
+function authorOf(pkg) {
+  const a = pkg.author;
+  if (typeof a === "string") return a.trim();
+  if (a && typeof a === "object") return [a.name, a.email ? `<${a.email}>` : ""].filter(Boolean).join(" ");
+  return "";
+}
+
+function repositoryOf(pkg) {
+  const r = pkg.repository;
+  return (typeof r === "string" ? r : (r?.url ?? "")).trim();
+}
+
+const MIT = (who) => `MIT License
+
+Copyright (c) ${who}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.`;
+
+const ISC = (who) => `ISC License
+
+Copyright (c) ${who}
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.`;
+
+const BSD_CONDITIONS = `Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+`;
+const BSD_DISCLAIMER = `THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.`;
+const BSD2 = (who) => `BSD 2-Clause License\n\nCopyright (c) ${who}\n\n${BSD_CONDITIONS}\n${BSD_DISCLAIMER}`;
+const BSD3 = (who) =>
+  `BSD 3-Clause License\n\nCopyright (c) ${who}\n\n${BSD_CONDITIONS}\n3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.\n\n${BSD_DISCLAIMER}`;
+const STANDARD = { MIT, ISC, "BSD-2-Clause": BSD2, "BSD-3-Clause": BSD3 };
+
+/** The notice for a package that ships no licence file: the standard text of its SPDX licence with the author as
+ *  the copyright holder, or an error for any other licence (it needs a person's eye). */
+function generatedText(p) {
+  const make = STANDARD[p.licence];
+  const who = p.author;
+  if (!make || !who) {
+    throw new Error(`${p.name}@${p.version} ships no licence file and its licence (${p.licence || "not stated"}, author ${who || "none"}) cannot be generated: add its text by hand`);
+  }
+  return make(who);
+}
+
 const FONT_PACKAGE = "@fontsource/poppins";
 const packages = productionTree()
-  .map(({ dir, pkg }) => ({ name: pkg.name, version: pkg.version, licence: licenceField(pkg), text: licenceText(dir) }))
+  .map(({ dir, pkg }) => ({ name: pkg.name, version: pkg.version, licence: licenceField(pkg), text: licenceText(dir), author: authorOf(pkg), repository: repositoryOf(pkg) }))
   .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.version < b.version ? -1 : a.version > b.version ? 1 : 0));
 
 const fontDir = resolveDep(frontend, FONT_PACKAGE);
@@ -76,8 +165,15 @@ if (!fontText) throw new Error(`${FONT_PACKAGE} carries no licence file`);
 
 const npmEntries = packages
   .map((p) => {
-    const body = p.name === FONT_PACKAGE ? `<p class="note">Full licence text under Fonts.</p>` : p.text ? `<pre>${esc(p.text)}</pre>` : `<p class="note">No licence file is shipped with this package.</p>`;
-    return `<article>\n<h3>${esc(p.name)} <span class="ver">${esc(p.version)}</span></h3>\n<p class="used">Licence: ${esc(p.licence || "not stated")}</p>\n${body}\n</article>`;
+    let body;
+    let source = "";
+    if (p.name === FONT_PACKAGE) body = `<p class="note">Full licence text under Fonts.</p>`;
+    else if (p.text) body = `<pre>${esc(p.text)}</pre>`;
+    else {
+      body = `<p class="note">This package ships no licence file; the standard text of its licence is given with the author named in its package.json.</p>\n<pre>${esc(generatedText(p))}</pre>`;
+      source = [p.author && `Author: ${p.author}`, p.repository && `Repository: ${p.repository}`].filter(Boolean).join(". ");
+    }
+    return `<article>\n<h3>${esc(p.name)} <span class="ver">${esc(p.version)}</span></h3>\n<p class="used">Licence: ${esc(p.licence || "not stated")}${source ? `. ${esc(source)}` : ""}</p>\n${body}\n</article>`;
   })
   .join("\n");
 
