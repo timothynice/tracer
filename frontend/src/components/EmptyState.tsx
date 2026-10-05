@@ -1,23 +1,26 @@
 import { ImagePlus } from "lucide-react";
 
+import { MAX_SIDE } from "@/lib/limits";
 import { SAMPLES, sampleUrl } from "@/lib/samples";
 
 export interface EmptyStateProps {
   /** The formats this platform opens, as a phrase ("PNG, JPEG … or BMP"). */
   formats: string;
+  /** Whether a file over the cap can be downscaled here (the Mac app). */
+  canDownscale?: boolean;
   onOpen: () => void;
   /** A sample was chosen, by its name in `SAMPLES`. */
   onSample: (name: string) => void;
 }
 
 /** The viewer with nothing open: a drop target, the open panel, and samples to try. */
-export function EmptyState({ formats, onOpen, onSample }: EmptyStateProps) {
+export function EmptyState({ formats, canDownscale = true, onOpen, onSample }: EmptyStateProps) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8 p-8 text-center">
       <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-muted-foreground/25 px-10 py-12">
         <ImagePlus className="h-9 w-9 text-muted-foreground" aria-hidden="true" />
         <p className="text-[15px] font-semibold">Drop images here</p>
-        <p className="text-muted-foreground">{formats}, up to 2048 px a side</p>
+        <p className="text-muted-foreground">{formats}, up to {MAX_SIDE} px a side{canDownscale ? " (larger images can be downscaled)" : ""}</p>
         <button type="button" className="mac-button mt-2" onClick={onOpen}>
           Open…
         </button>

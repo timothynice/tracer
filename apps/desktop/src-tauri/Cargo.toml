@@ -27,9 +27,15 @@ tauri-plugin-store = "2.5"
 tauri-plugin-window-state = "2.5"
 tauri-plugin-clipboard-manager = "2.4"
 tauri-plugin-opener = "2.7"
+tauri-plugin-updater = "2"
 studi0trace-core = { path = "../../../crates/studi0trace-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# already in the tree through tao; used only to answer applicationShouldTerminate: (quit.rs)
+objc2 = "0.6"
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

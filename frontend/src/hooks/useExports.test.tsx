@@ -23,8 +23,10 @@ const item = (id: string, name: string, traced = true): ImageItem => ({
   params: { detail: 6 },
   traces: traced ? { [key]: { svg: `<svg id="${id}"/>`, elapsedMs: 1, stats: {} } } : {},
   shown: traced ? key : null,
+  exported: null,
   job: null,
   error: null,
+  errorKey: null,
   auto: null,
 });
 const a = item("a", "logo.png");
@@ -37,7 +39,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.platform.kind = "native";
   mocks.platform.exportFile.mockResolvedValue("/Users/t/logo.svg");
-  mocks.platform.exportAll.mockResolvedValue(["/x/logo.svg"]);
+  mocks.platform.exportAll.mockResolvedValue({ written: ["/x/logo.svg"], failed: [] });
   mocks.platform.copyText.mockResolvedValue(undefined);
   mocks.png.mockResolvedValue(new Blob([new Uint8Array([1, 2, 3])]));
 });
@@ -93,6 +95,14 @@ describe("useExports", () => {
     expect(mocks.success).not.toHaveBeenCalled();
   });
 
+  it("says why Show in Finder did nothing when the file has gone", async () => {
+    const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS));
+    await act(() => result.current.exportImage("svg", 1));
+    mocks.platform.reveal.mockRejectedValue(new Error("There is no file at /Users/t/logo.svg"));
+    await act(async () => mocks.success.mock.calls[0][1].action.onClick());
+    expect(mocks.error).toHaveBeenCalledWith("There is no file at /Users/t/logo.svg");
+  });
+
   it("says nothing when the save panel was cancelled", async () => {
     mocks.platform.exportFile.mockResolvedValue(null);
     const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS));
@@ -124,8 +134,8 @@ describe("useExports", () => {
     await act(() => result.current.exportAll());
     expect(mocks.platform.exportAll).toHaveBeenCalledWith(
       [
-        { name: "logo.svg", svg: "<svg edited/>" },
-        { name: "photo.svg", svg: '<svg id="b"/>' },
+        { id: "a", name: "logo.svg", svg: "<svg edited/>" },
+        { id: "b", name: "photo.svg", svg: '<svg id="b"/>' },
       ],
       DEFAULT_SETTINGS,
     );
@@ -135,6 +145,59 @@ describe("useExports", () => {
     const { result } = renderHook(() => useExports(state(c), c, undefined, DEFAULT_SETTINGS));
     await act(() => result.current.exportAll());
     expect(mocks.platform.exportAll).not.toHaveBeenCalled();
+  });
+
+  it("tells the library what was exported or copied, by the trace it was, and nothing when the panel was cancelled", async () => {
+    const marked = vi.fn();
+    const { result } = renderHook(() => useExports(state(a, b, c), a, "<svg edited/>", DEFAULT_SETTINGS, marked));
+    await act(() => result.current.exportImage("png", 2, b));
+    expect(marked).toHaveBeenLastCalledWith([{ id: "b", key }]);
+    await act(() => result.current.copySvg());
+    expect(marked).toHaveBeenLastCalledWith([{ id: "a", key }]);
+    await act(() => result.current.exportAll());
+    expect(marked).toHaveBeenLastCalledWith([{ id: "a", key }, { id: "b", key }]);
+    marked.mockClear();
+    mocks.platform.exportFile.mockResolvedValue(null);
+    mocks.platform.exportAll.mockResolvedValue(null);
+    mocks.platform.copyText.mockRejectedValue(new Error("clipboard blocked"));
+    await act(() => result.current.exportImage("svg", 1));
+    await act(() => result.current.exportAll());
+    await act(() => result.current.copySvg());
+    expect(marked).not.toHaveBeenCalled();
+  });
+
+  it("Export All marks only the images written, and says how many and which ones were not", async () => {
+    const marked = vi.fn();
+    mocks.platform.exportAll.mockResolvedValue({ written: ["/x/logo.svg"], failed: [{ id: "b", name: "photo.svg", message: "Studi0Trace cannot write to the folder of \u201cphoto.svg\u201d." }] });
+    const { result } = renderHook(() => useExports(state(a, b, c), a, "<svg/>", DEFAULT_SETTINGS, marked));
+    await act(() => result.current.exportAll());
+    expect(marked).toHaveBeenCalledWith([{ id: "a", key }]);
+    expect(mocks.success).not.toHaveBeenCalled();
+    expect(mocks.error).toHaveBeenCalledWith("Studi0Trace cannot write to the folder of \u201cphoto.svg\u201d.");
+  });
+
+  it("Export All with nothing written marks nothing and says so", async () => {
+    const marked = vi.fn();
+    mocks.platform.exportAll.mockResolvedValue({ written: [], failed: [{ id: "a", name: "logo.svg", message: "no" }] });
+    const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS, marked));
+    await act(() => result.current.exportAll());
+    expect(marked).not.toHaveBeenCalled();
+    expect(mocks.error).toHaveBeenCalledWith("no");
+  });
+
+  it("Export All names every image that failed, once, when several did", async () => {
+    mocks.platform.exportAll.mockResolvedValue({ written: [], failed: [{ id: "a", name: "logo.svg", message: "first reason" }, { id: "b", name: "photo.svg", message: "second" }] });
+    const { result } = renderHook(() => useExports(state(a, b), a, "<svg/>", DEFAULT_SETTINGS));
+    await act(() => result.current.exportAll());
+    expect(mocks.error).toHaveBeenCalledWith("2 images could not be exported: \u201clogo.svg\u201d, \u201cphoto.svg\u201d. first reason");
+  });
+
+  it("marks the selected image by the trace on screen now, which its bytes came from, not by an older copy's", async () => {
+    const marked = vi.fn();
+    const { result } = renderHook(() => useExports(state(a), a, "<svg edited/>", DEFAULT_SETTINGS, marked));
+    const older = { ...a, shown: "an-earlier-trace" }; // a context menu's copy from before the latest trace took the screen
+    await act(() => result.current.exportImage("svg", 1, older));
+    expect(marked).toHaveBeenLastCalledWith([{ id: "a", key }]);
   });
 
   it("ignores an export asked for while a save panel is still open", async () => {
@@ -153,5 +216,24 @@ describe("useExports", () => {
     await act(() => first);
     await act(() => result.current.exportImage("svg", 1));
     expect(mocks.platform.exportFile).toHaveBeenCalledTimes(2);
+  });
+  it("exports every image with its own inspector state: the selected one as on screen, any other through the resolver", async () => {
+    const forImage = vi.fn((id: string, svg: string) => `${svg}<!-- ${id} cleaned -->`);
+    const { result } = renderHook(() => useExports(state(a, b), a, "<svg edited/>", DEFAULT_SETTINGS, () => {}, forImage));
+    await act(() => result.current.exportAll());
+    expect(mocks.platform.exportAll.mock.calls[0][0]).toEqual([
+      { id: "a", name: "logo.svg", svg: "<svg edited/>" },
+      { id: "b", name: "photo.svg", svg: '<svg id="b"/><!-- b cleaned -->' },
+    ]);
+    await act(() => result.current.exportImage("svg", 1, b));
+    expect(text(mocks.platform.exportFile.mock.calls[0][0].bytes)).toBe('<svg id="b"/><!-- b cleaned -->');
+  });
+
+  it("names at most three of the images that could not be exported", async () => {
+    const f = (n: number) => ({ id: `i${n}`, name: `n${n}.svg`, message: "first reason" });
+    mocks.platform.exportAll.mockResolvedValue({ written: [], failed: [1, 2, 3, 4, 5].map(f) });
+    const { result } = renderHook(() => useExports(state(a), a, "<svg/>", DEFAULT_SETTINGS));
+    await act(() => result.current.exportAll());
+    expect(mocks.error).toHaveBeenCalledWith("5 images could not be exported: \u201cn1.svg\u201d, \u201cn2.svg\u201d, \u201cn3.svg\u201d and 2 more. first reason");
   });
 });

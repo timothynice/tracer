@@ -1,5 +1,5 @@
-import * as Switch from "@radix-ui/react-switch";
-import type { ReactNode } from "react";
+import { Switch } from "./Switch";
+import { useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import type { Settings } from "@/platform/types";
 
@@ -30,15 +30,30 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
 }
 
 function Choice<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void }) {
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  // one tab stop (the checked option); the arrow keys move between the options, wrapping, and choose as they go
+  const onKeyDown = (e: KeyboardEvent, at: number) => {
+    if (e.metaKey || e.altKey || e.ctrlKey) return; // a shortcut's, not the group's
+    const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = (at + step + options.length) % options.length;
+    onChange(options[next][0]);
+    buttons.current[next]?.focus();
+  };
+  const checked = options.findIndex(([v]) => v === value);
   return (
     <div role="radiogroup" aria-label={label} className="inline-flex shrink-0 rounded-md bg-muted p-0.5">
-      {options.map(([v, text]) => (
+      {options.map(([v, text], i) => (
         <button
           key={v}
+          ref={(el) => (buttons.current[i] = el)}
           type="button"
           role="radio"
           aria-checked={value === v}
+          tabIndex={i === Math.max(0, checked) ? 0 : -1}
           onClick={() => onChange(v)}
+          onKeyDown={(e) => onKeyDown(e, i)}
           className="h-6 rounded-[5px] px-2.5 text-[12px] font-medium text-muted-foreground aria-checked:bg-background aria-checked:text-foreground aria-checked:shadow-sm"
         >
           {text}
@@ -49,16 +64,7 @@ function Choice<T extends string>({ label, value, options, onChange }: { label: 
 }
 
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <Switch.Root
-      aria-label={label}
-      checked={checked}
-      onCheckedChange={onChange}
-      className="relative h-[22px] w-[38px] shrink-0 rounded-full bg-muted-foreground/30 transition-colors data-[state=checked]:bg-[var(--accent-mac)]"
-    >
-      <Switch.Thumb className="block h-[18px] w-[18px] translate-x-[2px] rounded-full bg-white shadow transition-transform data-[state=checked]:translate-x-[18px]" />
-    </Switch.Root>
-  );
+  return <Switch aria-label={label} checked={checked} onCheckedChange={onChange} />;
 }
 
 /** The settings, as grouped rows in the manner of System Settings. */
@@ -66,9 +72,12 @@ export function SettingsView({ settings, onChange }: SettingsViewProps) {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   return (
     <div className="space-y-5 p-5">
-      <Group title="Appearance">
+      <Group title="General">
         <Row label="Appearance">
           <Choice label="Appearance" value={settings.appearance} options={[["system", "System"], ["light", "Light"], ["dark", "Dark"]]} onChange={(v) => set("appearance", v)} />
+        </Row>
+        <Row label="Check for updates automatically" hint="When Studi0Trace opens">
+          <Toggle label="Check for updates automatically" checked={settings.checkForUpdates} onChange={(v) => set("checkForUpdates", v)} />
         </Row>
       </Group>
       <Group title="Export">

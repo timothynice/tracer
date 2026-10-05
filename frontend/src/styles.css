@@ -29,8 +29,8 @@
   --warning: 45 93% 47%;
   --info: 199 89% 48%;
   --radius: 0.5rem;
-  --checker-a: 0 0% 100%;
-  --checker-b: 210 40% 94%;
+  --checker-a: 0 0% 85%;
+  --checker-b: 0 0% 77%;
   --window: 220 14% 93%;
   --accent-mac: #007aff;
 }
@@ -99,6 +99,12 @@
   html.native.settings-window,
   html.native.settings-window body {
     background: hsl(var(--background));
+  }
+  p,
+  li,
+  label,
+  h3 {
+    text-wrap: pretty;
   }
   input,
   textarea,
@@ -258,15 +264,41 @@
     @apply h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground
       focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
   }
+  /* One conic-gradient tile of two squares each way (8 px cells, a 16 px tile): a single layer, so no two gradients
+     meet along a diagonal to leave a seam at any zoom. Two mid greys, so white and black artwork both read. */
   .checker {
     background-color: hsl(var(--checker-a));
-    background-image:
-      linear-gradient(45deg, hsl(var(--checker-b)) 25%, transparent 25%),
-      linear-gradient(-45deg, hsl(var(--checker-b)) 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, hsl(var(--checker-b)) 75%),
-      linear-gradient(-45deg, transparent 75%, hsl(var(--checker-b)) 75%);
+    background-image: conic-gradient(
+      hsl(var(--checker-b)) 25%,
+      hsl(var(--checker-a)) 0 50%,
+      hsl(var(--checker-b)) 0 75%,
+      hsl(var(--checker-a)) 0
+    );
     background-size: 16px 16px;
-    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  }
+  /* The one switch (components/Switch.tsx): the accent when on, a neutral track when off. */
+  .mac-switch {
+    @apply relative h-[22px] w-[38px] shrink-0 rounded-full bg-muted-foreground/30 transition-colors disabled:opacity-50;
+  }
+  .mac-switch[data-state="checked"] {
+    background: var(--accent-mac);
+  }
+  .mac-switch-thumb {
+    @apply block h-[18px] w-[18px] translate-x-[2px] rounded-full bg-white shadow transition-transform;
+  }
+  .mac-switch-thumb[data-state="checked"] {
+    @apply translate-x-[18px];
+  }
+  /* The arrow keys step a number field; the native spinners only crowd its value. */
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
   }
   .tabular {
     font-variant-numeric: tabular-nums;

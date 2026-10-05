@@ -22,6 +22,44 @@ test("slider renders label, number field and unit, and commits typed values", as
   expect(onChange).toHaveBeenLastCalledWith(200);
 });
 
+test("a number field left without a change commits nothing", async () => {
+  const onChange = vi.fn();
+  render(<ParamControl spec={spec("threshold")} value={128} onChange={onChange} />);
+  const input = screen.getByRole("spinbutton") as HTMLInputElement;
+  await userEvent.click(input);
+  await userEvent.tab();
+  await userEvent.click(input);
+  await userEvent.keyboard("{Enter}");
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test("an emptied or non-numeric number field goes back to its value", async () => {
+  const onChange = vi.fn();
+  render(<ParamControl spec={spec("threshold")} value={128} onChange={onChange} />);
+  const input = screen.getByRole("spinbutton") as HTMLInputElement;
+  await userEvent.clear(input);
+  await userEvent.tab();
+  expect(onChange).not.toHaveBeenCalled();
+  expect(input.value).toBe("128");
+  await userEvent.clear(input);
+  await userEvent.type(input, "e");
+  await userEvent.tab();
+  expect(onChange).not.toHaveBeenCalled();
+  expect(input.value).toBe("128");
+});
+
+test("a typed value past the range that clamps to the current value is not a change, and the field shows the value", async () => {
+  const onChange = vi.fn();
+  const s = spec("threshold");
+  render(<ParamControl spec={s} value={s.max} onChange={onChange} />);
+  const input = screen.getByRole("spinbutton") as HTMLInputElement;
+  await userEvent.clear(input);
+  await userEvent.type(input, `${(s.max ?? 0) + 500}`);
+  await userEvent.tab();
+  expect(onChange).not.toHaveBeenCalled();
+  expect(input.value).toBe(String(s.max));
+});
+
 test("toggle flips the boolean", async () => {
   const onChange = vi.fn();
   render(<ParamControl spec={spec("invert")} value={false} onChange={onChange} />);

@@ -44,11 +44,13 @@ export interface Settings {
   revealAfterExport: boolean;
   traceOnOpen: boolean;
   liveUpdate: boolean;
+  /** Check for an update at launch, quietly (the Mac app; the browser harness has no updater). */
+  checkForUpdates: boolean;
   /** Paths, most recent first; only the app changes it. */
   recent: string[];
 }
 
-export const DEFAULT_SETTINGS: Settings = { appearance: "system", exportTo: "ask", revealAfterExport: false, traceOnOpen: false, liveUpdate: true, recent: [] };
+export const DEFAULT_SETTINGS: Settings = { appearance: "system", exportTo: "ask", revealAfterExport: false, traceOnOpen: false, liveUpdate: true, checkForUpdates: true, recent: [] };
 
 export type ViewMode = "split" | "side" | "overlay" | "vector";
 
@@ -81,7 +83,12 @@ export interface MenuState {
   hasVector: boolean;
   anyVector: boolean;
   hasPath: boolean;
+  /** The selected image is tracing. */
   tracing: boolean;
+  /** Any image is tracing (closing or quitting then asks first). */
+  anyTracing: boolean;
+  /** Images whose vector on screen has not been exported or copied since it was traced (closing asks first). */
+  unexported: number;
   mode: ViewMode;
   sidebar: boolean;
   inspector: boolean;
@@ -93,6 +100,12 @@ export interface ExportFile {
   /** The suggested file name, e.g. "logo.svg" or "logo@2x.png". */
   name: string;
   bytes: Uint8Array<ArrayBuffer>;
+}
+
+/** Export All's answer: the paths written, and the images that could not be (`id` is the one the call was given). */
+export interface ExportAllResult {
+  written: string[];
+  failed: { id: string; name: string; message: string }[];
 }
 
 export interface Platform {
@@ -109,7 +122,8 @@ export interface Platform {
   vectorize(req: TraceRequest, opts: TraceOptions): Promise<VectorizeResponse>;
   /** The path written; null when the save panel was cancelled. In a browser the file is downloaded and this is its name. */
   exportFile(file: ExportFile, settings: Settings): Promise<string | null>;
-  exportAll(files: { name: string; svg: string }[], settings: Settings): Promise<string[] | null>;
+  /** Writes every file it can; null when the folder panel was cancelled. */
+  exportAll(files: { id: string; name: string; svg: string }[], settings: Settings): Promise<ExportAllResult | null>;
   copyText(text: string): Promise<void>;
   reveal(path: string): Promise<void>;
   loadSettings(): Promise<Settings>;
@@ -118,9 +132,13 @@ export interface Platform {
   onMenu(cb: (command: MenuCommand) => void): () => void;
   /** Paths to open from outside the page; the ones that came before the page listened are handed over first. */
   onOpenPaths(cb: (paths: string[]) => void): () => void;
+  /** Opens that failed before reaching the page (a drop with nothing to open). Native only. */
+  onOpenFailures(cb: (failures: OpenFailure[]) => void): () => void;
   /** Files are being dragged over the window (true) or no longer are (false). Native only. */
   onDragState(cb: (over: boolean) => void): () => void;
   setMenuState(state: MenuState): void;
+  /** Clear All's question when `unexported` traced images would be lost; true to clear. A native alert in the app, `window.confirm` in a browser. */
+  confirmClear(unexported: number): Promise<boolean>;
   /** Settings in a window of its own; false where there is none (a browser shows its own sheet). */
   openSettingsWindow(): boolean;
   windowRole(): "main" | "settings";

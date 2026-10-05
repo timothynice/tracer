@@ -4,7 +4,7 @@ import { ApiError, type EngineDescription, type Preset, type VectorizeResponse }
 import { paramsKey } from "@/lib/schema";
 import type { OpenOutcome, Phase, Platform, TraceRequest } from "@/platform/types";
 import { DEFAULT_SETTINGS } from "@/platform/types";
-import { createLibrary, DEBOUNCE_MS, needsUpdate, traceKey, type Catalog } from "./library";
+import { createLibrary, DEBOUNCE_MS, errorOf, needsUpdate, traceKey, unexportedCount, type Catalog } from "./library";
 
 const ENGINE: EngineDescription = {
   id: "vexel",
@@ -260,13 +260,16 @@ describe("library", () => {
     vi.advanceTimersByTime(DEBOUNCE_MS);
     expect(lib.getState().items[0].job).not.toBeNull();
     lib.setParam("a", "detail", 6);
-    expect(lib.getState().items[0].job).toBeNull();
-    expect(calls[1].signal.aborted).toBe(true);
+    // the running job is let finish: its answer is cached for the day those settings come back
+    expect(lib.getState().items[0].job).not.toBeNull();
+    expect(calls[1].signal.aborted).toBe(false);
     calls[1].resolve(response("<svg>seven</svg>", 100));
     await flush();
     const a = lib.getState().items[0];
+    expect(a.job).toBeNull();
     expect(a.shown).toBe(traceKey(a));
     expect(a.traces[a.shown as string].svg).toBe("<svg>six</svg>");
+    expect(Object.values(a.traces).map((t) => t.svg)).toContain("<svg>seven</svg>");
     expect(needsUpdate(a)).toBe(false);
     // B: Balanced is picked while Auto runs; Auto lands with Logo as its pick
     lib.generate("b");
@@ -332,6 +335,123 @@ describe("library", () => {
     const item = lib.getState().items[0];
     expect(item.params).toEqual({ detail: 10, min_region: 16 });
     expect(item.shown).toBe("auto");
+  });
+
+  it("counts the images whose vector on screen has not been exported or copied since it was traced", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, { ...DEFAULT_SETTINGS, liveUpdate: false });
+    lib.add([ok("a"), ok("b")]);
+    expect(unexportedCount(lib.getState())).toBe(0);
+    lib.pickPreset("a", PRESETS[1]);
+    lib.generate("a");
+    // a trace still running has nothing to export yet
+    expect(unexportedCount(lib.getState())).toBe(0);
+    calls[0].resolve(response("<svg>a</svg>", 100));
+    await flush();
+    const first = traceKey(lib.getState().items[0]);
+    expect(lib.getState().items[0].exported).toBeNull();
+    expect(unexportedCount(lib.getState())).toBe(1);
+    lib.markExported([{ id: "a", key: first }, { id: "gone", key: "x" }]);
+    expect(lib.getState().items[0].exported).toBe(first);
+    expect(unexportedCount(lib.getState())).toBe(0);
+    // traced again with other settings: the new vector is not exported
+    lib.setParam("a", "detail", 9);
+    lib.generate("a");
+    calls[1].resolve(response("<svg>a9</svg>", 100));
+    await flush();
+    expect(unexportedCount(lib.getState())).toBe(1);
+    // back to the settings that were exported: that vector was
+    lib.pickPreset("a", PRESETS[1]);
+    expect(lib.getState().items[0].shown).toBe(first);
+    expect(unexportedCount(lib.getState())).toBe(0);
+    // removing the image takes its count with it
+    lib.setParam("a", "detail", 9);
+    expect(unexportedCount(lib.getState())).toBe(1);
+    lib.remove("a");
+    expect(unexportedCount(lib.getState())).toBe(0);
+  });
+
+  it("a control left as it was keeps Auto and traces nothing", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    lib.generate("a");
+    calls[0].resolve(response("<svg>auto</svg>", 100));
+    await flush();
+    const before = lib.getState();
+    lib.setParam("a", "detail", 6); // the default it already has
+    lib.setParam("a", "detail", "6");
+    expect(lib.getState()).toBe(before);
+    expect(lib.getState().items[0]).toMatchObject({ preset: "auto", shown: "auto" });
+    vi.advanceTimersByTime(DEBOUNCE_MS * 4);
+    expect(platform.vectorize).toHaveBeenCalledTimes(1);
+    lib.setParam("a", "detail", 7);
+    expect(lib.getState().items[0].preset).toBeNull();
+  });
+
+  it("an error belongs to the settings that failed: other settings, cached or not, do not show it", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, { ...DEFAULT_SETTINGS, liveUpdate: false });
+    lib.add([ok("a")]);
+    lib.pickPreset("a", PRESETS[1]);
+    lib.generate("a");
+    calls[0].resolve(response("<svg>balanced</svg>", 100));
+    await flush();
+    lib.setParam("a", "detail", 9);
+    lib.generate("a");
+    calls[1].reject(new ApiError("engine_crashed", "The worker crashed", 500));
+    await flush();
+    expect(errorOf(lib.getState().items[0])?.message).toBe("The worker crashed");
+    // back to the cached settings: the good trace shows and the error is not on it
+    lib.pickPreset("a", PRESETS[1]);
+    const item = lib.getState().items[0];
+    expect(item.shown).toBe(traceKey(item));
+    expect(errorOf(item)).toBeNull();
+    // and to settings nothing is known of
+    lib.setParam("a", "detail", 11);
+    expect(errorOf(lib.getState().items[0])).toBeNull();
+    // the failed settings again: still the failure that is known of them
+    lib.setParam("a", "detail", 9);
+    expect(errorOf(lib.getState().items[0])?.code).toBe("engine_crashed");
+  });
+
+  it("a stale job's failure is not shown on the newer settings", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, { ...DEFAULT_SETTINGS, liveUpdate: false });
+    lib.add([ok("a")]);
+    lib.generate("a"); // Auto, running
+    lib.pickPreset("a", PRESETS[2]); // settings moved on, nothing cached for them
+    calls[0].reject(new ApiError("engine_crashed", "The worker crashed", 500));
+    await flush();
+    const item = lib.getState().items[0];
+    expect(item.job).toBeNull();
+    expect(errorOf(item)).toBeNull();
+    lib.pickPreset("a", PRESETS[0]);
+    expect(errorOf(lib.getState().items[0])?.code).toBe("engine_crashed");
+  });
+
+  it("choosing a preset with a cached trace lets the running trace finish and keeps its answer", async () => {
+    const { platform, calls } = fakePlatform();
+    const lib = createLibrary(platform, CATALOG, { ...DEFAULT_SETTINGS, liveUpdate: false });
+    lib.add([ok("a")]);
+    lib.pickPreset("a", PRESETS[1]);
+    lib.generate("a");
+    calls[0].resolve(response("<svg>balanced</svg>", 100));
+    await flush();
+    lib.pickPreset("a", PRESETS[0]);
+    lib.generate("a"); // Auto, running
+    lib.pickPreset("a", PRESETS[1]); // the cached one
+    const mid = lib.getState().items[0];
+    expect(mid.shown).toBe(traceKey(mid));
+    expect(calls[1].signal.aborted).toBe(false);
+    expect(mid.job).toMatchObject({ key: "auto" });
+    calls[1].resolve(response("<svg>auto</svg>", 5000));
+    await flush();
+    const done = lib.getState().items[0];
+    expect(done.job).toBeNull();
+    expect(done.traces.auto.svg).toBe("<svg>auto</svg>");
+    expect(done.preset).toBe("balanced");
+    expect(done.shown).toBe(traceKey(done));
   });
 
   it("notifies subscribers and hands out a new state object on every change", () => {

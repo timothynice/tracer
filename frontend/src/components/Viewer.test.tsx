@@ -257,4 +257,27 @@ describe("Viewer refit on resize", () => {
     resize(364);
     expect(img.style.transform).toBe(fitted(364));
   });
+  it("fits a tiny image at no more than the zoom cap, so Zoom In never zooms out", () => {
+    const size = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
+    const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(800);
+    try {
+      const { ref } = setup({ width: 16, height: 16 });
+      expect(parseInt(zoomLevel().textContent!)).toBe(3200);
+      act(() => ref.current!.zoomIn());
+      expect(parseInt(zoomLevel().textContent!)).toBe(3200);
+      act(() => ref.current!.zoomOut());
+      expect(parseInt(zoomLevel().textContent!)).toBeLessThan(3200);
+    } finally {
+      size.mockRestore();
+      height.mockRestore();
+    }
+  });
+
+  it("the divider states its range for assistive technology", () => {
+    setup();
+    const divider = screen.getByRole("separator", { name: /comparison divider/i });
+    expect(divider).toHaveAttribute("aria-valuemin", "0");
+    expect(divider).toHaveAttribute("aria-valuemax", "100");
+    expect(divider).toHaveAttribute("aria-valuenow", "50");
+  });
 });

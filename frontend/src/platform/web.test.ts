@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { API_URL } from "@/lib/api";
 import { server } from "@/test/server";
@@ -68,6 +68,12 @@ describe("web platform", () => {
     const p = webPlatform();
     await expect(p.openPaths(["/x.png"])).rejects.toMatchObject({ code: "unsupported" });
     expect(p.openSettingsWindow()).toBe(false);
+    const ask = vi.spyOn(window, "confirm").mockReturnValueOnce(true).mockReturnValueOnce(false);
+    await expect(p.confirmClear(2)).resolves.toBe(true);
+    expect(ask).toHaveBeenCalledWith("Clear all images?\n\n2 traced images have not been exported.");
+    await expect(p.confirmClear(1)).resolves.toBe(false);
+    expect(ask).toHaveBeenLastCalledWith("Clear all images?\n\n1 traced image has not been exported.");
+    ask.mockRestore();
     expect(p.windowRole()).toBe("main");
   });
 });

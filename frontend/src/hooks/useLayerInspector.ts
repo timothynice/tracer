@@ -3,13 +3,86 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { EMPTY_INSPECTOR, tinyShapes, type InspectorState } from "@/components/Inspector";
 import { parseSvg } from "@/lib/svgdoc";
 
-/** The layer inspector's state for one SVG: shapes hidden by hand or by size, and the SVG to export without them. */
-export function useLayerInspector(svg: string | undefined) {
-  const [state, setState] = useState<InspectorState>(EMPTY_INSPECTOR);
-  const patch = useCallback((p: Partial<InspectorState>) => setState((prev) => ({ ...prev, ...p })), []);
+const NONE: ReadonlySet<number> = new Set();
+
+/** What belongs to one image: its speck threshold, and the hidden shapes and highlight of the one SVG they were made on. */
+interface Entry {
+  minArea: number;
+  /** The SVG `hidden` and `highlight` index into; they are ignored for any other, since a trace renumbers the shapes. */
+  svg: string | undefined;
+  hidden: ReadonlySet<number>;
+  highlight: number | null;
+}
+
+type Shared = Pick<InspectorState, "open" | "points" | "outlines">;
+
+/**
+ * The layer inspector's state for one image's SVG: shapes hidden by hand or by size, and the SVG to export without them.
+ * The speck threshold is the image's, so a live re-trace does not bring the specks back into an export; the hidden
+ * shapes and the highlight are the SVG's. The panel and the display toggles are the window's. `state.hidden` is the
+ * hand-hidden set alone; `liveState.hidden` adds what the threshold drops. `knownIds` are the images in the library:
+ * an image that has gone loses its entry.
+ */
+export function useLayerInspector(svg: string | undefined, imageId = "", knownIds?: readonly string[]) {
+  const [shared, setShared] = useState<Shared>({ open: EMPTY_INSPECTOR.open, points: EMPTY_INSPECTOR.points, outlines: EMPTY_INSPECTOR.outlines });
+  const [entries, setEntries] = useState<Record<string, Entry>>({});
+  const known = knownIds?.join("\u0000");
+  useEffect(() => {
+    if (known === undefined) return;
+    const ids = new Set(known ? known.split("\u0000") : []);
+    setEntries((prev) => (Object.keys(prev).every((id) => ids.has(id)) ? prev : Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id)))));
+  }, [known]);
+  const entry = entries[imageId];
+  const own = entry && entry.svg === svg;
+  const hidden = own ? entry.hidden : NONE;
+  const highlight = own ? entry.highlight : null;
+  const minArea = entry?.minArea ?? 0;
+  const state = useMemo<InspectorState>(() => ({ ...shared, hidden, highlight, minArea }), [shared, hidden, highlight, minArea]);
+
+  const patch = useCallback(
+    (p: Partial<InspectorState>) => {
+      const { open, points, outlines, hidden: h, highlight: hl, minArea: m } = p;
+      if (open !== undefined || points !== undefined || outlines !== undefined) {
+        setShared((prev) => ({ open: open ?? prev.open, points: points ?? prev.points, outlines: outlines ?? prev.outlines }));
+      }
+      if (h === undefined && hl === undefined && m === undefined) return;
+      setEntries((prev) => {
+        const cur = prev[imageId];
+        const mine = cur && cur.svg === svg;
+        return { ...prev, [imageId]: { minArea: m ?? cur?.minArea ?? 0, svg, hidden: h ?? (mine ? cur.hidden : NONE), highlight: hl !== undefined ? hl : mine ? cur.highlight : null } };
+      });
+    },
+    [svg, imageId],
+  );
+
+  /** Hide or show one shape by hand; the threshold's drops are not touched. */
+  const toggle = useCallback(
+    (index: number) =>
+      setEntries((prev) => {
+        const cur = prev[imageId];
+        const mine = cur && cur.svg === svg;
+        const next = new Set(mine ? cur.hidden : NONE);
+        if (!next.delete(index)) next.add(index);
+        return { ...prev, [imageId]: { minArea: cur?.minArea ?? 0, svg, hidden: next, highlight: mine ? cur.highlight : null } };
+      }),
+    [svg, imageId],
+  );
+
+  /** Any image's SVG as its own inspector state would export it: for Export All, and for exporting an image that is not selected. */
+  const exportSvgFor = useCallback(
+    (id: string, markup: string): string => {
+      const e = entries[id];
+      if (!e) return markup;
+      const parsed = parseSvg(markup);
+      if (!parsed) return markup;
+      const out = new Set(e.svg === markup ? e.hidden : NONE);
+      for (const i of tinyShapes(parsed, e.minArea)) out.add(i);
+      return out.size ? parsed.render(out) : markup;
+    },
+    [entries],
+  );
+
   const doc = useMemo(() => (svg ? parseSvg(svg) : null), [svg]);
-  // a new trace renumbers the shapes, so per-shape state cannot carry over
-  useEffect(() => setState((prev) => ({ ...prev, hidden: new Set(), highlight: null, minArea: 0 })), [svg]);
   const dropped = useMemo(() => {
     if (!doc) return new Set<number>();
     const out = new Set(state.hidden);
@@ -18,5 +91,5 @@ export function useLayerInspector(svg: string | undefined) {
   }, [doc, state.hidden, state.minArea]);
   const exportSvg = useMemo(() => (doc && dropped.size ? doc.render(dropped) : svg), [doc, dropped, svg]);
   const liveState = useMemo(() => ({ ...state, hidden: dropped }), [state, dropped]);
-  return { doc, state, patch, dropped, exportSvg, liveState };
+  return { doc, state, patch, toggle, exportSvgFor, dropped, exportSvg, liveState };
 }

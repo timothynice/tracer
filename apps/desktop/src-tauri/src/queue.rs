@@ -178,7 +178,7 @@ fn trace(shared: &Shared, spec: JobSpec, on_start: Box<dyn FnOnce() + Send>, slo
     for (k, v) in &shared.env {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().map_err(|e| CommandError::crashed(format!("the worker did not start: {e}")))?;
+    let mut child = cmd.spawn().map_err(|e| CommandError::spawn(&e))?;
     let (mut stdin, mut stdout, mut stderr) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
     *lock(slot) = Some(child);
     if cancelled.load(Ordering::SeqCst) {

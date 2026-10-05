@@ -16,7 +16,7 @@ from bench.corpus import load_corpus
 from studi0trace.engines import registry
 from studi0trace.imaging.intake import load_upload
 
-from .conftest import black_square_on_transparent
+from .conftest import black_square_on_transparent, needs_vtracer
 
 HELDOUT = Path(__file__).resolve().parents[1] / "bench" / "heldout"
 CORPUS = Path(__file__).resolve().parents[1] / "bench" / "corpus"
@@ -40,7 +40,7 @@ def test_the_app_never_registers_the_adapters():
              "print(sorted(registry.ids()), any(m.startswith('bench') for m in sys.modules))")
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True,
                          cwd=Path(__file__).resolve().parents[1]).stdout.strip()
-    assert out == "['potrace', 'vexel', 'vtracer'] False"
+    assert out == "['vexel'] False"
     src = (Path(__file__).resolve().parents[1] / "studi0trace").rglob("*.py")
     assert not any("bench" in line and "import" in line for p in src for line in p.read_text().splitlines()
                    if "bench.adapters" in line)
@@ -184,6 +184,7 @@ def test_headtohead_summary_picks_best_on_the_first_corpus(tmp_path):
     assert report["corpora"]["corpus"]["wins"]["vexel"]["delta_e_mean"]["wins"]["vexel"] == 1
 
 
+@needs_vtracer
 def test_runner_workers_give_the_same_records(tmp_path):
     from bench.runner import load_results, run
     from bench.synth import generate

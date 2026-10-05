@@ -79,7 +79,7 @@ export function webPlatform(): Platform {
     },
     async exportAll(files) {
       for (const f of files) downloadBlob(new Blob([f.svg], { type: "image/svg+xml" }), f.name);
-      return files.map((f) => f.name);
+      return { written: files.map((f) => f.name), failed: [] };
     },
     copyText: (text) => navigator.clipboard.writeText(text),
     reveal: async () => {},
@@ -100,8 +100,11 @@ export function webPlatform(): Platform {
     },
     onMenu: () => () => {},
     onOpenPaths: () => () => {},
+    onOpenFailures: () => () => {},
     onDragState: () => () => {},
     setMenuState: () => {},
+    confirmClear: async (unexported) =>
+      window.confirm(`Clear all images?\n\n${unexported === 1 ? "1 traced image has not been exported." : `${unexported} traced images have not been exported.`}`),
     openSettingsWindow: () => false,
     windowRole: () => "main",
   };

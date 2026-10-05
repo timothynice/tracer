@@ -27,11 +27,14 @@ pub(crate) fn open_one<R: tauri::Runtime>(app: &tauri::AppHandle<R>, state: &App
             crate::settings::note_recent(app, &path.display().to_string());
             Outcome::Ok(state.images.insert(image))
         }
-        Err(error) => Outcome::Failed {
-            name: intake::file_name(&path),
-            path: Some(path.display().to_string()),
-            error,
-        },
+        Err(error) => {
+            // a recent file that no longer opens (moved, deleted, unreadable, not an image) leaves Open Recent; one
+            // refused for its size stays, since Downscale opens it
+            if !matches!(error.code(), Some("too_many_pixels" | "too_large")) {
+                crate::settings::forget_recent(app, &path.display().to_string());
+            }
+            Outcome::Failed { name: intake::file_name(&path), path: Some(path.display().to_string()), error }
+        }
     }
 }
 
@@ -100,7 +103,6 @@ pub fn cancel_trace(state: State<'_, AppState>, job: String) -> bool {
 }
 
 use crate::export;
-use serde::Deserialize;
 use std::path::Path;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
@@ -122,50 +124,61 @@ pub async fn export_file(app: tauri::AppHandle, state: State<'_, AppState>, requ
     let name = export::safe_name(&header(&request, "x-name").unwrap_or_default(), ext);
     let original = header(&request, "x-image").and_then(|id| state.images.get(&id)).and_then(|i| i.path);
     let destination = export::Destination::parse(&header(&request, "x-destination").unwrap_or_default());
-    let path = match export::beside(original.as_deref(), destination, &name) {
-        Some(p) => p,
-        None => {
-            let mut panel = app.dialog().file().set_title(if ext == "png" { "Export PNG" } else { "Export SVG" }).set_file_name(&name).add_filter(if ext == "png" { "PNG image" } else { "SVG image" }, &[ext]);
-            if let Some(dir) = original.as_deref().and_then(Path::parent) {
-                panel = panel.set_directory(dir);
-            }
-            match panel.blocking_save_file() {
-                Some(fp) => panel_path(fp)?,
-                None => return Ok(None),
-            }
+    let reveal = header(&request, "x-reveal").as_deref() == Some("1");
+    let done = |path: &Path| {
+        if reveal {
+            let _ = app.opener().reveal_item_in_dir(path);
         }
+        Ok(Some(path.display().to_string()))
     };
-    export::write_file(&path, bytes)?;
-    if header(&request, "x-reveal").as_deref() == Some("1") {
-        let _ = app.opener().reveal_item_in_dir(&path);
+    let mut fell_back = false;
+    if let Some(path) = export::beside(original.as_deref(), destination, &name) {
+        match export::save(&path, bytes, original.as_deref()) {
+            Ok(()) => return done(&path),
+            // a read-only volume or a folder that is gone: the same export through the panel instead
+            Err(e) if e.elsewhere => {
+                eprintln!("studi0trace: export beside the original failed ({}); asking where", e.error.message());
+                fell_back = true;
+            }
+            Err(e) => return Err(e.error),
+        }
     }
-    Ok(Some(path.display().to_string()))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ExportItem {
-    pub name: String,
-    pub svg: String,
+    let mut panel = app
+        .dialog()
+        .file()
+        // the reason the panel came up when the user asked for Beside, visible before they could cancel
+        .set_title(if fell_back {
+            "Studi0Trace cannot save next to the original. Choose where to save."
+        } else if ext == "png" {
+            "Export PNG"
+        } else {
+            "Export SVG"
+        })
+        .set_file_name(export::panel_name(&name, original.as_deref()))
+        .add_filter(if ext == "png" { "PNG image" } else { "SVG image" }, &[ext]);
+    if let Some(dir) = original.as_deref().and_then(Path::parent).filter(|d| d.is_dir()) {
+        panel = panel.set_directory(dir);
+    }
+    let Some(chosen) = panel.blocking_save_file() else {
+        return Ok(None);
+    };
+    let path = panel_path(chosen)?;
+    export::save(&path, bytes, original.as_deref()).map_err(|e| e.error)?;
+    done(&path)
 }
 
 #[tauri::command]
-pub async fn export_all(app: tauri::AppHandle, items: Vec<ExportItem>, reveal: bool) -> Result<Option<Vec<String>>, CommandError> {
+pub async fn export_all(app: tauri::AppHandle, items: Vec<export::Item>, reveal: bool) -> Result<Option<export::Written>, CommandError> {
     let Some(dir) = app.dialog().file().set_title("Export All").blocking_pick_folder() else {
         return Ok(None);
     };
-    let dir = panel_path(dir)?;
-    let mut written = Vec::new();
-    for item in items {
-        let path = export::unique_path(&dir, &export::safe_name(&item.name, "svg"));
-        export::write_file(&path, item.svg.as_bytes())?;
-        written.push(path.display().to_string());
-    }
+    let answer = export::write_all(&panel_path(dir)?, &items);
     if reveal {
-        if let Some(first) = written.first() {
+        if let Some(first) = answer.written.first() {
             let _ = app.opener().reveal_item_in_dir(first);
         }
     }
-    Ok(Some(written))
+    Ok(Some(answer))
 }
 
 #[tauri::command]
@@ -196,6 +209,38 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<
     settings::update(&app, |stored| stored.merged(settings))
 }
 
+pub const CLEAR_TITLE: &str = "Clear all images?";
+pub const CLEAR: &str = "Clear All";
+
+/// What Clear All would lose, as the alert's message; None when nothing would be (it then clears without asking).
+pub fn clear_prompt(unexported: u32) -> Option<String> {
+    match unexported {
+        0 => None,
+        1 => Some("1 traced image has not been exported.".to_string()),
+        n => Some(format!("{n} traced images have not been exported.")),
+    }
+}
+
+/// Clear All's question, for the menu item and the sidebar's button alike: true to clear. A sheet on the main
+/// window, as Quit's is; the answer comes back once it is chosen.
+#[tauri::command]
+pub async fn confirm_clear(app: tauri::AppHandle, unexported: u32) -> bool {
+    use tauri::Manager;
+    use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind};
+    let Some(message) = clear_prompt(unexported) else { return true };
+    let mut dialog = app
+        .dialog()
+        .message(message)
+        .title(CLEAR_TITLE)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(CLEAR.into(), crate::quit::CANCEL.into()));
+    if let Some(main) = app.get_webview_window(crate::opens::MAIN) {
+        crate::quit::bring_up(&app, &main);
+        dialog = dialog.parent(&main);
+    }
+    dialog.blocking_show()
+}
+
 #[tauri::command]
 pub fn set_menu_state(app: tauri::AppHandle, state: MenuState) {
     crate::menu::apply_state(&app, &state);
@@ -214,10 +259,11 @@ pub(crate) fn show_settings_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
     }
     tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
         .title("Settings")
-        .inner_size(520.0, 480.0)
+        .inner_size(520.0, 500.0)
         .resizable(false)
         .minimizable(false)
         .maximizable(false)
+        .theme(crate::settings::theme_for(&settings::load(app).appearance))
         .build()?;
     Ok(())
 }
@@ -225,4 +271,17 @@ pub(crate) fn show_settings_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
 #[tauri::command]
 pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), CommandError> {
     show_settings_window(&app).map_err(|e| CommandError::new(500, "io_error", e.to_string()))
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn clear_all_asks_only_when_a_vector_would_be_lost() {
+        assert_eq!(clear_prompt(0), None);
+        assert_eq!(clear_prompt(1).as_deref(), Some("1 traced image has not been exported."));
+        assert_eq!(clear_prompt(4).as_deref(), Some("4 traced images have not been exported."));
+        assert_eq!((CLEAR_TITLE, CLEAR), ("Clear all images?", "Clear All"));
+    }
 }

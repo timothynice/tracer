@@ -7,6 +7,7 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
+    "build:universal": "tauri build --target universal-apple-darwin",
     "smoke": "bash scripts/smoke.sh",
     "web:dev": "npm --prefix ../../frontend run dev -- --port 5173 --strictPort",
     "web:build": "npm --prefix ../../frontend run build",

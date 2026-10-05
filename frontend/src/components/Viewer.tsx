@@ -80,7 +80,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
   const fitTransform = useCallback((): Transform => {
     if (!paneW || !size.h || !width || !height) return { scale: 1, x: 0, y: 0 };
     const availH = Math.max(1, size.h - TOP_INSET - BOTTOM_INSET);
-    const scale = Math.max(MIN_SCALE, Math.min((paneW - PAD * 2) / width, availH / height));
+    // a tiny image fits above the zoom cap, and Zoom In would then zoom out
+    const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, (paneW - PAD * 2) / width, availH / height));
     return { scale, x: (paneW - width * scale) / 2, y: TOP_INSET + (availH - height * scale) / 2 };
   }, [paneW, size.h, width, height]);
 
@@ -303,6 +304,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
                 <div
                   role="separator"
                   aria-label="Comparison divider"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
                   aria-valuenow={Math.round(split * 100)}
                   aria-orientation="vertical"
                   tabIndex={0}

@@ -87,6 +87,34 @@ describe("native platform", () => {
     expect(calls[0].payload).toEqual(bytes);
   });
 
+  it("sends Export All its images by id and returns what was written and what was not", async () => {
+    const answer = { written: ["/out/a.svg"], failed: [{ id: "b", name: "b.svg", message: "no" }] };
+    ipc((cmd) => (cmd === "export_all" ? answer : null));
+    const files = [{ id: "a", name: "a.svg", svg: "<svg/>" }, { id: "b", name: "b.svg", svg: "<svg/>" }];
+    expect(await nativePlatform().exportAll(files, DEFAULT_SETTINGS)).toEqual(answer);
+    expect(calls[0].payload).toEqual({ items: files, reveal: false });
+  });
+
+  it("asks the app to confirm Clear All with the count it would lose", async () => {
+    ipc((cmd) => {
+      if (cmd === "confirm_clear") return false;
+      throw new Error(`unexpected ${cmd}`);
+    });
+    await expect(nativePlatform().confirmClear(3)).resolves.toBe(false);
+    expect(calls[0]).toMatchObject({ cmd: "confirm_clear", payload: { unexported: 3 } });
+  });
+
+  it("hands the app's open failures over as failures with their code", async () => {
+    ipc(() => null);
+    const got: unknown[] = [];
+    const off = nativePlatform().onOpenFailures((f) => got.push(...f));
+    await new Promise((r) => setTimeout(r, 0));
+    await emit("open-failures", [{ name: "Dropped items", path: null, error: { status: 400, body: { detail: { code: "nothing_to_open", message: "Nothing to open: drop image files or a folder of them." } } } }]);
+    off();
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ name: "Dropped items", path: null, error: { code: "nothing_to_open", message: "Nothing to open: drop image files or a folder of them." } });
+  });
+
   it("hands over paths that arrived before the page listened, then new ones", async () => {
     // the mock keeps a listener its unlisten should have dropped (it reads `id` where the API sends `eventId`), and
     // the API has already forgotten the callback: the warning is the mock's, nothing is delivered

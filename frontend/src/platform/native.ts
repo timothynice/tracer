@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ApiError, apiErrorFromBody, type EngineDescription, type Preset, type VectorizeResponse } from "@/lib/api";
-import { DEFAULT_SETTINGS, type MenuCommand, type OpenOutcome, type Platform, type Settings } from "./types";
+import { DEFAULT_SETTINGS, type ExportAllResult, type MenuCommand, type OpenFailure, type OpenOutcome, type Platform, type Settings } from "./types";
 
 interface CommandError {
   status: number;
@@ -18,7 +18,14 @@ interface OpenedDto {
   height: number;
   format: string;
 }
-type OutcomeDto = { ok: OpenedDto } | { failed: { name: string; path: string | null; error: CommandError } };
+interface FailureDto {
+  name: string;
+  path: string | null;
+  error: CommandError;
+}
+type OutcomeDto = { ok: OpenedDto } | { failed: FailureDto };
+
+const toFailure = (d: FailureDto): OpenFailure => ({ name: d.name, path: d.path, error: toApiError(d.error) });
 
 function toApiError(err: unknown): ApiError {
   if (err instanceof ApiError) return err;
@@ -74,7 +81,7 @@ export function nativePlatform(): Platform {
   async function outcomes(dtos: OutcomeDto[]): Promise<OpenOutcome[]> {
     return Promise.all(
       dtos.map(async (d): Promise<OpenOutcome> => {
-        if ("failed" in d) return { failed: { name: d.failed.name, path: d.failed.path, error: toApiError(d.failed.error) } };
+        if ("failed" in d) return { failed: toFailure(d.failed) };
         let url = previews.get(d.ok.id);
         if (!url) {
           const buf = await call<ArrayBuffer>("read_image", { id: d.ok.id });
@@ -125,7 +132,7 @@ export function nativePlatform(): Platform {
         "x-destination": settings.exportTo,
         "x-reveal": settings.revealAfterExport ? "1" : "0",
       }),
-    exportAll: (files, settings) => call<string[] | null>("export_all", { items: files, reveal: settings.revealAfterExport }),
+    exportAll: (files, settings) => call<ExportAllResult | null>("export_all", { items: files, reveal: settings.revealAfterExport }),
     copyText: (text) => call<void>("copy_text", { text }),
     reveal: (path) => call<void>("reveal", { path }),
     loadSettings: async () => ({ ...DEFAULT_SETTINGS, ...(await call<Partial<Settings>>("load_settings")) }),
@@ -157,8 +164,10 @@ export function nativePlatform(): Platform {
         off?.();
       };
     },
+    onOpenFailures: (cb) => on<FailureDto[]>("open-failures", (ds) => cb(ds.map(toFailure))),
     onDragState: (cb) => on<boolean>("drag-state", cb),
     setMenuState: (state) => void invoke("set_menu_state", { state }).catch(() => {}),
+    confirmClear: (unexported) => call<boolean>("confirm_clear", { unexported }),
     openSettingsWindow: () => {
       void invoke("open_settings_window").catch(() => {});
       return true;

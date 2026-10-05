@@ -1,4 +1,4 @@
-import type { ImageItem } from "@/state/library";
+import { errorOf, type ImageItem } from "@/state/library";
 
 export interface ImageCardProps {
   item: ImageItem;
@@ -8,7 +8,8 @@ export interface ImageCardProps {
 
 /** One image in the sidebar: its thumbnail, name and size, and a dot while it is queued, tracing or failed. */
 export function ImageCard({ item, selected, onSelect }: ImageCardProps) {
-  const { image, job, error } = item;
+  const { image, job } = item;
+  const error = errorOf(item);
   const phase = job ? (job.phase === "queued" ? "Queued" : "Tracing…") : error ? "Failed" : null;
   return (
     <div id={`image-${image.id}`} role="option" aria-selected={selected} onClick={onSelect} className="block">

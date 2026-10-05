@@ -1,0 +1,21 @@
+<section id="rust">
+<h2>Rust crates</h2>
+<p>The app is built from the Rust crates below. Each is used under the licence shown; the full text follows the list of crates it covers.</p>
+<ul class="overview">
+{{#each overview}}
+<li>{{name}} ({{count}})</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<article>
+<h3>{{name}}</h3>
+<p class="used">Used by:</p>
+<ul class="used">
+{{#each used_by}}
+<li>{{crate.name}} {{crate.version}}</li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+</article>
+{{/each}}
+</section>

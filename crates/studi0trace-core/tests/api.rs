@@ -265,7 +265,9 @@ fn the_golden_covers_what_the_brief_lists() {
         by_name.values().filter_map(|c| c["body"]["auto"]["vexel"]["pick"].as_str()).collect();
     assert_eq!(picks.into_iter().collect::<Vec<_>>(), ["balanced", "dense", "detailed", "logo"]);
     assert!(is_image_id(&"a".repeat(32)) && !is_image_id(&"a".repeat(31)) && !is_image_id(&"A".repeat(32)));
-    assert_eq!(golden["python_engines"], json!(["vexel", "potrace", "vtracer"]), "the Python lists three engines; the core describes one");
+    // the Python listed Potrace and VTracer too until they left the server for the bench (2026-10-03); either export
+    // lists Vexel first, and the core describes Vexel alone
+    assert_eq!(golden["python_engines"][0], json!("vexel"), "the Python lists Vexel first; the core describes it alone");
 }
 
 #[test]

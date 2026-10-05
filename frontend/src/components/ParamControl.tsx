@@ -1,10 +1,10 @@
 import * as Select from "@radix-ui/react-select";
 import * as Slider from "@radix-ui/react-slider";
-import * as Switch from "@radix-ui/react-switch";
+import { Switch } from "./Switch";
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
-import type { ParamSpec } from "@/lib/schema";
+import { sanitize, type ParamSpec } from "@/lib/schema";
 
 export interface ParamControlProps {
   spec: ParamSpec;
@@ -47,16 +47,7 @@ export function ParamControl({ spec, value, onChange, disabled, invalid }: Param
           <label id={labelId} htmlFor={id} className="text-sm font-medium">
             {spec.label}
           </label>
-          <Switch.Root
-            id={id}
-            checked={Boolean(value)}
-            onCheckedChange={onChange}
-            disabled={disabled}
-            aria-describedby={descId}
-            className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary disabled:opacity-50"
-          >
-            <Switch.Thumb className="block h-5 w-5 translate-x-0.5 rounded-full bg-background shadow-sm transition-transform data-[state=checked]:translate-x-[22px] data-[state=checked]:bg-primary-foreground" />
-          </Switch.Root>
+          <Switch id={id} checked={Boolean(value)} onCheckedChange={onChange} disabled={disabled} aria-describedby={descId} />
         </div>
       ) : (
         head
@@ -142,15 +133,20 @@ function NumberField({
   disabled?: boolean;
   invalid?: boolean;
 }) {
-  const [text, setText] = useState(String(value));
   // Trailing zeros only go after a decimal point: stripping them unconditionally
   // turns 70 into "7" and 100 into "1".
-  useEffect(() => setText(Number.isFinite(value) ? trim(value.toFixed(decimals(spec.step))) : ""), [value, spec.step]);
-
+  const formatted = Number.isFinite(value) ? trim(value.toFixed(decimals(spec.step))) : "";
+  const [text, setText] = useState(formatted);
+  useEffect(() => setText(formatted), [formatted]);
+  const show = () => setText(formatted);
+  // Only a changed value is a change: leaving a field as it was must not move the settings (it would drop Auto), and
+  // an emptied field (Number("") is 0) or text that is not a number goes back to what it was.
   const commit = () => {
-    const n = Number(text);
-    if (Number.isFinite(n)) onChange(n);
-    else setText(String(value));
+    const n = text.trim() === "" ? NaN : Number(text);
+    if (!Number.isFinite(n)) return show();
+    const next = sanitize(spec, n) as number;
+    if (next === value) return show();
+    onChange(next);
   };
 
   return (
@@ -168,7 +164,7 @@ function NumberField({
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === "Enter" && commit()}
-        className={`tabular h-7 w-16 rounded-md border border-input bg-background px-2 text-right text-xs text-foreground focus-visible:ring-2 focus-visible:ring-ring ${invalid ? "border-destructive" : ""}`}
+        className={`tabular h-7 w-16 rounded-md border border-input bg-background pl-2 pr-2.5 text-right text-xs text-foreground focus-visible:ring-2 focus-visible:ring-ring ${invalid ? "border-destructive" : ""}`}
       />
       {spec.unit && <span aria-hidden="true">{spec.unit}</span>}
     </span>

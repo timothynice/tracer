@@ -9,9 +9,14 @@ describe("EmptyState", () => {
     const onOpen = vi.fn();
     render(<EmptyState formats="PNG or BMP" onOpen={onOpen} onSample={vi.fn()} />);
     expect(screen.getByText("Drop images here")).toBeInTheDocument();
-    expect(screen.getByText("PNG or BMP, up to 2048 px a side")).toBeInTheDocument();
+    expect(screen.getByText("PNG or BMP, up to 2048 px a side (larger images can be downscaled)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open…" }));
     expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("does not promise a downscale where there is none", () => {
+    render(<EmptyState formats="PNG or BMP" canDownscale={false} onOpen={vi.fn()} onSample={vi.fn()} />);
+    expect(screen.getByText("PNG or BMP, up to 2048 px a side")).toBeInTheDocument();
   });
 
   it("names the sample chosen", () => {

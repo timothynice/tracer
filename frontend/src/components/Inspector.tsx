@@ -25,6 +25,8 @@ export interface InspectorProps {
   edited?: boolean;
   state: InspectorState;
   onChange: (patch: Partial<InspectorState>) => void;
+  /** Hide or show one shape by hand. `state.hidden` also holds what the threshold drops, so the caller owns the manual set. */
+  onToggle: (index: number) => void;
 }
 
 /** Shapes small enough to be specks, given the current threshold. */
@@ -32,20 +34,13 @@ export function tinyShapes(doc: SvgDoc, minArea: number): number[] {
   return minArea <= 0 ? [] : doc.shapes.filter((s) => s.area <= minArea).map((s) => s.index);
 }
 
-export function Inspector({ doc, bytes, elapsedMs, engineLabel, edited, state, onChange }: InspectorProps) {
+export function Inspector({ doc, bytes, elapsedMs, engineLabel, edited, state, onChange, onToggle }: InspectorProps) {
   // The summary describes what will be exported, so hiding a shape moves it.
   const live = useMemo(() => doc.shapes.filter((s) => !state.hidden.has(s.index)), [doc, state.hidden]);
   const totalAnchors = useMemo(() => live.reduce((n, s) => n + s.anchors.length, 0), [live]);
   const colours = useMemo(() => new Set(live.map((s) => s.fill)).size, [live]);
   const tiny = useMemo(() => tinyShapes(doc, state.minArea), [doc, state.minArea]);
   const maxArea = useMemo(() => Math.max(1, ...doc.shapes.map((s) => s.area)), [doc]);
-
-  const toggleShape = (index: number) => {
-    const next = new Set(state.hidden);
-    if (next.has(index)) next.delete(index);
-    else next.add(index);
-    onChange({ hidden: next });
-  };
 
   return (
     <div
@@ -132,7 +127,7 @@ export function Inspector({ doc, bytes, elapsedMs, engineLabel, edited, state, o
                       type="button"
                       className="btn-ghost btn-icon h-6 w-6 shrink-0"
                       aria-label={`${off ? "Show" : "Hide"} ${shapeLabel(s)}`}
-                      onClick={() => toggleShape(s.index)}
+                      onClick={() => onToggle(s.index)}
                     >
                       {off ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Eye className="h-3.5 w-3.5" aria-hidden="true" />}
                     </button>

@@ -32,14 +32,22 @@
       "devCsp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1QTI0NDhGMThEQjlBNDMKUldSRG10c1lqMFNpRlNUN3hRNVNwSWZRcGM5SXlTNTZ0RlNjYlRxcGFkODJKZWJYYVpJWXpCVk0K",
+      "endpoints": ["https://github.com/timothynice/tracer/releases/latest/download/latest.json"],
+      "requireSignedVersion": true
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.png"],
     "category": "public.app-category.graphics-design",
     "shortDescription": "Turn images into clean vectors",
+    "resources": { "resources/THIRD_PARTY_NOTICES.html": "THIRD_PARTY_NOTICES.html" },
     "copyright": "Copyright © 2026 Timothy Nice. MIT licensed.",
-    "macOS": { "minimumSystemVersion": "13.0" },
+    "macOS": { "minimumSystemVersion": "13.0", "signingIdentity": "-" },
     "fileAssociations": [
       { "ext": ["png"], "name": "PNG image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.png"] },
       { "ext": ["jpg", "jpeg"], "name": "JPEG image", "role": "Viewer", "rank": "Alternate", "contentTypes": ["public.jpeg"] },

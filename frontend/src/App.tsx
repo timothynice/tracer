@@ -14,6 +14,7 @@ import { TitleBar } from "./components/TitleBar";
 import { VectorizePanel } from "./components/VectorizePanel";
 import { Viewer, type ViewerHandle } from "./components/Viewer";
 import { useExports } from "./hooks/useExports";
+import { revealInFinder } from "./hooks/reveal";
 import { useLayerInspector } from "./hooks/useLayerInspector";
 import { useSettings } from "./hooks/useSettings";
 import { useWindowDrop } from "./hooks/useWindowDrop";
@@ -21,7 +22,7 @@ import { loadSample } from "./lib/samples";
 import { specsFor } from "./lib/schema";
 import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
 import { platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
-import { createLibrary, ENGINE, shownAnswer, type Catalog } from "./state/library";
+import { createLibrary, ENGINE, currentJob, errorOf, shownAnswer, unexportedCount, type Catalog } from "./state/library";
 import { useLibrary } from "./state/useLibrary";
 
 const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
@@ -94,6 +95,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const state = useLibrary(lib);
   const item = state.selected ? (state.items.find((i) => i.image.id === state.selected) ?? null) : null;
   const answer = item ? shownAnswer(item) : null;
+  const visibleError = item ? errorOf(item) : null;
   const [sidebar, setSidebar] = useState(true);
   const [inspectorPane, setInspectorPane] = useState(true);
   const [dragging, setDragging] = useState(false);
@@ -128,12 +130,14 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   );
   const openFiles = useCallback((files: File[]) => void open(platform.openFiles(files)), [open]);
   useEffect(() => platform.onOpenPaths((paths) => void open(platform.openPaths(paths))), [open]);
+  useEffect(() => platform.onOpenFailures((failures) => lib.add(failures.map((failed) => ({ failed })))), [lib]);
   useEffect(() => platform.onDragState(setDragging), []);
   useWindowDrop(platform.kind === "web", openFiles, setDragging);
 
-  const layers = useLayerInspector(answer?.svg);
+  const layers = useLayerInspector(answer?.svg, item?.image.id, useMemo(() => state.items.map((i) => i.image.id), [state.items]));
 
-  const busy = item?.job ? (item.job.phase === "queued" ? "Queued…" : item.job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
+  const job = item ? currentJob(item) : null;
+  const busy = job ? (job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
   const viewer = item ? (
     <Viewer
       ref={viewerRef}
@@ -144,25 +148,39 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       mode={mode}
       onModeChange={setMode}
       busy={busy}
-      errorMessage={item.error?.message}
+      errorMessage={visibleError?.message}
       onRetry={() => lib.generate(item.image.id)}
       display={{ points: layers.state.points, outlines: layers.state.outlines }}
       onDisplayChange={layers.patch}
       layersOpen={layers.state.open}
       onToggleLayers={() => layers.patch({ open: !layers.state.open })}
       marks={layers.doc ? (scale) => <InspectorOverlay doc={layers.doc!} state={layers.liveState} scale={scale} /> : undefined}
-      panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} /> : undefined}
+      panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} onToggle={layers.toggle} /> : undefined}
     />
   ) : (
-    <EmptyState formats={DROP_FORMATS} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
+    <EmptyState formats={DROP_FORMATS} canDownscale={platform.kind === "native"} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
   );
 
-  const exports = useExports(state, item, layers.exportSvg, settings);
+  const exports = useExports(state, item, layers.exportSvg, settings, lib.markExported, layers.exportSvgFor);
   const anyVector = state.items.some((i) => i.shown !== null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const openSettings = useCallback(() => {
     if (!platform.openSettingsWindow()) setSettingsOpen(true);
   }, []);
+
+  // Clear All asks first when a traced vector would be lost (the menu item and the sidebar's button both come here).
+  const asking = useRef(false);
+  const clearAll = useCallback(async () => {
+    if (asking.current) return;
+    const lost = unexportedCount(lib.getState());
+    if (lost > 0) {
+      asking.current = true;
+      const clear = await platform.confirmClear(lost).catch(() => false);
+      asking.current = false;
+      if (!clear) return;
+    }
+    lib.clear();
+  }, [lib]);
 
   const run = useCallback(
     (cmd: Command) => {
@@ -185,7 +203,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
         case "copy-svg":
           return void exports.copySvg();
         case "reveal":
-          if (item?.image.path) void platform.reveal(item.image.path);
+          if (item?.image.path) void revealInFinder(item.image.path);
           return;
         case "zoom-in":
           return viewerRef.current?.zoomIn();
@@ -214,10 +232,10 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
           if (id) lib.remove(id);
           return;
         case "clear":
-          return lib.clear();
+          return clearAll();
       }
     },
-    [item, open, openSettings, exports, setMode, lib],
+    [item, open, openSettings, exports, setMode, lib, clearAll],
   );
   // the listeners subscribe once and call whatever `run` is now
   const runRef = useRef(run);
@@ -259,11 +277,13 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const hasImage = !!item;
   const hasVector = !!layers.exportSvg;
   const hasPath = !!item?.image.path;
-  const tracing = !!item?.job;
+  const tracing = !!job;
+  const anyTracing = state.items.some((i) => i.job);
+  const unexported = unexportedCount(state);
   useEffect(() => {
-    platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, mode, sidebar, inspector: inspectorPane });
-  }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, mode, sidebar, inspectorPane]);
-  const invalidField = item?.error?.code === "validation_error" ? (((item.error.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
+    platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspector: inspectorPane });
+  }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspectorPane]);
+  const invalidField = visibleError?.code === "validation_error" ? (((visibleError.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
 
   const panel = item ? (
     <VectorizePanel
@@ -296,8 +316,8 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
             onAdd={() => void open(platform.pickImages())}
             onSelect={lib.select}
             onSelectNext={lib.selectNext}
-            onClear={lib.clear}
-            onDownscale={(i) => void lib.downscale(i)}
+            onClear={() => void clearAll()}
+            onDownscale={(i) => void lib.downscale(i).catch((err: Error) => toast.error(err.message))}
             onDismissFailure={lib.dismissFailure}
             wrapCard={(it, card) => (
               <ImageMenu
@@ -305,7 +325,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
                 onSelect={() => lib.select(it.image.id)}
                 onGenerate={() => lib.generate(it.image.id)}
                 onExport={() => void exports.exportImage("svg", 1, it)}
-                onReveal={() => it.image.path && void platform.reveal(it.image.path)}
+                onReveal={() => it.image.path && void revealInFinder(it.image.path)}
                 onRemove={() => lib.remove(it.image.id)}
               >
                 {card}

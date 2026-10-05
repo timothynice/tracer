@@ -43,6 +43,8 @@ def cmd_run(args) -> int:
     if not engines:
         from studi0trace.engines import registry
 
+        import bench.engines  # noqa: F401 - Potrace and VTracer, bench-side since they left the service
+
         registry.load_builtin()
         engines = registry.ids()
     out_dir = Path(args.out) if args.out else None

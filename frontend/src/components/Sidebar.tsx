@@ -1,6 +1,7 @@
 import { ImageOff, Plus, Trash2 } from "lucide-react";
-import { Fragment, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
+import { failureText, MAX_SIDE } from "@/lib/limits";
 import type { OpenFailure } from "@/platform/types";
 import type { ImageItem } from "@/state/library";
 import { ImageCard } from "./ImageCard";
@@ -11,7 +12,7 @@ export interface SidebarProps {
   selected: string | null;
   /** Under "Add Image": what can be opened here. */
   formats: string;
-  /** Whether "Downscale to 2048 px" can be offered (the Mac app, a file with a path). */
+  /** Whether Downscale can be offered (the Mac app, a file with a path). */
   canDownscale: boolean;
   onAdd: () => void;
   onSelect: (id: string) => void;
@@ -26,6 +27,17 @@ export interface SidebarProps {
 const TOO_BIG = new Set(["too_many_pixels", "too_large"]);
 
 export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd, onSelect, onSelectNext, onClear, onDownscale, onDismissFailure, wrapCard = (_, card) => card }: SidebarProps) {
+  // A selection made by the arrow keys, or a newly opened image, may be out of sight in a long list; so may a new failure.
+  const failures = useRef<HTMLDivElement>(null);
+  const seenFailures = useRef(failed.length);
+  useEffect(() => {
+    if (failed.length > seenFailures.current) failures.current?.lastElementChild?.scrollIntoView?.({ block: "nearest" });
+    seenFailures.current = failed.length;
+  }, [failed.length]);
+  // declared last so that when one open brings both, the selection is what ends in view
+  useEffect(() => {
+    if (selected) document.getElementById(`image-${selected}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowRight") {
       e.preventDefault();
@@ -54,20 +66,20 @@ export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd,
             <Fragment key={item.image.id}>{wrapCard(item, <ImageCard item={item} selected={item.image.id === selected} onSelect={() => onSelect(item.image.id)} />)}</Fragment>
           ))}
         </div>
-        <div className={`space-y-3 px-3 ${failed.length ? "pb-3" : ""}`}>
+        <div ref={failures} className={`space-y-3 px-3 ${failed.length ? "pb-3" : ""}`}>
           {failed.map((f, i) => (
             <div key={`${f.path ?? f.name}-${i}`} role="group" aria-label={`${f.name} could not be opened`} className="rounded-lg bg-background/60 p-2.5">
               <div className="flex items-start gap-2">
                 <ImageOff className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
                 <div className="min-w-0">
                   <p className="truncate text-[13px] font-medium">{f.name}</p>
-                  <p className="text-[11px] leading-snug text-muted-foreground">{f.error.message}</p>
+                  <p className="text-[11px] leading-snug text-muted-foreground">{failureText(f)}</p>
                 </div>
               </div>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {canDownscale && f.path && TOO_BIG.has(f.error.code) && (
                   <button type="button" className="mac-button h-7 px-2 text-[12px]" onClick={() => onDownscale(i)}>
-                    Downscale to 2048 px
+                    Downscale to {MAX_SIDE} px
                   </button>
                 )}
                 <button type="button" className="mac-button h-7 px-2 text-[12px]" onClick={() => onDismissFailure(i)}>

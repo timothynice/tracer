@@ -12,7 +12,6 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "pillow>=10.4",
-    "vtracer>=0.6",
     "pydantic>=2.7",
     "anyio>=4",
     "numpy>=1.26",
@@ -25,6 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 bench = [
     "pyyaml>=6",
+    # VTracer, a competitor the bench compares Vexel against (bench/engines/vtracer.py)
+    "vtracer>=0.6",
 ]
 dev = [
     "studi0trace[bench]",
