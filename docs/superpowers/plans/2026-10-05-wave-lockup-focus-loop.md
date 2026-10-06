@@ -90,9 +90,10 @@ backend/bench/focus/*/
 
 ```bash
 mkdir -p backend/bench/focus/wave-lockup
-cp <path Tim gives for the original PNG> backend/bench/focus/wave-lockup/source.png
+cp ~/Desktop/testLogo.png backend/bench/focus/wave-lockup/source.png
+shasum -a 256 backend/bench/focus/wave-lockup/source.png
 ```
-Use the original file, not the chat attachment, if Tim has it; the attachment may have been recompressed. Record its `shasum -a 256` in the Results log.
+Expected: `8f786caf62a65b110b2365d6ca2d1f8f442def924261d985939cd3a34b089333` (Tim's original, 213 654 bytes; pixel-identical to the copy the plan was written from).
 
 Write `backend/bench/focus/wave-lockup/focus.yaml`:
 ```yaml
