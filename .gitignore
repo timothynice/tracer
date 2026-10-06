@@ -31,3 +31,6 @@ backend/vexel-rs/target/
 # Bench output
 backend/bench/reports/
 frontend/public/test/
+
+# Focus-loop assets: third-party images and their traces stay local (bench/focus.py)
+backend/bench/focus/*/
