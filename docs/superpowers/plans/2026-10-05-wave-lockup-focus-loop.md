@@ -852,3 +852,22 @@ git commit -m "bench: wave-lockup stand-in in the corpus; baseline and preset li
 ## Results log
 
 (Append as tasks complete: environment facts, wall times, reference numbers, Tim's checkpoint answers, the defect ledger, and per-defect before → after.)
+
+### 2026-10-05 — Tasks 0–4 (steps 1–4)
+
+- Environment: `uv sync` does not install the dev extra; use `VIRTUAL_ENV=$PWD/.venv uv pip install -e ".[dev]"` after it. `uv sync` writes an untracked `backend/uv.lock`: stage by name, never `git add -A`. Builds: vexel_rs 42 s, studi0trace_core 45 s.
+- Regions corrected on an overlay (the planned boxes clipped the g descender, split the t, missed the caps' tops): `gap [85,110,370,185]`, `light [440,30,805,215]`, `river [805,30,1180,190]`, `caps [440,222,1180,272]`; `wave` unchanged.
+- Loop speeds: `qloop.sh focus` 6.4 s wall (trace 3.9–4.7 s); `--auto` 8.4 s; `qloop.sh ref` (corpus + held-out) 6 min 39 s with 6 workers.
+- References (HEAD 59a352a, engine = 29801cf): gate vs `bench/baselines/vexel.json` ok, 0 regressions, 0 improvements. Corpus score flat 0.9562 / gradient 0.9802 / logo 0.9685 / shadow 0.9668; held-out fluent-color 0.9366 / fluent-flat 0.9561 / noto 0.9452.
+- Auto picks `logo` (ΔE 1.533, ART 44.4, 43 paths) over balanced (ART 113.4), detailed (2 slivers), dense.
+- Focus baseline (logo preset): whole ΔE 1.53, view-ΔE p99 10.5, visible 5.8 %, 0 pinholes, 0 slivers, wobble 21.7°/100 px.
+
+| region | de_mean | de_p99 | visible_frac | inflections | wobble |
+|---|---|---|---|---|---|
+| wave | 1.83 | 11.4 | 12.5 % | 23 | 0 |
+| gap | 3.70 | 12.4 | 29.4 % | 8 | 0 |
+| light | 1.34 | 12.9 | 6.5 % | 4 | 319 |
+| river | 1.54 | 12.9 | 6.1 % | 10 | 52 |
+| caps | 1.75 | 9.9 | 8.4 % | 2 | 2780 |
+
+- Where the error is: in the wordmark all of it lies within 2 px of an edge; in the wave and gap half is interior (the ribbons' specular streaks drawn as smooth ramps). Blurring the trace to the source's softness lowers visible_frac by at most a fifth, so softness is not the main cause. Seen at 8×: the thin word's stems are drawn as round-capped, round-joined strokes where the source has square ends and corners; the small caps come out heavier with lumpy outlines and malformed M vertices; some caps carry stray shading (an O drawn as a lit sphere, dark spots in M/U); a speck sits off the dark ribbon's left tip.
