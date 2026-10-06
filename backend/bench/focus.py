@@ -25,13 +25,14 @@ from pathlib import Path
 import numpy as np
 import yaml
 from PIL import Image, ImageDraw
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import binary_dilation, center_of_mass, distance_transform_edt, gaussian_filter, label
+from skimage.feature import canny
 
 from bench import metrics
 from bench.artifacts import scorecard
 from bench.raster import load_png, rasterize, to_rgb_on_white
 from bench.runner import _heatmap
-from studi0trace.imaging.quality import delta_e_map
+from studi0trace.imaging.quality import delta_e_map, luminance
 
 VIEW_SIGMA = 0.8  # px: what viewing at 100 % blurs away (edge offsets up to ~0.2 px)
 VISIBLE_DE = 5.0  # CIEDE2000 above which flipping between source and trace shows
@@ -66,23 +67,81 @@ def region_defects(card: dict, box) -> dict[str, float]:
     }
 
 
+EDGE_SIGMA = 1.5  # Canny scale: merges a 1–2 px halo or sharpening rim into the edge it rings
+EDGE_OFF = 2.0    # px from the other image's nearest edge at which an edge pixel is a miss
+CORE_PX = 3.0     # fills are compared this far inside every edge, clear of halos and rims
+FILL_SIGMA = 4.0  # px: blur over the core, so streak noise in the source does not count as a wrong fill
+
+
+def shape_edges(rgb: np.ndarray) -> np.ndarray:
+    return canny(luminance(rgb) / 255.0, sigma=EDGE_SIGMA)
+
+
+def edge_fit(es: np.ndarray, eo: np.ndarray, box) -> dict[str, float]:
+    """Both images' edge pixels in `box`, scored by distance to the other image's nearest edge."""
+    x0, y0, x1, y1 = box
+    to_out = distance_transform_edt(~eo)[y0:y1, x0:x1][es[y0:y1, x0:x1]]
+    to_src = distance_transform_edt(~es)[y0:y1, x0:x1][eo[y0:y1, x0:x1]]
+    d = np.concatenate([to_out, to_src])
+    if d.size == 0:
+        return {"edge_off_frac": 0.0, "edge_p99_px": 0.0}
+    return {"edge_off_frac": float((d >= EDGE_OFF).mean()), "edge_p99_px": float(np.percentile(d, 99))}
+
+
+def fill_de(src_rgb: np.ndarray, out_rgb: np.ndarray, es: np.ndarray, eo: np.ndarray, box) -> dict[str, float]:
+    """CIEDE2000 over the pixels CORE_PX inside every edge of both images, each blurred over that core only."""
+    core = (distance_transform_edt(~es) >= CORE_PX) & (distance_transform_edt(~eo) >= CORE_PX)
+    x0, y0, x1, y1 = box
+    inside = core[y0:y1, x0:x1]
+    if not inside.any():
+        return {"fill_de_mean": 0.0, "fill_de_p95": 0.0}
+    weight = np.maximum(gaussian_filter(core.astype(np.float64), FILL_SIGMA), 1e-9)[..., None]
+
+    def blur(a: np.ndarray) -> np.ndarray:
+        return np.dstack([gaussian_filter(a[..., c] * core, FILL_SIGMA) for c in range(3)]) / weight
+
+    d = delta_e_map(blur(src_rgb.astype(np.float64)), blur(out_rgb.astype(np.float64)))[y0:y1, x0:x1][inside]
+    return {"fill_de_mean": float(d.mean()), "fill_de_p95": float(np.percentile(d, 95))}
+
+
+def edge_misses(es: np.ndarray, eo: np.ndarray) -> list[tuple[float, float, int]]:
+    """Where the shapes differ: clusters of edge pixels EDGE_OFF or more from the other image's edges."""
+    miss = (es & (distance_transform_edt(~eo) >= EDGE_OFF)) | (eo & (distance_transform_edt(~es) >= EDGE_OFF))
+    labels, n = label(binary_dilation(miss, iterations=2))
+    found = []
+    for i in range(1, n + 1):
+        m = (labels == i) & miss
+        y, x = center_of_mass(m)
+        found.append((float(x), float(y), int(m.sum())))
+    return sorted(found, key=lambda t: -t[2])
+
+
 def assess(svg: str, src_rgba: np.ndarray, regions: dict[str, list[int]], elapsed_ms: float) -> dict:
     h, w = src_rgba.shape[:2]
     out_rgba = rasterize(svg, w, h)
     whole = metrics.all_metrics(src_rgba, out_rgba, svg, elapsed_ms)
     de = view_de(to_rgb_on_white(src_rgba), to_rgb_on_white(out_rgba))
-    whole.update(region_stats(de, (0, 0, w, h)))
+    src_rgb, out_rgb = to_rgb_on_white(src_rgba), to_rgb_on_white(out_rgba)
+    es, eo = shape_edges(src_rgb), shape_edges(out_rgb)
+    frame = (0, 0, w, h)
+    whole.update(region_stats(de, frame))
+    whole.update(edge_fit(es, eo, frame))
+    whole.update(fill_de(src_rgb, out_rgb, es, eo, frame))
     card = scorecard(svg, src_rgba, detail=True)
-    per = {name: {**region_stats(de, box), **region_defects(card, box)} for name, box in regions.items()}
-    return {"whole": whole, "regions": per, "_de": de, "_out": out_rgba}
+    per = {name: {**region_stats(de, box), **region_defects(card, box), **edge_fit(es, eo, box),
+                  **fill_de(src_rgb, out_rgb, es, eo, box)} for name, box in regions.items()}
+    misses = [{"x": x, "y": y, "px": n, "region": next((k for k, b in regions.items() if _inside(x, y, b)), "-")}
+              for x, y, n in edge_misses(es, eo)[:20]]
+    return {"whole": whole, "regions": per, "misses": misses, "_de": de, "_out": out_rgba}
 
 
 ZOOM = 4  # crop magnification on the sheet
 # focus.json keys diffed between runs: (key, direction) with +1 higher is better
-WHOLE_KEYS = (("score", +1), ("delta_e_mean", -1), ("visible_frac", -1), ("de_p99", -1), ("artifact_index", -1),
+WHOLE_KEYS = (("score", +1), ("edge_off_frac", -1), ("fill_de_mean", -1), ("delta_e_mean", -1), ("visible_frac", -1), ("de_p99", -1), ("artifact_index", -1),
               ("pinholes", -1), ("slivers", -1), ("wobble_deg_100px", -1), ("paths", -1), ("bytes", -1),
               ("elapsed_ms", -1))
-REGION_KEYS = (("visible_frac", -1), ("de_p99", -1), ("de_mean", -1), ("pinholes", -1), ("slivers", -1),
+REGION_KEYS = (("edge_off_frac", -1), ("edge_p99_px", -1), ("fill_de_mean", -1), ("fill_de_p95", -1),
+               ("visible_frac", -1), ("de_p99", -1), ("de_mean", -1), ("pinholes", -1), ("slivers", -1),
                ("inflections", -1), ("wobble", -1))
 
 
@@ -178,7 +237,8 @@ def run(asset: Path, backend: str = "rust", params: dict | None = None, label: s
     run_dir = runs / f"{datetime.now():%Y%m%d-%H%M%S}-{backend}-{label}"
     run_dir.mkdir(parents=True)
     (run_dir / "trace.svg").write_text(svg, encoding="utf-8")
-    record = {"what": what, "backend": backend, "whole": result["whole"], "regions": result["regions"]}
+    record = {"what": what, "backend": backend, "whole": result["whole"], "regions": result["regions"],
+              "misses": result["misses"]}
     (run_dir / "focus.json").write_text(json.dumps(record, indent=1, default=float))
     _sheet(src, result["_out"], result["_de"], cfg["regions"], run_dir / "sheet.png")
     h, w = src.shape[:2]
@@ -189,6 +249,9 @@ def run(asset: Path, backend: str = "rust", params: dict | None = None, label: s
         if ref is not None and ref.exists():
             print(f"\n{title} ({ref.parent.name if title == 'vs previous' else 'pinned'})")
             print("\n".join(diff(json.loads(ref.read_text()), record)))
+    print("\nmisses (x, y, px, region):")
+    for m in result["misses"][:8]:
+        print(f"  {m['x']:7.1f} {m['y']:7.1f} {m['px']:5d}  {m['region']}")
     return run_dir
 
 
