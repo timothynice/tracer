@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -41,7 +42,14 @@ def gate(ref: dict, cand: dict, engine: str = "vexel") -> tuple[list[str], list[
         ma, mb = a[i]["metrics"], b[i]["metrics"]
         for k, (sign, tol) in TOLERANCES.items():
             va, vb = ma.get(k), mb.get(k)
-            if va is None or vb is None:
+            # Both None is OK (no truth); vanished or non-finite is regression
+            if va is None and vb is None:
+                continue
+            if va is not None and (vb is None or not math.isfinite(vb)):
+                line = f"{i} {k}: {va:.4f} → {vb}"
+                regs.append(line)
+                continue
+            if va is None or vb is None or not math.isfinite(va) or not math.isfinite(vb):
                 continue
             gain = sign * (vb - va)
             line = f"{i} {k}: {va:.4f} → {vb:.4f}"
@@ -58,8 +66,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("cand")
     ap.add_argument("--engine", default="vexel")
     args = ap.parse_args(argv)
-    regs, imps, missing = gate(json.loads(Path(args.ref).read_text()), json.loads(Path(args.cand).read_text()),
-                               args.engine)
+    ref_data = json.loads(Path(args.ref).read_text())
+    cand_data = json.loads(Path(args.cand).read_text())
+    # Check for no items with the specified engine
+    if not _by_id(ref_data, args.engine):
+        print(f"no {args.engine} items in {args.ref}", file=sys.stderr)
+        return 2
+    if not _by_id(cand_data, args.engine):
+        print(f"no {args.engine} items in {args.cand}", file=sys.stderr)
+        return 2
+    regs, imps, missing = gate(ref_data, cand_data, args.engine)
     for title, lines in (("REGRESSED", regs), ("MISSING", missing), ("improved", imps)):
         if lines:
             print(f"\n{title} ({len(lines)})")

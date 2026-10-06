@@ -42,3 +42,23 @@ def test_errored_item_is_missing(tmp_path):
     (tmp_path / "r.json").write_text(json.dumps(ref))
     (tmp_path / "c.json").write_text(json.dumps(cand))
     assert gate.main([str(tmp_path / "r.json"), str(tmp_path / "c.json")]) == 1
+
+
+def test_no_items_for_engine_returns_2(tmp_path):
+    ref = _run(a=BASE)
+    cand = _run(a=BASE)
+    (tmp_path / "r.json").write_text(json.dumps(ref))
+    (tmp_path / "c.json").write_text(json.dumps(cand))
+    assert gate.main([str(tmp_path / "r.json"), str(tmp_path / "c.json"), "--engine", "vexl"]) == 2
+
+
+def test_candidate_metric_none_is_regression():
+    cand_no_outline = {**BASE, "outline_px": None}
+    regs, _, _ = gate.gate(_run(a=BASE), _run(a=cand_no_outline))
+    assert any("outline_px" in r and "0.2000 →" in r for r in regs)
+
+
+def test_candidate_metric_nan_is_regression():
+    cand_nan = {**BASE, "outline_px": float("nan")}
+    regs, _, _ = gate.gate(_run(a=BASE), _run(a=cand_nan))
+    assert any("outline_px" in r and "0.2000 →" in r for r in regs)
