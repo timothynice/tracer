@@ -1,0 +1,14 @@
+# Middle loop (tools/qloop.sh sentinels). Each line: corpus|heldout <id>  # stage it guards
+corpus logo/vexel-wordmark-512        # wordmark, sharpening halos, rounded rects
+corpus logo/studi0mail-logo-light     # wordmark on a light backdrop
+corpus logo/thin-mark-512             # strokes vs fills, stroke_fidelity gate
+corpus logo/wedge-fan-512             # acute wedge tips
+corpus logo/hex-nest-512-ds           # soft (downsampled) edges
+corpus logo/venn-512-q75              # JPEG noise floor, overlaps
+corpus flat/low-contrast-512          # crisp small steps must survive
+corpus gradient/linear-4stop-512      # multi-stop linear ramp
+corpus gradient/multi-shape-512-q75   # gradients under noise
+corpus shadow/card-512-q75            # shadow bands on an opaque backdrop
+heldout fluent-color/nail-polish-512  # focal radial, highlight with pointed ends
+heldout fluent-color/speech-balloon-512 # faint-alpha halo
+heldout noto/u2049-512                # glyph outlines

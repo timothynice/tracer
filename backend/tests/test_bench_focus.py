@@ -42,3 +42,21 @@ def test_region_defects_count_only_inside_the_box():
     }
     got = focus.region_defects(card, (0, 0, 32, 32))
     assert got == {"pinholes": 1, "slivers": 1, "inflections": 0, "wobble": 3.5}
+
+
+def test_run_writes_a_complete_run_dir(tmp_path):
+    from PIL import Image
+
+    asset = tmp_path / "disc"
+    asset.mkdir()
+    rgb = _disc(20.0)
+    Image.fromarray(np.dstack([rgb, np.full(rgb.shape[:2], 255, np.uint8)]), "RGBA").save(asset / "source.png")
+    (asset / "focus.yaml").write_text("regions:\n  left: [0, 0, 32, 64]\npreset: balanced\nparams: {}\n")
+    run_dir = focus.run(asset, backend="rust", label="t")
+    for name in ("trace.svg", "focus.json", "sheet.png", "flip.html"):
+        assert (run_dir / name).exists(), name
+    import json
+    data = json.loads((run_dir / "focus.json").read_text())
+    assert set(data["regions"]) == {"left"} and data["whole"]["delta_e_mean"] < 2.0
+    focus.pin(asset, run_dir)
+    assert (asset / "baseline.json").exists()

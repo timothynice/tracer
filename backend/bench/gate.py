@@ -35,7 +35,9 @@ def gate(ref: dict, cand: dict, engine: str = "vexel") -> tuple[list[str], list[
     a, b = _by_id(ref, engine), _by_id(cand, engine)
     regs: list[str] = []
     imps: list[str] = []
-    missing = [f"{i} missing or errored" for i in sorted(a) if i not in b or "error" in b[i]]
+    subset = len(b) < len(a)  # a sentinel run (--ids) checks only the items it ran
+    missing = [f"{i} missing or errored" for i in sorted(a)
+               if (i in b and "error" in b[i]) or (i not in b and not subset)]
     for i in sorted(set(a) & set(b)):
         if "error" in a[i] or "error" in b[i]:
             continue

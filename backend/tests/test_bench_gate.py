@@ -62,3 +62,8 @@ def test_candidate_metric_nan_is_regression():
     cand_nan = {**BASE, "outline_px": float("nan")}
     regs, _, _ = gate.gate(_run(a=BASE), _run(a=cand_nan))
     assert any("outline_px" in r and "0.2000 →" in r for r in regs)
+
+
+def test_subset_run_only_checks_its_own_items():
+    regs, _, missing = gate.gate(_run(a=BASE, b=BASE), _run(a=BASE))
+    assert regs == [] and missing == []
