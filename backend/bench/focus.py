@@ -160,7 +160,7 @@ def diff(prev: dict, now: dict) -> list[str]:
     for name, stats in now["regions"].items():
         old = prev["regions"].get(name)
         if old:
-            out += [line(name, k, s, old[k], stats[k]) for k, s in REGION_KEYS]
+            out += [line(name, k, s, old[k], stats[k]) for k, s in REGION_KEYS if k in old and k in stats]
     return out
 
 

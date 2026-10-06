@@ -16,7 +16,8 @@ ids() { grep -v '^#' bench/sentinels.txt | awk -v c="$1" '$1==c {print $2}' | pa
 
 bench_run() {  # corpus-dir ids-or-empty out-dir
   local extra=(); [ -n "$2" ] && extra=(--ids "$2")
-  $PY -m bench run --engines vexel --corpus "$1" "${extra[@]}" --no-media --workers "$W" --out "$3" >/dev/null
+  # ${extra[@]+...}: an empty array is "unbound" under set -u on bash 3.2 (macOS)
+  $PY -m bench run --engines vexel --corpus "$1" ${extra[@]+"${extra[@]}"} --no-media --workers "$W" --out "$3" >/dev/null
 }
 
 case "${1:-}" in
@@ -28,7 +29,11 @@ case "${1:-}" in
   sentinels|full)
     tag=$(date +%H%M%S); rc=0
     for set in corpus heldout; do
-      sel=""; [ "$1" = sentinels ] && sel=$(ids $set)
+      sel=""
+      if [ "$1" = sentinels ]; then
+        sel=$(ids $set)
+        [ -n "$sel" ] || { echo "qloop: no $set ids in bench/sentinels.txt" >&2; exit 1; }
+      fi
       bench_run "bench/$set" "$sel" "$KEEP/$1-$tag-$set"
       echo "== $set"; $PY -m bench.gate "$KEEP/ref-$set/results.json" "$KEEP/$1-$tag-$set/results.json" || rc=1
     done
