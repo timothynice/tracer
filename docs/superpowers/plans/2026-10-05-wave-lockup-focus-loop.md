@@ -39,6 +39,7 @@ The regions above are the starting `focus.yaml`; Task 4 confirms them on the bas
 
 ## Definition of done
 
+0. *(Amended at the Task 4 checkpoint, 2026-10-05.)* Tim: match **shapes and true colours**; halos, sharpening rims and streak noise are artifacts. The numeric bar is set with Tim **after the first fixes**, on Task 4b's `edge_off_frac` / `fill_de` measures; item 1 below is superseded until then.
 1. **Focus asset, per region** (Rust, the preset Auto picks, render at 1×): `visible_frac` ≤ 1 % and `de_p99` ≤ 5.0 (view-blurred CIEDE2000, defined in Task 1: roughly, no stretch of outline more than 0.2 px from the source and no fill visibly off); whole image `pinholes` = 0 and `slivers` = 0. These are provisional and are re-confirmed with Tim at the Task 4 checkpoint once the baseline numbers exist.
 2. **Tim signs off on `flip.html` at 1×**: flipping source and trace shows no defect he can point to.
 3. **No regression**: `bench.gate` passes on corpus and held-out against the Task 4 references (tolerances in Task 2), or every flagged item is listed in the Results log with a reason Tim accepted.
@@ -752,6 +753,142 @@ cp -r bench/focus/wave-lockup/runs/<the baseline run> bench/reports/keep-2026-10
 
 ---
 
+### Task 4b: Shape and fill measures that forgive the source's artifacts
+
+Added after the Task 4 checkpoint. Tim's answer: the trace matches **shapes and true colours**; halos, sharpening rims (dark edge, light core) and the ribbons' streak noise are generator artifacts, not targets. View-ΔE cannot tell those apart from real defects (at baseline the wordmark's whole error sits within 2 px of an edge), so the focus loop gains two measures per region, which become its primary numbers. `visible_frac`/`de_p99` stay as secondary readings.
+
+- **Edge fit**: Canny edges of both images' luminance at σ `EDGE_SIGMA` 1.5, which merges a 1–2 px halo or rim into its edge; every edge pixel of either image is scored by its distance to the other image's nearest edge. `edge_off_frac` is the share at `EDGE_OFF` 2 px or more, `edge_p99_px` the 99th percentile. The misses are clustered and located, so a run prints *where* the shapes differ.
+- **Fill colour**: CIEDE2000 between the two images on pixels at least `CORE_PX` 3 px inside an edge in both, each image blurred over that core alone by σ `FILL_SIGMA` 4 (normalised convolution). `fill_de_mean`, `fill_de_p95`.
+
+Calibrated while planning on the baseline: the misses at 2 px are the ribbon tips (≈ (430, 105), (88, 118), (358, 176)) and the small caps; `light`/`river` score `edge_off_frac` ≤ 0.0005; `fill_de_mean` is 0.4–0.6 on the wordmark and 1.2 / 2.9 on wave / gap, where the streaks are (residual by decision). Synthetic checks: a 1 px light halo outside a square plus a 1 px dark rim inside scores 0 on both; a 6 px corner cut scores `edge_off_frac` 0.04 with one miss cluster at the corner; a ΔE 5.5 fill shift scores `fill_de_p95` 5.5 with `edge_off_frac` 0. Pixel-level Canny does not see a sub-pixel corner rounding (the thin word's round stroke corners score within 1 px); Task 5 judges those on the 8× crops.
+
+**Files:**
+- Modify: `backend/bench/focus.py`
+- Test: `backend/tests/test_bench_focus.py`
+
+**Interfaces:**
+- Consumes: `assess`, `run`, `diff`, `WHOLE_KEYS`, `REGION_KEYS` (Tasks 1, 3).
+- Produces:
+  - `EDGE_SIGMA = 1.5`, `EDGE_OFF = 2.0`, `CORE_PX = 3.0`, `FILL_SIGMA = 4.0`
+  - `shape_edges(rgb: np.ndarray) -> np.ndarray` (bool (H, W))
+  - `edge_fit(es, eo, box) -> {"edge_off_frac", "edge_p99_px"}`
+  - `fill_de(src_rgb, out_rgb, es, eo, box) -> {"fill_de_mean", "fill_de_p95"}`
+  - `edge_misses(es, eo) -> list[tuple[float, float, int]]` — (x, y, pixels) per cluster, largest first
+  - `assess` adds the four keys to `whole` and to every region, and returns `"misses"` (the 20 largest clusters, each with the region it falls in or `"-"`); `run` stores `misses` in `focus.json` and prints the 8 largest after the diff.
+
+- [ ] **Step 1: Write the failing tests** (append to `tests/test_bench_focus.py`)
+
+```python
+def _square(col=(30, 40, 80), w=64, lo=16, hi=48) -> np.ndarray:
+    a = np.full((w, w, 3), 255, np.uint8)
+    a[lo:hi, lo:hi] = col
+    return a
+
+
+BOX = (0, 0, 64, 64)
+
+
+def test_halo_and_sharpening_rim_are_forgiven():
+    src = _square()
+    src[15, 15:49] = src[48, 15:49] = 200          # light halo just outside
+    src[15:49, 15] = src[15:49, 48] = 200
+    src[16, 16:48] = src[47, 16:48] = 5            # dark rim just inside
+    src[16:48, 16] = src[16:48, 47] = 5
+    out = _square()
+    es, eo = focus.shape_edges(src), focus.shape_edges(out)
+    assert focus.edge_fit(es, eo, BOX)["edge_off_frac"] == 0.0
+    assert focus.fill_de(src, out, es, eo, BOX)["fill_de_mean"] < 0.5
+
+
+def test_cut_corner_is_an_edge_miss_where_it_is():
+    out = _square().copy()
+    for i in range(6):
+        out[16 + i, 16:22 - i] = 255
+    es, eo = focus.shape_edges(_square()), focus.shape_edges(out)
+    assert focus.edge_fit(es, eo, BOX)["edge_off_frac"] > 0.02
+    x, y, n = focus.edge_misses(es, eo)[0]
+    assert abs(x - 18) < 3 and abs(y - 18) < 3 and n > 0
+
+
+def test_wrong_fill_is_a_fill_error_not_an_edge_error():
+    src, out = _square(col=(30, 40, 80)), _square(col=(45, 55, 105))
+    es, eo = focus.shape_edges(src), focus.shape_edges(out)
+    assert focus.edge_fit(es, eo, BOX)["edge_off_frac"] == 0.0
+    assert focus.fill_de(src, out, es, eo, BOX)["fill_de_p95"] > 3.0
+```
+
+Extend `test_run_writes_a_complete_run_dir` to assert `{"edge_off_frac", "edge_p99_px", "fill_de_mean", "fill_de_p95"} <= set(data["regions"]["left"])` and `"misses" in data`.
+
+- [ ] **Step 2: Run to verify they fail** — `cd backend && .venv/bin/python -m pytest tests/test_bench_focus.py -v`; expected: the three new tests fail with `AttributeError` (no `shape_edges`), the extended run test with a missing key.
+
+- [ ] **Step 3: Implement** (in `bench/focus.py`, beside the Task 1 metrics; add `distance_transform_edt, label, binary_dilation, center_of_mass` to the scipy import, `from skimage.feature import canny`, and `luminance` to the quality import)
+
+```python
+EDGE_SIGMA = 1.5  # Canny scale: merges a 1–2 px halo or sharpening rim into the edge it rings
+EDGE_OFF = 2.0    # px from the other image's nearest edge at which an edge pixel is a miss
+CORE_PX = 3.0     # fills are compared this far inside every edge, clear of halos and rims
+FILL_SIGMA = 4.0  # px: blur over the core, so streak noise in the source does not count as a wrong fill
+
+
+def shape_edges(rgb: np.ndarray) -> np.ndarray:
+    return canny(luminance(rgb) / 255.0, sigma=EDGE_SIGMA)
+
+
+def edge_fit(es: np.ndarray, eo: np.ndarray, box) -> dict[str, float]:
+    """Both images' edge pixels in `box`, scored by distance to the other image's nearest edge."""
+    x0, y0, x1, y1 = box
+    to_out = distance_transform_edt(~eo)[y0:y1, x0:x1][es[y0:y1, x0:x1]]
+    to_src = distance_transform_edt(~es)[y0:y1, x0:x1][eo[y0:y1, x0:x1]]
+    d = np.concatenate([to_out, to_src])
+    if d.size == 0:
+        return {"edge_off_frac": 0.0, "edge_p99_px": 0.0}
+    return {"edge_off_frac": float((d >= EDGE_OFF).mean()), "edge_p99_px": float(np.percentile(d, 99))}
+
+
+def fill_de(src_rgb: np.ndarray, out_rgb: np.ndarray, es: np.ndarray, eo: np.ndarray, box) -> dict[str, float]:
+    """CIEDE2000 over the pixels CORE_PX inside every edge of both images, each blurred over that core only."""
+    core = (distance_transform_edt(~es) >= CORE_PX) & (distance_transform_edt(~eo) >= CORE_PX)
+    x0, y0, x1, y1 = box
+    inside = core[y0:y1, x0:x1]
+    if not inside.any():
+        return {"fill_de_mean": 0.0, "fill_de_p95": 0.0}
+    weight = np.maximum(gaussian_filter(core.astype(np.float64), FILL_SIGMA), 1e-9)[..., None]
+
+    def blur(a: np.ndarray) -> np.ndarray:
+        return np.dstack([gaussian_filter(a[..., c] * core, FILL_SIGMA) for c in range(3)]) / weight
+
+    d = delta_e_map(blur(src_rgb.astype(np.float64)), blur(out_rgb.astype(np.float64)))[y0:y1, x0:x1][inside]
+    return {"fill_de_mean": float(d.mean()), "fill_de_p95": float(np.percentile(d, 95))}
+
+
+def edge_misses(es: np.ndarray, eo: np.ndarray) -> list[tuple[float, float, int]]:
+    """Where the shapes differ: clusters of edge pixels EDGE_OFF or more from the other image's edges."""
+    miss = (es & (distance_transform_edt(~eo) >= EDGE_OFF)) | (eo & (distance_transform_edt(~es) >= EDGE_OFF))
+    labels, n = label(binary_dilation(miss, iterations=2))
+    found = []
+    for i in range(1, n + 1):
+        m = (labels == i) & miss
+        y, x = center_of_mass(m)
+        found.append((float(x), float(y), int(m.sum())))
+    return sorted(found, key=lambda t: -t[2])
+```
+
+In `assess`, after `de` is computed: `src_rgb, out_rgb = to_rgb_on_white(src_rgba), to_rgb_on_white(out_rgba)`, `es, eo = shape_edges(src_rgb), shape_edges(out_rgb)`; merge `edge_fit(es, eo, box)` and `fill_de(src_rgb, out_rgb, es, eo, box)` into `whole` (box = the frame) and into every region's dict; add `"misses": [{"x": x, "y": y, "px": n, "region": <first region whose box holds (x, y), else "-">} for x, y, n in edge_misses(es, eo)[:20]]`. In `run`, write `misses` into `focus.json` and print, after the diffs, `misses (x, y, px, region):` and the 8 largest. Add `("edge_off_frac", -1), ("fill_de_mean", -1)` to `WHOLE_KEYS` after `("score", +1)`, and put `("edge_off_frac", -1), ("edge_p99_px", -1), ("fill_de_mean", -1), ("fill_de_p95", -1)` first in `REGION_KEYS`.
+
+- [ ] **Step 4: Run the tests** — all of `tests/test_bench_focus.py` and `tests/test_bench_gate.py` pass.
+
+- [ ] **Step 5: Re-pin the baseline with the new keys** — the engine has not changed, so this is the same trace measured more ways:
+```bash
+cd backend && tools/qloop.sh focus --label baseline2
+.venv/bin/python -m bench.focus pin bench/focus/wave-lockup bench/focus/wave-lockup/runs/<the baseline2 run>
+cp -r bench/focus/wave-lockup/runs/<the baseline2 run> bench/reports/keep-2026-10-05-wave-lockup/focus-baseline2
+```
+Record the per-region `edge_off_frac`, `edge_p99_px`, `fill_de_mean`, `fill_de_p95` and the printed misses in the Results log.
+
+- [ ] **Step 6: Commit** — `git add backend/bench/focus.py backend/tests/test_bench_focus.py && git commit -m "bench.focus: edge fit and core fill colour per region, forgiving halos, rims and streak noise"`
+
+---
+
 ### Task 5: Diagnose — a ranked defect ledger
 
 **Files:** Results log at the end of this plan (tracked; describe defects by region and stage, no images). Crops and dumps stay in `bench/reports/keep-2026-10-05-wave-lockup/diag/`.
@@ -871,3 +1008,9 @@ git commit -m "bench: wave-lockup stand-in in the corpus; baseline and preset li
 | caps | 1.75 | 9.9 | 8.4 % | 2 | 2780 |
 
 - Where the error is: in the wordmark all of it lies within 2 px of an edge; in the wave and gap half is interior (the ribbons' specular streaks drawn as smooth ramps). Blurring the trace to the source's softness lowers visible_frac by at most a fifth, so softness is not the main cause. Seen at 8×: the thin word's stems are drawn as round-capped, round-joined strokes where the source has square ends and corners; the small caps come out heavier with lumpy outlines and malformed M vertices; some caps carry stray shading (an O drawn as a lit sphere, dark spots in M/U); a speck sits off the dark ribbon's left tip.
+
+### 2026-10-05 — Task 4 checkpoint (Tim)
+
+- Fidelity: match shapes + true colours; halos, sharpening rims and the ribbons' streak noise are artifacts (not "also the streaks", not "pixel-close"). → Task 4b.
+- Done bar: set after the first fixes, not before.
+- Regions: keep the corrected boxes.
