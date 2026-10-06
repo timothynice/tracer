@@ -44,7 +44,7 @@ def test_region_defects_count_only_inside_the_box():
     assert got == {"pinholes": 1, "slivers": 1, "inflections": 0, "wobble": 3.5}
 
 
-def test_run_writes_a_complete_run_dir(tmp_path):
+def _disc_asset(tmp_path):
     from PIL import Image
 
     asset = tmp_path / "disc"
@@ -52,6 +52,11 @@ def test_run_writes_a_complete_run_dir(tmp_path):
     rgb = _disc(20.0)
     Image.fromarray(np.dstack([rgb, np.full(rgb.shape[:2], 255, np.uint8)]), "RGBA").save(asset / "source.png")
     (asset / "focus.yaml").write_text("regions:\n  left: [0, 0, 32, 64]\npreset: balanced\nparams: {}\n")
+    return asset
+
+
+def test_run_writes_a_complete_run_dir(tmp_path):
+    asset = _disc_asset(tmp_path)
     run_dir = focus.run(asset, backend="rust", label="t")
     for name in ("trace.svg", "focus.json", "sheet.png", "flip.html"):
         assert (run_dir / name).exists(), name
@@ -60,3 +65,12 @@ def test_run_writes_a_complete_run_dir(tmp_path):
     assert set(data["regions"]) == {"left"} and data["whole"]["delta_e_mean"] < 2.0
     focus.pin(asset, run_dir)
     assert (asset / "baseline.json").exists()
+
+
+def test_run_auto_keeps_autos_pick(tmp_path):
+    import json
+
+    asset = _disc_asset(tmp_path)
+    run_dir = focus.run(asset, backend="rust", label="a", auto=True)
+    assert (run_dir / "trace.svg").exists() and (run_dir / "focus.json").exists()
+    assert json.loads((run_dir / "focus.json").read_text())["what"].startswith("auto→")

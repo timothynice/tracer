@@ -100,8 +100,10 @@ def _trace(asset: Path, cfg: dict, backend: str, params: dict | None, auto: bool
             from bench.auto import auto_trace
 
             pick, reason, rows = auto_trace(data)
-            preset, svg, _s, ms = next(r for r in rows if r[0].id == pick)
-            return svg, ms, f"auto→{pick} ({reason})"
+            if pick is None:
+                raise RuntimeError(f"auto picked nothing: {reason}")
+            preset, svg, _s, ms = next(r for r in rows if r[0].id == pick.id)
+            return svg, ms, f"auto→{pick.id} ({reason})"
         registry.load_builtin()
         engine = registry.get("vexel")
         base = next(p.params for p in all_presets() if p.id == cfg.get("preset", "balanced"))
