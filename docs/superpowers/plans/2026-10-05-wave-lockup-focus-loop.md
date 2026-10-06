@@ -1064,3 +1064,28 @@ Context-table hypotheses:
 - light: stroke-vs-fill misclassification — **refuted** (the only thin group is the caps' first I, fidelity 0.147 > gate 0.13, filled; the SVG has no strokes; the round ends are D8 geometry, not the stroke stage). Stem width drift — **refuted** (stem mass 0.99–1.01). Wobble on round bowls — **refuted** (edge p99 1 px; wobble at the h's arch junction is sub-pixel).
 - river: flared/rounded junctions — **confirmed, minor** (D8). Bowed straights — **refuted** (`rect_bowed` 0).
 - caps: sub-pixel strokes — **refuted** (`thin_strokes` 0). Closed counters — **confirmed** (D1). Colour drift toward white at the rim — **refuted** (solids within 0.8–3 ΔE of #53b1ed; the rim is **artifact-by-decision**). "Heavier" — **refuted as area** (D9 only for rescued glyphs; the crisp-vs-soft edge is what reads as heavier). Dark spots in M — **confirmed** (D4). Dark spots in U — **refuted**.
+
+### 2026-10-06 — D2 tips (+D7): BLOCKED, not landed
+
+Hypothesis confirmed: the three short tips are cov > ½ pixels the partition gave the backdrop, and a
+two-region extension of the tip (acute fold on the provisional boundary, then the backdrop's pixels
+ahead of the fold with two-fill share > ½, eight-connected and bridged) brings them back. The Python
+prototype is parked on branch `claude/wave-lockup-d2-wip` (1ae71b3); this branch is back at ce70a09,
+vexel_rs untouched. Report: `.superpowers/sdd/2026-10-05-wave-lockup-focus-loop/d2-report.md`.
+
+- Focus, best variant (extension in `topology.build`, no D7), Python vs pinned Rust baseline:
+  original wave edge_off 0.0144 → 0.0033, p99 3 → 1; gap 0.0187 → 0.0012, p99 4 → 1; tip misses
+  (358,177) 18 → 0, (87,119) 13 → ≤ 2, (430,107) 17 → 9; but wave/gap wobble 0 → 41 (the rescue's
+  blob at the dark-left tip remains) and caps wobble 2780 → 3367 (glyph corners re-sharpened).
+  Bilinear: wave edge_off 0.0054 → 0.0036, gap 0.0091 → 0.0055, wobble unchanged (1471 / 563: D7).
+- Survey (`bench/reports/keep-2026-10-05-wave-lockup/survey/d2_tapers.py`, 224 items + 2 focus):
+  no clean gap for any threshold. Piece depth, reach, fill separation and fold angle are all
+  continuous between the ribbon tips (depth 4–13, separation 158–221) and corpus tips (silverpeak,
+  noto, fluent: depth 2–17, separation 0–510). A coverage flood without a fold fires in 74 items.
+- Python full gate vs a Python no-change run: best variant 6 regressions in 5 items
+  (silverpeak-badge-768 AI 106.9 → 114.4, studi0mail-logo-dark seam_ppm +1.2 %, wedge-fan-512 AI
+  7.09 → 8.83 / wobble 20.4 → 27.3, u1f469-…-q75 AI 43.1 → 44.1, u1f97e-q75 AI 50.6 → 52.6), 7
+  improved. Extending before the rescue (with a refit) was worse: 7–9 regressions, mostly far from
+  the change (a few handed pixels move a region's refitted fill and every coverage-placed edge of it).
+  A D7 rule that splits any two-neighbour "mixture" region at ½ broke overlaps (flat/overlap-512
+  delta_e 0.009 → 1.09) and was dropped.
