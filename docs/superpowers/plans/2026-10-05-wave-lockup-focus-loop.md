@@ -1014,3 +1014,19 @@ git commit -m "bench: wave-lockup stand-in in the corpus; baseline and preset li
 - Fidelity: match shapes + true colours; halos, sharpening rims and the ribbons' streak noise are artifacts (not "also the streaks", not "pixel-close"). → Task 4b.
 - Done bar: set after the first fixes, not before.
 - Regions: keep the corrected boxes.
+
+### 2026-10-05 — Task 4b baseline (runs/20261005-224339-rust-baseline2, same trace, new measures)
+
+| scope | edge_off_frac | edge_p99_px | fill_de_mean | fill_de_p95 |
+|---|---|---|---|---|
+| whole | 0.0062 | 1.0 | 0.5749 | 2.0304 |
+| wave | 0.0144 | 3.0 | 1.2374 | 5.9732 |
+| gap | 0.0187 | 4.0 | 2.9184 | 7.3577 |
+| light | 0.0002 | 1.0 | 0.3968 | 1.1597 |
+| river | 0.0005 | 1.0 | 0.5996 | 1.8113 |
+| caps | 0.0112 | 2.0 | 0.5777 | 1.5363 |
+
+Printed misses (x, y, px, region), 8 largest:
+357.8 176.7 18 wave; 430.2 106.6 17 wave; 620.5 242.6 14 caps; 86.9 118.8 13 wave; 711.3 248.0 9 caps; 699.1 242.4 8 caps; 960.2 259.8 5 caps; 817.8 238.5 4 caps.
+(focus.json holds 17 clusters in total; the rest are 4 px or fewer, in caps/river/light.)
+
