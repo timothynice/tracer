@@ -116,8 +116,8 @@ and `2026-09-20-vexel-rust-port-design.md` for the Rust implementation.
 ## Studi0Trace for Mac
 
 A Mac app (macOS 13 or later, Apple silicon) that turns images into clean vectors.
-Your images stay on your Mac: nothing is uploaded, and the tracing engine runs
-inside the app. Free and MIT licensed.
+Your images stay on your Mac: nothing is uploaded unless you choose AI redraw, which sends that one image to OpenAI with your own API key.
+The tracing engine runs inside the app. Free and MIT licensed.
 
 Run it from source (needs Node ≥ 20 and Rust ≥ 1.90, <https://rustup.rs>):
 
@@ -161,6 +161,21 @@ under the message about Studi0Trace. Or, wherever you put the app, run
 It opens PNG, JPEG, GIF, WebP, BMP, HEIC and TIFF, up to 2048 px a side, and
 offers Downscale for larger ones. It is listed under Finder's Open With for those
 types and never becomes their default app.
+
+**AI redraw (optional).** A small, blurry or pixel-doubled image is the hardest
+thing to trace. Image ▸ Redraw with AI… (also in the image's right-click menu and
+the inspector, which suggests it for an image under 600 px or an exact 2× upscale)
+sends that one image to OpenAI's image model with your own API key, billed to your
+OpenAI account; the first time it asks for the key and keeps it in your Mac's
+Keychain. The redraw may change shapes, spacing and colours, so it is always shown
+against the original first — edges matched, colour shift and a verdict — and the
+image changes only when you choose Use redraw. Image ▸ Revert to Original swaps
+back. Settings ▸ AI redraw holds the key, the model (GPT Image 2 or 1.5), the
+quality and the hint. Cancel Redraw abandons the request and any reply that still
+arrives; an invalid key, an account out of credit, an organization OpenAI has not
+verified for image models, a refusal, a timeout or no connection each say so and
+leave the image as it was. No test calls OpenAI; `OPENAI_API_KEY=… cargo test -p
+studi0trace-desktop --release -- --ignored live_redraw --nocapture` does, by hand.
 
 | Keys | Does |
 |---|---|

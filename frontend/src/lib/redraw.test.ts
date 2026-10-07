@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "./api";
@@ -63,5 +64,9 @@ describe("redraw words", () => {
     expect(redrawFailureText(new ApiError("cancelled", "x", 499))).toBeNull();
     expect(redrawFailureText(new Error("sk-secret"))).toBe("The redraw failed.");
     expect(redrawFailureText("boom")).toBe("The redraw failed.");
+  });
+
+  it("the README says the same sentence as the consent sheet", () => {
+    expect(readFileSync("../README.md", "utf8")).toContain(PRIVACY_SENTENCE);
   });
 });

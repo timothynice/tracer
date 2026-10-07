@@ -52,7 +52,16 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   `src-tauri` is a workspace member holding `Core` for describing, presets and intake; every trace runs in a
   child process, the app's own binary with `--trace-worker`, one at a time (`queue.rs`), killed to cancel.
   HEIC/HEIF/TIFF and Downscale go through `/usr/bin/sips`. The webview never names a path to write: Rust shows
-  the panels and writes (`export.rs`). `npm run dev` / `npm run build` / `npm run smoke` from `apps/desktop`;
+  the panels and writes (`export.rs`). AI redraw (`src-tauri/src/redraw/`: `geometry`, `rough`, `drift`, `openai`;
+  `keychain.rs`) is the app's only network code and the only code that sees the OpenAI key (Keychain service
+  `com.studi0.trace.openai`; its calls run off the async runtime): opt-in, the drift check before a redraw is used,
+  the store swapping an image's bytes for its redraw and back (`"{id}-original"`). Errors carry stable codes
+  (`no_key`, `invalid_key`, `not_allowed`, `quota`, `refused`, `timeout`, `offline`, `bad_reply`, `too_large`; `cancelled`
+  is silent, and a cancelled or superseded redraw emits no terminal `redraw-phase`). `STUDI0TRACE_OPENAI_BASE`
+  points it at the tests' mock server (`tests/redraw_openai.rs`), the `#[ignore]`d `live_redraw` calls OpenAI by
+  hand, and `tests/redraw_boundary.rs` holds the CSP, the worker and the core offline (spec
+  `2026-10-06-ai-redraw-design.md`). The Settings window is 520×780.
+  `npm run dev` / `npm run build` / `npm run smoke` from `apps/desktop`;
   `cargo test -p studi0trace-desktop --release` includes the worker tests on the real binary. The crate embeds
   `frontend/dist` when it compiles, so `cd frontend && npm run build` comes before any cargo build of the workspace.
 - `backend/tools/diffcheck.py` — runs a pipeline stage in both implementations
