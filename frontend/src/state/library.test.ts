@@ -617,6 +617,27 @@ describe("library: AI redraw", () => {
     expect(lib.getState().items[0].redraw).toEqual(NO_REDRAW);
   });
 
+  it("Revert clears the waiting decision before the app answers, so a failed revert leaves no Drift check", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    let done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    await lib.acceptRedraw("a");
+    done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    expect(lib.getState().items[0].redraw?.pending).not.toBeNull();
+    let fail: (e: unknown) => void = () => {};
+    r.platform.revertRedraw.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
+    const reverting = lib.revertRedraw("a");
+    expect(lib.getState().items[0].redraw).toMatchObject({ active: true, pending: null, phase: null }); // before the app answers
+    fail(new ApiError("not_redrawn", "x", 409));
+    await expect(reverting).rejects.toMatchObject({ code: "not_redrawn" });
+    expect(lib.getState().items[0].redraw).toMatchObject({ active: true, pending: null });
+  });
+
   it("Discard drops the waiting redraw; Try again replaces it", async () => {
     const r = redrawPlatform();
     const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { ApiError } from "@/lib/api";
 import { DEFAULT_SETTINGS } from "@/platform/types";
 import { SettingsView } from "./SettingsView";
 
@@ -94,5 +95,24 @@ describe("SettingsView", () => {
     unmount();
     render(<SettingsView settings={DEFAULT_SETTINGS} onChange={vi.fn()} />);
     expect(screen.queryByRole("heading", { name: "AI redraw" })).toBeNull();
+  });
+
+  it("a failed key save or remove is worded by code, and closing the key field clears the error", async () => {
+    const onSave = vi.fn(async () => {
+      throw new ApiError("engine_crashed", "The trace crashed (signal 9)", 500);
+    });
+    const onRemove = vi.fn(async () => {
+      throw new ApiError("keychain", "The keychain refused: OSStatus -25244", 500);
+    });
+    render(<SettingsView settings={DEFAULT_SETTINGS} onChange={vi.fn()} redraw={{ stored: true, onSave, onRemove }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByLabelText("New OpenAI API key"), { target: { value: "sk-new" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong saving the key.");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("trace");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The keychain would not remove the key.");
   });
 });

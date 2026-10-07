@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
 import { VEXEL, VEXEL_PRESETS } from "@/test/server";
@@ -8,7 +8,7 @@ import { VEXEL, VEXEL_PRESETS } from "@/test/server";
 const toasts = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: toasts.error, success: vi.fn() }, Toaster: () => null }));
 
-const hooks = vi.hoisted(() => ({ menu: null as null | ((c: string) => void), opens: null as null | ((p: string[]) => void), states: [] as Record<string, unknown>[] }));
+const hooks = vi.hoisted(() => ({ menu: null as null | ((c: string) => void), opens: null as null | ((p: string[]) => void), states: [] as Record<string, unknown>[], settings: {} as Record<string, unknown> }));
 
 vi.mock("@/platform", async () => {
   const types = await vi.importActual<typeof import("@/platform/types")>("@/platform/types");
@@ -25,7 +25,7 @@ vi.mock("@/platform", async () => {
     exportAll: vi.fn(async () => null),
     copyText: vi.fn(async () => {}),
     reveal: vi.fn(async () => {}),
-    loadSettings: async () => types.DEFAULT_SETTINGS,
+    loadSettings: async () => ({ ...types.DEFAULT_SETTINGS, ...hooks.settings }),
     saveSettings: async (s: unknown) => s,
     onSettings: () => () => {},
     onMenu: (cb: (c: string) => void) => {
@@ -74,6 +74,12 @@ async function start() {
   await screen.findByRole("option", { name: /small\.png/ });
 }
 
+beforeEach(() => {
+  toasts.error.mockClear();
+  vi.mocked(platform.redrawImage).mockClear();
+  hooks.settings = {};
+});
+
 describe("AI redraw in the Mac app", () => {
   it("hints for a small image, asks for a key first, checks the drift, swaps the source on Use redraw and back on Revert", async () => {
     vi.mocked(platform.redrawImage)
@@ -117,6 +123,7 @@ describe("AI redraw in the Mac app", () => {
     act(() => hooks.menu!("redraw"));
     expect(await screen.findByText("Your OpenAI account is out of credit or rate limited.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(toasts.error).not.toHaveBeenCalled(); // the inspector shows it: no second telling
   });
 
   it("words a failed Use redraw or Revert by its code, never by the server's message, and never as an unhandled rejection", async () => {
@@ -151,5 +158,42 @@ describe("AI redraw in the Mac app", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(toasts.error).not.toHaveBeenCalled();
+  });
+
+  it("with the inspector hidden a failed redraw speaks as a toast, in words by code; a cancel stays silent", async () => {
+    vi.mocked(platform.redrawImage)
+      .mockRejectedValueOnce(new ApiError("quota", "sk-secret-123 quota", 429))
+      .mockRejectedValueOnce(new ApiError("cancelled", "The redraw was cancelled", 499));
+    await start();
+    act(() => hooks.menu!("toggle-inspector"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Redraw with AI…" })).toBeNull());
+    act(() => hooks.menu!("redraw"));
+    await waitFor(() => expect(toasts.error).toHaveBeenCalledWith("Your OpenAI account is out of credit or rate limited."));
+    act(() => hooks.menu!("redraw"));
+    await waitFor(() => expect(platform.redrawImage).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(toasts.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("traces the redraw after Use redraw when Trace on open is set, and Show Original returns with Done", async () => {
+    hooks.settings = { traceOnOpen: true };
+    vi.mocked(platform.vectorize).mockClear();
+    vi.mocked(platform.redrawImage).mockResolvedValueOnce({ redraw, drift: { edgeF1: 0.9, deltaE: 3, verdict: "noticeable" } });
+    vi.mocked(platform.acceptRedraw).mockResolvedValueOnce({ image: { ...opened, width: 2048, height: 2048, previewUrl: "blob:r1" }, original: { ...opened, id: `${PATH}-original` } });
+    await start();
+    await waitFor(() => expect(platform.vectorize).toHaveBeenCalledTimes(1)); // the original, on open
+    act(() => hooks.menu!("redraw"));
+    const check = await screen.findByRole("region", { name: "Drift check" });
+    fireEvent.click(within(check).getByRole("button", { name: "Use redraw" }));
+    await waitFor(() => expect(platform.vectorize).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(platform.vectorize).mock.calls[1][0]).toMatchObject({ imageId: PATH });
+    // Show Original: the redraw in use against the original, closed with Done
+    act(() => hooks.menu!("show-original"));
+    const review = await screen.findByRole("region", { name: "Drift check" });
+    expect(within(review).queryByRole("button", { name: "Use redraw" })).toBeNull();
+    fireEvent.click(within(review).getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Drift check" })).toBeNull());
+    expect(screen.getByAltText("Source raster")).toHaveAttribute("src", "blob:r1");
   });
 });

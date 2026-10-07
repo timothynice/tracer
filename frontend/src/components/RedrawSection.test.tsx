@@ -35,6 +35,13 @@ describe("RedrawSection", () => {
     expect(screen.queryByRole("note")).toBeNull();
     rerender(<RedrawSection item={base} suggest {...handlers()} />);
     expect(screen.queryByRole("note")).toBeNull();
+    // not while a redraw runs or waits for its decision
+    const rough = { ...base, rough: { rough: true, reason: "small" as const } };
+    rerender(<RedrawSection item={{ ...rough, redraw: { ...NO_REDRAW, phase: "drawing" } }} suggest {...handlers()} />);
+    expect(screen.queryByRole("note")).toBeNull();
+    const pending = { redraw: { ...base.image, id: "r" }, drift: { edgeF1: 0.9, deltaE: 3, verdict: "noticeable" as const } };
+    rerender(<RedrawSection item={{ ...rough, redraw: { ...NO_REDRAW, pending } }} suggest {...handlers()} />);
+    expect(screen.queryByRole("note")).toBeNull();
   });
 
   it("always offers Redraw with AI…, and Cancel while it runs", () => {

@@ -135,12 +135,19 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const redrawKey = useRedrawKey();
   const [consentFor, setConsentFor] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
+  const inspectorShown = useRef(inspectorPane);
+  inspectorShown.current = inspectorPane;
   const startRedraw = useCallback(
     async (id: string) => {
       setReviewing(null);
       try {
         const failed = await lib.redraw(id);
         if (failed?.code === "no_key") setConsentFor(id);
+        else if (!inspectorShown.current) {
+          // the inspector's section is where a failure is shown; with it hidden the failure speaks as a toast
+          const error = lib.getState().items.find((i) => i.image.id === id)?.redraw?.error;
+          if (error) failRedraw(error);
+        }
       } catch (err) {
         failRedraw(err);
       }

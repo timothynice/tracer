@@ -1,6 +1,7 @@
 import { Switch } from "./Switch";
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
+import { keyErrorText } from "@/lib/redraw";
 import type { Settings } from "@/platform/types";
 
 /** The OpenAI key's row: whether one is stored, and the two ways to change that (the key never comes back). */
@@ -25,6 +26,7 @@ function KeyRow({ controls }: { controls: RedrawKeyControls }) {
   const close = () => {
     setEditing(false);
     setKey("");
+    setError(null);
   };
   const save = async () => {
     try {
@@ -32,7 +34,7 @@ function KeyRow({ controls }: { controls: RedrawKeyControls }) {
       close();
       setError(null);
     } catch (err) {
-      setError((err as Error).message);
+      setError(keyErrorText(err, "save"));
     }
   };
   return (
@@ -49,7 +51,7 @@ function KeyRow({ controls }: { controls: RedrawKeyControls }) {
             {controls.stored ? "Replace" : "Add"}
           </button>
           {controls.stored && (
-            <button type="button" className="mac-button h-7" onClick={() => void controls.onRemove().catch((err: Error) => setError(err.message))}>
+            <button type="button" className="mac-button h-7" onClick={() => void controls.onRemove().catch((err: unknown) => setError(keyErrorText(err, "remove")))}>
               Remove
             </button>
           )}

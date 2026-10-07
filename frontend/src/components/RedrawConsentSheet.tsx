@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { CONSENT_CHANGES, CONSENT_UPLOAD, PRIVACY_SENTENCE } from "@/lib/redraw";
+import { CONSENT_CHANGES, CONSENT_UPLOAD, keyErrorText, PRIVACY_SENTENCE } from "@/lib/redraw";
 
 export interface RedrawConsentSheetProps {
   open: boolean;
@@ -29,7 +29,7 @@ export function RedrawConsentSheet({ open, onOpenChange, onSave }: RedrawConsent
     try {
       await onSave(key.trim());
     } catch (err) {
-      setError((err as Error).message);
+      setError(keyErrorText(err, "save"));
     } finally {
       setSaving(false);
     }

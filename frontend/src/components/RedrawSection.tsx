@@ -26,7 +26,7 @@ export function RedrawHint({ text }: { text: string }) {
 /** The inspector's AI redraw: the chip on a redrawn image, the hint, the button (Cancel while it runs), the last failure. */
 export function RedrawSection({ item, suggest, onRedraw, onCancel, onShowOriginal, onRevert }: RedrawSectionProps) {
   const r = redrawOf(item);
-  const hint = suggest && !r.active ? roughHint(item.rough) : null;
+  const hint = suggest && !r.active && !r.phase && !r.pending ? roughHint(item.rough) : null;
   const failure = r.error ? redrawErrorText(r.error) : null;
   return (
     <section aria-label="AI redraw" className="space-y-2">

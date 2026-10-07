@@ -503,8 +503,10 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
       // Revert is open mid-run: a redraw still running is abandoned and one waiting for a decision is let go,
       // before the original comes back, so neither can land on it
       abortRedraw(id);
-      patchRedraw(id, { phase: null });
-      if (redrawOf(item).pending) void platform.discardRedraw?.(id).catch(() => {});
+      // the decision goes now, so a slow or failed revert never leaves a Drift check whose redraw has been let go of
+      const waiting = redrawOf(item).pending;
+      patchRedraw(id, { phase: null, pending: null });
+      if (waiting) void platform.discardRedraw?.(id).catch(() => {});
       const image = await platform.revertRedraw(id);
       const now = find(id);
       if (!now) return;

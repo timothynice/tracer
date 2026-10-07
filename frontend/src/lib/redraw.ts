@@ -60,3 +60,13 @@ export function redrawErrorText(err: ApiError): string | null {
 export function redrawFailureText(err: unknown): string | null {
   return err instanceof ApiError ? redrawErrorText(err) : "The redraw failed.";
 }
+
+/** A key that could not be saved or removed, by code: the app's own wording for a key it refused to take (`bad_request`,
+ *  from its check of the pasted text, which never repeats the key); the keychain's and anything else's in plain words,
+ *  never the message (an OS reason, or a crash that speaks of a trace). */
+export function keyErrorText(err: unknown, verb: "save" | "remove"): string {
+  const code = err instanceof ApiError ? err.code : null;
+  if (code === "bad_request" && err instanceof ApiError) return err.message;
+  if (code === "keychain") return `The keychain would not ${verb === "save" ? "store" : "remove"} the key.`;
+  return `Something went wrong ${verb === "save" ? "saving" : "removing"} the key.`;
+}

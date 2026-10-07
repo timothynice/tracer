@@ -32,4 +32,20 @@ describe("RedrawConsentSheet", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("That does not look like an OpenAI API key.");
     expect(screen.getByRole("dialog", { name: "Redraw with AI" })).toBeInTheDocument();
   });
+
+  it("words a crash or a keychain refusal by code, never by the engine's or the OS's message", async () => {
+    let err: ApiError = new ApiError("engine_crashed", "The trace crashed (signal 9)", 500);
+    const onSave = vi.fn(async () => {
+      throw err;
+    });
+    render(<RedrawConsentSheet open onOpenChange={vi.fn()} onSave={onSave} />);
+    fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "sk-test-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Key and Redraw" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong saving the key.");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("trace");
+    err = new ApiError("keychain", "The keychain refused: OSStatus -25293", 500);
+    fireEvent.click(screen.getByRole("button", { name: "Save Key and Redraw" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("The keychain would not store the key."));
+    expect(screen.getByRole("alert")).not.toHaveTextContent("OSStatus");
+  });
 });
