@@ -5,59 +5,59 @@
 /* Studi0 design tokens — raw HSL, semantic names identical across modes. */
 :root {
   color-scheme: light;
-  --background: 0 0% 99%;
-  --foreground: 222 47% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
+  --background: 215 28% 98%;
+  --foreground: 215 47% 11%;
+  --card: 215 30% 99.5%;
+  --card-foreground: 215 47% 11%;
+  --popover: 215 30% 99.5%;
+  --popover-foreground: 215 47% 11%;
   --primary: 215 20% 30%;
   --primary-foreground: 58 100% 74%;
-  --secondary: 210 40% 96%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
+  --secondary: 215 32% 95%;
+  --secondary-foreground: 215 47% 11%;
+  --muted: 215 32% 95%;
   --muted-foreground: 215 16% 47%;
-  --accent: 210 40% 96%;
-  --accent-foreground: 222 47% 11%;
+  --accent: 215 32% 95%;
+  --accent-foreground: 215 47% 11%;
   --destructive: 0 100% 68%;
   --destructive-foreground: 0 0% 100%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
+  --border: 215 26% 90%;
+  --input: 215 26% 90%;
   --ring: 215 20% 30%;
   --brand-accent: 58 100% 73%;
   --success: 142 71% 45%;
   --warning: 45 93% 47%;
   --info: 199 89% 48%;
   --radius: 0.5rem;
-  --checker-a: 0 0% 85%;
-  --checker-b: 0 0% 77%;
-  --window: 220 14% 93%;
+  --checker-a: 215 12% 86%;
+  --checker-b: 215 12% 79%;
+  --window: 215 22% 93%;
   --accent-mac: #007aff;
 }
 
 .dark {
   color-scheme: dark;
-  --background: 210 15% 15%;
-  --foreground: 210 20% 98%;
-  --card: 214 19% 18%;
-  --card-foreground: 210 20% 98%;
-  --popover: 214 19% 18%;
-  --popover-foreground: 210 20% 98%;
+  --background: 215 19% 14%;
+  --foreground: 215 20% 98%;
+  --card: 215 19% 18%;
+  --card-foreground: 215 20% 98%;
+  --popover: 215 19% 18%;
+  --popover-foreground: 215 20% 98%;
   --primary: 215 20% 45%;
   --primary-foreground: 58 100% 74%;
-  --secondary: 210 12% 22%;
-  --secondary-foreground: 210 20% 98%;
-  --muted: 210 12% 22%;
-  --muted-foreground: 215 15% 65%;
-  --accent: 210 12% 24%;
-  --accent-foreground: 210 20% 98%;
+  --secondary: 215 18% 23%;
+  --secondary-foreground: 215 20% 98%;
+  --muted: 215 18% 23%;
+  --muted-foreground: 215 16% 66%;
+  --accent: 215 18% 26%;
+  --accent-foreground: 215 20% 98%;
   --destructive: 0 100% 68%;
-  --destructive-foreground: 210 20% 98%;
-  --border: 210 12% 20%;
-  --input: 210 12% 20%;
+  --destructive-foreground: 215 20% 98%;
+  --border: 215 18% 23%;
+  --input: 215 18% 23%;
   --ring: 215 20% 45%;
-  --checker-a: 214 19% 20%;
-  --checker-b: 210 15% 15%;
+  --checker-a: 215 19% 21%;
+  --checker-b: 215 19% 16%;
   --window: 216 22% 9%;
 }
 
@@ -90,10 +90,16 @@
     cursor: default;
     overscroll-behavior: none;
   }
-  html.native,
-  html.native body {
-    /* the window's vibrancy shows through where no panel is painted */
+  html.native {
+    /* the window's vibrancy shows through where no panel is painted … */
     background: transparent;
+  }
+  /* … through a cool wash, so the material's neutral grey never reads against the panels */
+  html.native body {
+    background: hsl(var(--window) / 0.5);
+  }
+  html.native.dark body {
+    background: hsl(var(--window) / 0.55);
   }
   /* the Settings window is not transparent: paint the page */
   html.native.settings-window,
@@ -303,6 +309,29 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
+  /* An image that is not traced yet: unmistakably a preview. Removing the class sharpens it in place. */
+  .ghost {
+    filter: saturate(0.3) blur(5px);
+    opacity: 0.55;
+    transition:
+      filter 300ms ease-out,
+      opacity 300ms ease-out;
+  }
+  /* A light band crossing a box while something runs. `--sweep` is the band's colour. */
+  .sweep {
+    --sweep: hsl(var(--foreground) / 0.08);
+    background: linear-gradient(100deg, transparent 30%, var(--sweep) 50%, transparent 70%);
+    background-size: 250% 100%;
+    animation: sweep 1.4s ease-in-out infinite;
+    mix-blend-mode: multiply;
+  }
+  .dark .sweep {
+    mix-blend-mode: screen;
+  }
+  .mac-primary .sweep {
+    --sweep: rgb(255 255 255 / 0.22);
+    mix-blend-mode: normal;
+  }
   /* Entrance motion for panels that replace the landing screen. Stagger with
      [animation-delay:*]; both are no-ops under prefers-reduced-motion. */
   .motion-rise {
@@ -319,6 +348,15 @@
   }
   100% {
     transform: translateX(300%);
+  }
+}
+
+@keyframes sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
   }
 }
 
