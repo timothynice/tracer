@@ -28,7 +28,7 @@ traced from it. It does not replace engine work on hard inputs.
    Remove, Model, Quality, and "Suggest for rough images" (default on).
 3. **Redraw.** The source is padded with its own border colour to OpenAI's aspect range, sent to the image edit
    endpoint with a fixed prompt, the reply cropped back to the original framing and fitted within the app's
-   2048 px side. Progress shows "Redrawing with AI…"; Cancel abandons the request. 10–60 s is typical.
+   2048 px side. Progress shows "Redrawing with AI…"; Cancel abandons the request and discards any reply that still arrives. 10–60 s is typical.
 4. **Drift check, always.** Before anything changes: original against redraw in the Viewer (overlay, split, side by
    side, raster against raster), the two drift numbers and a verdict chip, with **Use redraw**, **Try again**,
    **Discard**.
@@ -128,10 +128,10 @@ cap, kept for safety), `cancelled` (silent). Each leaves the image exactly as it
 - Frontend (vitest, mocked `Platform`): hint shown only for rough images and when the setting is on; consent sheet
   on `no_key`; the drift view's verdict chip and three buttons; accept swaps the source and re-traces; revert;
   errors rendered by code.
-- No test calls OpenAI. A manual check: `tools/redraw-smoke.sh` (needs `OPENAI_API_KEY` in the environment) runs one
-  redraw through the built binary's code path on a fixture and prints the drift.
+- No automated test calls OpenAI. A live check is an `#[ignore]`d test, `live_redraw`, run by hand with
+  `OPENAI_API_KEY=… cargo test -p studi0trace-desktop --release -- --ignored live_redraw`: it redraws a core
+  fixture through `redraw::openai` + `geometry` + `drift` and prints the size, drift and verdict.
 
 ## Out of scope
 
-Restoring a transparent source's alpha; batch redraw; local (on-device) super-resolution; other providers; storing
-redraws across launches beyond what the library already persists; any change to the trace engine.
+Restoring a transparent source's alpha; batch redraw; local (on-device) super-resolution; other providers; keeping redraws across launches (the image store is in memory, as it is for every open image); any change to the trace engine.
