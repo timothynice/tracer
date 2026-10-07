@@ -68,7 +68,7 @@ describe("App", () => {
     await screen.findByRole("img", { name: "Vector result" });
     fireEvent.click(screen.getByRole("radio", { name: /^Balanced/ }));
     await waitFor(() => expect(document.querySelector('[data-trace="balanced"]')).not.toBeNull());
-    expect(screen.getByText("Up to date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
   });
 
   it("hides and shows the panes from the title bar", async () => {

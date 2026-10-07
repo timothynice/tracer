@@ -187,13 +187,13 @@ describe("the Mac app's wiring", () => {
     expect(screen.queryByText("Queued…")).toBeNull();
     expect(screen.queryByText(/Tracing…/)).toBeNull();
     expect(screen.queryByRole("button", { name: /^Cancel/ })).toBeNull();
-    expect(screen.getByText("Up to date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
 
     // Auto lands: its answer is kept, and Auto shows it at once
     await act(async () => finishAuto(answer("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'/>")));
     await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ anyTracing: false }));
     fireEvent.click(screen.getByRole("radio", { name: /^Auto/ }));
-    expect(screen.getByText("Up to date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
     expect(platform.vectorize).toHaveBeenCalledTimes(2);
   });
 

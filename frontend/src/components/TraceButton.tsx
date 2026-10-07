@@ -1,16 +1,17 @@
-import { Wand2 } from "lucide-react";
+import { Check, Square, Wand2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { currentJob, needsUpdate, traceKey, type ImageItem } from "@/state/library";
 
 export interface TraceButtonProps {
   item: ImageItem;
-  /** How many presets Auto tries, for "Trying 4 presets…". */
+  /** How many styles Auto tries, for "Trying 4 styles…". */
   candidates: number;
   onGenerate: () => void;
   onCancel: () => void;
 }
 
+/** One button in every state, the same size, so nothing moves: generate, cancel while it runs, Up to date after. */
 export function TraceButton({ item, candidates, onGenerate, onCancel }: TraceButtonProps) {
   const job = currentJob(item);
   const [now, setNow] = useState(() => Date.now());
@@ -23,28 +24,31 @@ export function TraceButton({ item, candidates, onGenerate, onCancel }: TraceBut
 
   if (job) {
     const seconds = Math.max(0, Math.floor((now - job.startedAt) / 1000));
-    const phase = job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${candidates} presets…` : "Tracing…";
+    const queued = job.phase === "queued";
+    const phase = queued ? "Queued…" : `${job.key === "auto" ? `Trying ${candidates} styles…` : "Tracing…"} ${seconds} s`;
     return (
-      <div className="space-y-1.5">
-        <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground" aria-live="polite">
-          <span className={job.phase === "queued" ? "inline-block h-1.5 w-1.5 rounded-full bg-warning" : "mac-dot animate-pulse"} aria-hidden="true" />
+      <button type="button" className={`mac-primary relative overflow-hidden ${queued ? "opacity-80" : ""}`} onClick={onCancel} title="Cancel Trace (⌘.)">
+        {!queued && <span data-testid="sweep" aria-hidden="true" className="sweep pointer-events-none absolute inset-0" />}
+        <span className="tabular relative" aria-live="polite">
           {phase}
-        </p>
-        <button type="button" className="mac-button h-9 w-full" onClick={onCancel} title="Cancel Trace (⌘.)">
-          Cancel · {seconds} s
-        </button>
-      </div>
+        </span>
+        <Square className="relative h-2.5 w-2.5 fill-current" aria-hidden="true" />
+      </button>
     );
   }
-  const current = item.shown !== null && item.shown === traceKey(item);
+  if (item.shown !== null && item.shown === traceKey(item)) {
+    return (
+      <button type="button" className="mac-button h-9 w-full" disabled>
+        <Check className="h-4 w-4" aria-hidden="true" />
+        Up to date
+      </button>
+    );
+  }
   const label = needsUpdate(item) ? "Update Vector" : "Generate Vector";
   return (
-    <div className="space-y-1">
-      <button type="button" className="mac-primary" disabled={current} onClick={onGenerate} title={`${label} (⌘↩)`}>
-        <Wand2 className="h-4 w-4" aria-hidden="true" />
-        {label}
-      </button>
-      {current && <p className="text-center text-[11px] text-muted-foreground">Up to date</p>}
-    </div>
+    <button type="button" className="mac-primary" onClick={onGenerate} title={`${label} (⌘↩)`}>
+      <Wand2 className="h-4 w-4" aria-hidden="true" />
+      {label}
+    </button>
   );
 }
