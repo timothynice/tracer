@@ -19,14 +19,19 @@ struct Reply {
     status: u16,
     body: Vec<u8>,
     delay: Duration,
+    /// A Content-Length that is not the body's, when set.
+    claimed: Option<usize>,
 }
 
 impl Reply {
     fn json(status: u16, body: serde_json::Value) -> Reply {
-        Reply { status, body: body.to_string().into_bytes(), delay: Duration::ZERO }
+        Reply { status, body: body.to_string().into_bytes(), delay: Duration::ZERO, claimed: None }
     }
     fn raw(status: u16, body: &[u8]) -> Reply {
-        Reply { status, body: body.to_vec(), delay: Duration::ZERO }
+        Reply { status, body: body.to_vec(), delay: Duration::ZERO, claimed: None }
+    }
+    fn claiming(self, claimed: usize) -> Reply {
+        Reply { claimed: Some(claimed), ..self }
     }
     fn after(self, delay: Duration) -> Reply {
         Reply { delay, ..self }
@@ -103,7 +108,7 @@ fn serve(replies: Vec<Reply>) -> Mock {
             let (head, body) = read_request(&mut stream);
             log.lock().unwrap().push(Seen { head, body });
             std::thread::sleep(reply.delay);
-            let _ = write!(stream, "HTTP/1.1 {} Mock\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", reply.status, reply.body.len());
+            let _ = write!(stream, "HTTP/1.1 {} Mock\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", reply.status, reply.claimed.unwrap_or(reply.body.len()));
             let _ = stream.write_all(&reply.body);
         }
     });
@@ -235,6 +240,18 @@ fn a_garbage_body_is_bad_reply() {
 }
 
 #[test]
+fn a_403_says_it_is_not_allowed_and_never_quotes_openai_or_the_key() {
+    let body = json!({"error": {"message": "Your organization must be verified to use the model `gpt-image-2`. Please go to: https://platform.openai.com/settings/organization/general (key sk-test-0123456789abcdef)", "type": "invalid_request_error", "code": null}});
+    assert_eq!(code_of(Reply::json(403, body)), "not_allowed");
+}
+
+#[test]
+fn a_reply_that_claims_more_than_96_mib_is_bad_reply_unread() {
+    assert_eq!(openai::MAX_REPLY_BYTES, 96 * 1024 * 1024);
+    assert_eq!(code_of(Reply::raw(200, b"{}").claiming(openai::MAX_REPLY_BYTES + 1)), "bad_reply");
+}
+
+#[test]
 fn a_slow_reply_is_abandoned_when_cancelled_and_never_read() {
     let mock = serve(vec![image_reply(&png(4, 4, |_, _| [0; 3])).after(Duration::from_secs(5))]);
     let api = Api::new(&mock.base, KEY).unwrap();
@@ -245,7 +262,11 @@ fn a_slow_reply_is_abandoned_when_cancelled_and_never_read() {
         flag.store(true, Ordering::SeqCst);
         answer.is_ok()
     });
-    std::thread::sleep(Duration::from_millis(300));
+    // wait for the request to reach the server (not a fixed time: a loaded machine is slower)
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while mock.seen.lock().unwrap().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(mock.seen.lock().unwrap().len(), 1, "the request reached the server");
     let started = Instant::now();
     task.abort();

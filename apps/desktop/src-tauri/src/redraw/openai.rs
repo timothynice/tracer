@@ -13,6 +13,8 @@ pub const TIMEOUT: Duration = Duration::from_secs(120);
 pub const MAX_REQUEST_BYTES: usize = 50 * 1024 * 1024;
 /// The one prompt, for both models.
 pub const PROMPT: &str = "Redraw this exact image at high resolution as clean flat artwork. Keep every shape, letter, proportion, spacing, position and colour exactly as in the input; do not add, remove, restyle or re-letter anything. Remove blur, compression noise, halos and pixelation. Keep the background a plain flat colour and keep the same framing and margins.";
+/// The most of a reply that is read: a 3840 px PNG in base64 is far under this, anything over is not a reply.
+pub const MAX_REPLY_BYTES: usize = 96 * 1024 * 1024;
 /// The image is streamed in pieces this size, so the last one says the upload has gone.
 const UPLOAD_CHUNK: usize = 64 * 1024;
 
@@ -64,6 +66,7 @@ pub fn parse_reply(status: u16, body: &[u8]) -> Result<Vec<u8>, CommandError> {
         (429, _) | (_, "insufficient_quota" | "billing_hard_limit_reached" | "rate_limit_exceeded") => error("quota"),
         (401, _) | (_, "invalid_api_key") => error("invalid_key"),
         (_, "moderation_blocked" | "content_policy_violation") => error("refused"),
+        (403, _) => error("not_allowed"),
         (413, _) => error("too_large"),
         _ => error("bad_reply"),
     })
@@ -156,7 +159,18 @@ impl Api {
         let form = form.part("image", image);
         let answer = self.client.post(format!("{}/images/edits", self.base)).bearer_auth(&self.key).multipart(form).send().await.map_err(|e| transport(&e))?;
         let status = answer.status().as_u16();
-        let body = answer.bytes().await.map_err(|e| transport(&e))?;
+        // the reply is capped: by what it says it holds, then by what actually arrives
+        if answer.content_length().is_some_and(|n| n > MAX_REPLY_BYTES as u64) {
+            return Err(error("bad_reply"));
+        }
+        let mut answer = answer;
+        let mut body = Vec::new();
+        while let Some(chunk) = answer.chunk().await.map_err(|e| transport(&e))? {
+            if body.len() + chunk.len() > MAX_REPLY_BYTES {
+                return Err(error("bad_reply"));
+            }
+            body.extend_from_slice(&chunk);
+        }
         parse_reply(status, &body)
     }
 }
@@ -213,6 +227,8 @@ mod tests {
             (400, body("billing_hard_limit_reached", "invalid_request_error"), "quota"),
             (400, body("moderation_blocked", "image_generation_user_error"), "refused"),
             (400, body("content_policy_violation", "invalid_request_error"), "refused"),
+            (403, serde_json::json!({"error": {"message": "Your organization must be verified to use the model `gpt-image-2`", "type": "invalid_request_error", "code": null}}).to_string(), "not_allowed"),
+            (403, "".to_string(), "not_allowed"),
             (413, "".to_string(), "too_large"),
             (500, "upstream".to_string(), "bad_reply"),
             (400, body("invalid_value", "invalid_request_error"), "bad_reply"),
