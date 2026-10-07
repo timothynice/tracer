@@ -26,49 +26,55 @@ describe("PresetCards", () => {
   it("the arrow keys carry the focus with the pick, so a second press goes on to the next card", () => {
     const onPick = vi.fn();
     render(<Controlled onPick={onPick} />);
-    const auto = screen.getByRole("radio", { name: /^Auto/ });
+    const auto = screen.getByRole("radio", { name: "Auto" });
     auto.focus();
     fireEvent.keyDown(auto, { key: "ArrowDown" });
     expect(onPick).toHaveBeenLastCalledWith(VEXEL_PRESETS[1]);
-    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /^Balanced/ }));
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Balanced" }));
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(onPick).toHaveBeenLastCalledWith(VEXEL_PRESETS[2]);
-    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /^Logo & icon/ }));
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Logo & icon" }));
     expect(document.activeElement).toHaveAttribute("aria-checked", "true");
   });
 
-  it("is a radio group, Auto first, the styles Auto never picks folded away", () => {
+  it("is a radio group with Auto first and the styles folded under Choose a style", () => {
     render(<PresetCards presets={VEXEL_PRESETS} defaults={defaults} values={defaults} active="auto" auto={null} autoRunning={false} onPick={vi.fn()} />);
     const group = screen.getByRole("radiogroup", { name: "Preset" });
+    expect(within(group).getAllByRole("radio")).toHaveLength(1);
+    expect(within(group).getByRole("radio", { name: "Auto" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Tries 2 styles and keeps the cleanest faithful one.")).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Choose a style" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
     const radios = within(group).getAllByRole("radio");
-    expect(radios.map((r) => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
-    expect(radios[0]).toHaveAccessibleName(/^Auto/);
-    expect(screen.queryByRole("radio", { name: /^Flat & poster/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "More Styles" }));
-    expect(screen.getByRole("radio", { name: /^Flat & poster/ })).toBeInTheDocument();
+    expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual(["Auto", "Balanced", "Logo & icon", "Flat & poster"]);
+    expect(screen.getByRole("radio", { name: "Balanced" })).toHaveAttribute("title", expect.stringContaining("Gradients, shadows, strokes and overlaps all reconstructed."));
   });
 
-  it("says the first sentence of each description and hands back the preset picked", () => {
+  it("opens itself when a style is the active one, and hands back the preset picked", () => {
     const onPick = vi.fn();
-    render(<PresetCards presets={VEXEL_PRESETS} defaults={defaults} values={defaults} active="auto" auto={null} autoRunning={false} onPick={onPick} />);
-    expect(screen.getByText("Gradients, shadows, strokes and overlaps all reconstructed.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: /^Logo & icon/ }));
-    expect(onPick).toHaveBeenCalledWith(VEXEL_PRESETS[2]);
-    fireEvent.keyDown(screen.getByRole("radio", { name: /^Auto/ }), { key: "ArrowDown" });
-    expect(onPick).toHaveBeenLastCalledWith(VEXEL_PRESETS[1]);
+    render(<PresetCards presets={VEXEL_PRESETS} defaults={defaults} values={defaults} active="logo" auto={null} autoRunning={false} onPick={onPick} />);
+    expect(screen.getByRole("button", { name: "Choose a style" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("radio", { name: "Logo & icon" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: "Balanced" }));
+    expect(onPick).toHaveBeenCalledWith(VEXEL_PRESETS[1]);
   });
 
-  it("after Auto: what it chose and why, each candidate's issues, and the pick marked", () => {
+  it("after Auto: what it chose and why, each style's verdict, and the pick marked with the brand dot", () => {
     render(<PresetCards presets={VEXEL_PRESETS} defaults={defaults} values={defaults} active="auto" auto={auto} autoRunning={false} onPick={vi.fn()} />);
     expect(screen.getByLabelText("Auto chose Logo & icon — the cleanest at the same fidelity")).toBeInTheDocument();
-    expect(within(screen.getByRole("radio", { name: /^Balanced/ })).getByText("2 pinholes")).toBeInTheDocument();
-    expect(within(screen.getByRole("radio", { name: /^Logo & icon/ })).getByText("Auto's pick")).toBeInTheDocument();
-    expect(within(screen.getByRole("radio", { name: /^Logo & icon/ })).getByText("Clean")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Choose a style" }));
+    expect(within(screen.getByRole("radio", { name: "Balanced" })).getByText("2 pinholes")).toBeInTheDocument();
+    const logo = screen.getByRole("radio", { name: "Logo & icon" });
+    expect(within(logo).getByText("Auto's pick")).toHaveClass("sr-only");
+    expect(logo.querySelector(".dot-brand")).toBeInTheDocument();
+    expect(within(logo).getByText("Clean")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Balanced" }).querySelector(".dot-brand")).toBeNull();
   });
 
   it("while Auto runs it says so", () => {
     render(<PresetCards presets={VEXEL_PRESETS} defaults={defaults} values={defaults} active="auto" auto={null} autoRunning onPick={vi.fn()} />);
-    expect(screen.getByText("Trying 2 presets on your image…")).toBeInTheDocument();
+    expect(screen.getByText("Trying 2 styles…")).toBeInTheDocument();
   });
 
   it("the helpers", () => {

@@ -5,6 +5,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import App from "./App";
 import { server } from "@/test/server";
 
+// a style sits under "Choose a style", folded while Auto is the pick
+const pickStyle = (name: string) => {
+  const toggle = screen.getByRole("button", { name: "Choose a style" });
+  if (toggle.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole("radio", { name }));
+};
+
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => {
   server.resetHandlers();
@@ -46,7 +53,7 @@ describe("App", () => {
     expect(option).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("region", { name: "Canvas" })).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "Vector result" })).toBeNull();
-    expect(screen.getByRole("radio", { name: /^Auto/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "Auto" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("Generate traces with Auto and shows the pick", async () => {
@@ -66,7 +73,7 @@ describe("App", () => {
     await screen.findByRole("option", { name: /logo\.png/ });
     fireEvent.click(screen.getByRole("button", { name: /Generate Vector/ }));
     await screen.findByRole("img", { name: "Vector result" });
-    fireEvent.click(screen.getByRole("radio", { name: /^Balanced/ }));
+    pickStyle("Balanced");
     await waitFor(() => expect(document.querySelector('[data-trace="balanced"]')).not.toBeNull());
     expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
   });

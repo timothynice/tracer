@@ -1,10 +1,10 @@
-import { ChevronRight, Circle, Layers, LayoutGrid, Mountain, Scissors, Shapes, SlidersHorizontal, Sparkles, type LucideIcon } from "lucide-react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { ChevronRight, Sparkles, type LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import type { AutoResult, ParamValues, Preset } from "@/lib/api";
 
-/** An icon per preset id; a preset added later gets the shapes. */
-export const PRESET_ICONS: Record<string, LucideIcon> = { auto: Sparkles, balanced: LayoutGrid, logo: Mountain, detailed: SlidersHorizontal, dense: Circle, flat: Layers, cutfile: Scissors };
+/** Auto's icon; the styles are rows without one. */
+export const PRESET_ICONS: Record<string, LucideIcon> = { auto: Sparkles };
 
 export function firstSentence(text: string): string {
   const m = /^(.+?[.!?])(\s|$)/.exec(text.trim());
@@ -40,98 +40,132 @@ export interface PresetCardsProps {
   disabled?: boolean;
 }
 
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** Auto as the hero, and every style one row under "Choose a style": one radiogroup, the arrows walking all of it. */
 export function PresetCards({ presets, defaults, values, active, auto, autoRunning, onPick, disabled }: PresetCardsProps) {
-  const [more, setMore] = useState(false);
-  const cards = useRef(new Map<string, HTMLElement>());
   const on = active ?? activePreset(presets, values, defaults);
-  const hasAuto = presets.some((p) => p.kind === "auto");
-  const leading = presets.filter((p) => !hasAuto || p.kind === "auto" || p.auto_candidate);
-  const trailing = hasAuto ? presets.filter((p) => p.kind !== "auto" && !p.auto_candidate) : [];
-  const shown = more || trailing.some((p) => p.id === on) ? [...leading, ...trailing] : leading;
-  const candidates = presets.filter((p) => p.auto_candidate).length;
+  const autoPreset = presets.find((p) => p.kind === "auto") ?? null;
+  const styles = presets.filter((p) => p.kind !== "auto");
+  const candidates = styles.filter((p) => p.auto_candidate);
+  const trailing = styles.filter((p) => !p.auto_candidate);
+  const ordered = autoPreset ? [autoPreset, ...candidates, ...trailing] : [...candidates, ...trailing];
+  const styleOn = on !== null && on !== "auto";
+  const [open, setOpen] = useState(styleOn || !autoPreset);
+  useEffect(() => {
+    if (styleOn) setOpen(true); // a chosen style is never hidden
+  }, [styleOn]);
+  const rows = useRef(new Map<string, HTMLElement>());
+  // a pick by the arrow keys focuses its row once it is rendered (the disclosure may be opening for it)
+  const pendingFocus = useRef<string | null>(null);
+  useEffect(() => {
+    const el = pendingFocus.current ? rows.current.get(pendingFocus.current) : undefined;
+    if (el) {
+      el.focus();
+      pendingFocus.current = null;
+    }
+  });
   const byId = new Map((auto?.candidates ?? []).map((c) => [c.preset, c]));
 
   const move = (e: KeyboardEvent, at: number) => {
     const step = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 0;
     if (step) {
       e.preventDefault();
-      const next = shown[Math.max(0, Math.min(shown.length - 1, at + step))];
+      const next = ordered[Math.max(0, Math.min(ordered.length - 1, at + step))];
       if (next) {
+        pendingFocus.current = next.id;
         onPick(next);
-        cards.current.get(next.id)?.focus(); // the focus follows the pick, or a second arrow key starts from the old card
       }
     } else if (e.key === " " || e.key === "Enter") {
       e.preventDefault();
-      onPick(shown[at]);
+      onPick(ordered[at]);
     }
   };
+  const bind = (p: Preset, at: number) => ({
+    ref: (el: HTMLElement | null) => {
+      if (el) rows.current.set(p.id, el);
+      else rows.current.delete(p.id);
+    },
+    role: "radio" as const,
+    "aria-checked": p.id === on,
+    "aria-disabled": disabled || undefined,
+    "aria-label": p.label,
+    tabIndex: p.id === on || (on === null && at === 0) ? 0 : -1,
+    title: `${p.description}\n${p.detail}`,
+    onClick: () => !disabled && onPick(p),
+    onKeyDown: (e: KeyboardEvent) => !disabled && move(e, at),
+  });
 
-  const card = (p: Preset, at: number) => {
-    const checked = p.id === on;
-    const Icon = PRESET_ICONS[p.id] ?? Shapes;
+  const n = candidates.length;
+  let autoLine = `Tries ${n} styles and keeps the cleanest faithful one.`;
+  let autoLabel: string | undefined;
+  if (autoRunning) autoLine = `Trying ${n} styles…`;
+  else if (auto) {
+    const choice = autoChoice(auto, presets);
+    autoLine = capital(choice);
+    autoLabel = `Auto ${choice}`;
+  }
+
+  const row = (p: Preset, at: number) => {
     const cand = byId.get(p.id);
-    let sub = <span className="line-clamp-2">{firstSentence(p.description)}</span>;
-    if (p.kind === "auto" && autoRunning) sub = <span>Trying {candidates} presets on your image…</span>;
-    else if (p.kind === "auto" && auto) {
-      const choice = autoChoice(auto, presets);
-      sub = <span aria-label={`Auto ${choice}`}>{choice.charAt(0).toUpperCase() + choice.slice(1)}</span>;
-    } else if (cand?.scores) {
-      sub = (
-        <span className="inline-flex min-w-0 items-center gap-1.5">
+    let verdict = null;
+    if (cand?.scores)
+      verdict = (
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${cand.scores.clean ? "bg-success" : "bg-warning"}`} aria-hidden="true" />
           <span className="truncate">{cand.scores.clean ? "Clean" : cand.scores.issues.join(", ")}</span>
         </span>
       );
-    } else if (cand?.error) sub = <span className="text-destructive">{cand.error.message}</span>;
+    else if (cand?.error) verdict = <span className="truncate text-[11px] text-destructive">{cand.error.message}</span>;
     return (
-      <div
-        key={p.id}
-        ref={(el) => {
-          if (el) cards.current.set(p.id, el);
-          else cards.current.delete(p.id);
-        }}
-        role="radio"
-        aria-checked={checked}
-        aria-disabled={disabled || undefined}
-        tabIndex={checked || (on === null && at === 0) ? 0 : -1}
-        title={`${p.description}\n${p.detail}`}
-        onClick={() => !disabled && onPick(p)}
-        onKeyDown={(e) => !disabled && move(e, at)}
-        className="mac-choice flex items-center gap-3"
-      >
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-border">
-          <Icon className="h-4 w-4" aria-hidden="true" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5">
-            <span className="truncate text-[13px] font-semibold">{p.label}</span>
-            {auto?.pick === p.id && (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded bg-secondary px-1 text-[10px] font-medium leading-4">
-                <span className="dot-brand" aria-hidden="true" />
-                Auto's pick
-              </span>
-            )}
-          </span>
-          <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground" aria-live={p.kind === "auto" ? "polite" : undefined}>
-            {sub}
-          </span>
-        </span>
+      <div key={p.id} {...bind(p, at)} className="mac-choice flex h-9 items-center gap-2.5 px-2.5 py-0">
         <span className="mac-radio" aria-hidden="true" />
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {auto?.pick === p.id && (
+            <>
+              <span className="dot-brand shrink-0" aria-hidden="true" />
+              <span className="sr-only">Auto's pick</span>
+            </>
+          )}
+          <span className="truncate text-[13px]">{p.label}</span>
+        </span>
+        {verdict}
       </div>
     );
   };
+  const first = autoPreset ? 1 : 0;
 
   return (
     <section className="space-y-1.5">
       <div role="radiogroup" aria-label="Preset" className="space-y-1.5">
-        {shown.map(card)}
+        {autoPreset && (
+          <div {...bind(autoPreset, 0)} className="mac-choice flex items-center gap-3 p-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-border">
+              <Sparkles className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-semibold">{autoPreset.label}</span>
+              <span className="mt-0.5 block text-[12px] leading-snug text-muted-foreground" aria-live="polite" aria-label={autoLabel}>
+                {autoLine}
+              </span>
+            </span>
+            <span className="mac-radio" aria-hidden="true" />
+          </div>
+        )}
+        {autoPreset && (
+          <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="mac-ghost h-8 w-full px-1.5 text-foreground">
+            <ChevronRight className={`h-4 w-4 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true" />
+            Choose a style
+          </button>
+        )}
+        {open && (
+          <div className="space-y-0.5">
+            {candidates.map((p, i) => row(p, first + i))}
+            {trailing.length > 0 && candidates.length > 0 && <div aria-hidden="true" className="mx-2.5 my-1 h-px bg-border" />}
+            {trailing.map((p, i) => row(p, first + candidates.length + i))}
+          </div>
+        )}
       </div>
-      {trailing.length > 0 && !trailing.some((p) => p.id === on) && (
-        <button type="button" aria-expanded={more} onClick={() => setMore((v) => !v)} className="mac-ghost h-7 px-1.5 text-[12px]">
-          <ChevronRight className={`h-3.5 w-3.5 transition-transform ${more ? "rotate-90" : ""}`} aria-hidden="true" />
-          More Styles
-        </button>
-      )}
     </section>
   );
 }

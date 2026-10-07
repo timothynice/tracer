@@ -4,6 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { VEXEL, VEXEL_PRESETS } from "@/test/server";
 
+// a style sits under "Choose a style", folded while Auto is the pick
+const pickStyle = (name: string) => {
+  const toggle = screen.getByRole("button", { name: "Choose a style" });
+  if (toggle.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole("radio", { name }));
+};
+
 const hooks = vi.hoisted(() => ({ menu: null as null | ((c: string) => void), opens: null as null | ((p: string[]) => void), failures: null as null | ((f: unknown[]) => void), states: [] as unknown[] }));
 
 vi.mock("@/platform", async () => {
@@ -173,16 +180,16 @@ describe("the Mac app's wiring", () => {
     await waitFor(() => expect(hooks.opens).not.toBeNull());
     act(() => hooks.opens!(["/pics/bg.png"]));
     await screen.findByRole("option", { name: /bg\.png/ });
-    fireEvent.click(screen.getByRole("radio", { name: /^Balanced/ }));
+    pickStyle("Balanced");
     act(() => hooks.menu!("generate"));
     await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ hasVector: true, tracing: false }));
-    fireEvent.click(screen.getByRole("radio", { name: /^Auto/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "Auto" }));
     act(() => hooks.menu!("generate"));
     await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ tracing: true, anyTracing: true }));
     expect(screen.getAllByText("Queued…").length).toBeGreaterThan(0); // the pill and the button, for the job on screen
 
     // back to the cached preset while Auto still runs
-    fireEvent.click(screen.getByRole("radio", { name: /^Balanced/ }));
+    pickStyle("Balanced");
     await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ tracing: false, anyTracing: true }));
     expect(screen.queryByText("Queued…")).toBeNull();
     expect(screen.queryByText(/Tracing…/)).toBeNull();
@@ -192,7 +199,7 @@ describe("the Mac app's wiring", () => {
     // Auto lands: its answer is kept, and Auto shows it at once
     await act(async () => finishAuto(answer("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'/>")));
     await waitFor(() => expect(hooks.states.at(-1)).toMatchObject({ anyTracing: false }));
-    fireEvent.click(screen.getByRole("radio", { name: /^Auto/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "Auto" }));
     expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
     expect(platform.vectorize).toHaveBeenCalledTimes(2);
   });
