@@ -324,12 +324,35 @@ pub(crate) fn close(images: &Images, redraws: &Redraws, id: &str) -> bool {
     images.remove(id)
 }
 
-/// What a redraw starts from, checked before anything goes anywhere: the image as it was opened, and the key. An
-/// unknown image is `image_expired`; no key in the keychain is `no_key`, before any network call.
-pub(crate) fn redraw_start(images: &Images, key: Option<String>, id: &str) -> Result<(OpenImage, String), CommandError> {
+/// What a redraw starts from, checked before anything goes anywhere: the image as it was opened, then the key. An
+/// unknown image is `image_expired` and the keychain is not asked; no key is `no_key`, before any network call.
+/// The keychain is read off the runtime's threads: an unsigned rebuild can make macOS ask to let the app read it.
+pub(crate) async fn redraw_start(images: &Images, read_key: impl FnOnce() -> Option<String> + Send + 'static, id: &str) -> Result<(OpenImage, String), CommandError> {
     let source = images.source_of(id).ok_or_else(CommandError::expired)?;
-    let key = key.ok_or_else(|| redraw::error("no_key"))?;
+    let key = redraw::blocking(move || Ok(read_key())).await?.ok_or_else(|| redraw::error("no_key"))?;
     Ok((source, key))
+}
+
+/// How a redraw's task ended without an answer: a panic is a crash and says so; anything else is the abort of a
+/// cancel, a newer request or a closed image.
+pub(crate) fn join_failure(e: tauri::Error) -> CommandError {
+    match e {
+        tauri::Error::JoinError(j) if j.is_panic() => CommandError::crashed("the redraw stopped unexpectedly"),
+        _ => redraw::error("cancelled"),
+    }
+}
+
+/// The terminal phase of a redraw that ended: `done` for an answer, `failed` for a failure that ended its own
+/// generation, nothing for a job a cancel, a newer request or a close had already ended (it answers `cancelled`
+/// and the webview already knows).
+pub(crate) fn terminal_phase(redraws: &Redraws, image_id: &str, generation: u64, answered: bool) -> Option<Phase> {
+    if answered {
+        Some(Phase::Done)
+    } else if redraws.fail(image_id, generation) {
+        Some(Phase::Failed)
+    } else {
+        None
+    }
 }
 
 /// Use redraw: the redraw awaiting a decision becomes the image's source; the original is kept. Whatever the
@@ -359,13 +382,13 @@ pub(crate) fn discard(images: &Images, redraws: &Redraws, id: &str) -> bool {
 /// Whether an OpenAI key is stored; the key itself never reaches the webview.
 #[tauri::command]
 pub async fn redraw_key_status() -> bool {
-    keychain::has_key()
+    redraw::blocking(|| Ok(keychain::has_key())).await.unwrap_or(false)
 }
 
 #[tauri::command]
 pub async fn set_redraw_key(app: tauri::AppHandle, key: String) -> Result<(), CommandError> {
     use tauri::Emitter;
-    keychain::set_key(&key)?;
+    redraw::blocking(move || keychain::set_key(&key)).await?;
     let _ = app.emit("redraw-key", true);
     Ok(())
 }
@@ -373,7 +396,7 @@ pub async fn set_redraw_key(app: tauri::AppHandle, key: String) -> Result<(), Co
 #[tauri::command]
 pub async fn delete_redraw_key(app: tauri::AppHandle) -> Result<(), CommandError> {
     use tauri::Emitter;
-    keychain::delete_key()?;
+    redraw::blocking(keychain::delete_key).await?;
     let _ = app.emit("redraw-key", false);
     Ok(())
 }
@@ -396,7 +419,7 @@ pub async fn image_roughness(state: State<'_, AppState>, id: String) -> Result<R
 pub async fn redraw_image(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> Result<RedrawAnswer, CommandError> {
     use tauri::{Emitter, Manager};
     // the image and the key are checked first: with no key nothing is read, built or sent
-    let (source, key) = redraw_start(&state.images, keychain::read_key(), &id)?;
+    let (source, key) = redraw_start(&state.images, keychain::read_key, &id).await?;
     let chosen = settings::load(&app);
     let options = Options { model: Model::parse(&chosen.redraw_model), quality: Quality::parse(&chosen.redraw_quality) };
     let api = openai::Api::new(&openai::base_url(), &key)?;
@@ -414,7 +437,8 @@ pub async fn redraw_image(app: tauri::AppHandle, state: State<'_, AppState>, id:
         let decoded = Arc::new(redraw::blocking(move || Source::decode(&bytes)).await?);
         let done = redraw::redraw(&api, decoded, options, task_phase).await?;
         let (opener, name, png) = (handle.clone(), source.name.clone(), done.png);
-        let opened = redraw::blocking(move || intake::open_bytes(&opener.state::<AppState>().core, &name, png)).await?;
+        // a reply the intake will not take is not a usable image, whatever its own words
+        let opened = redraw::blocking(move || intake::open_bytes(&opener.state::<AppState>().core, &name, png).map_err(|_| redraw::error("bad_reply"))).await?;
         let state = handle.state::<AppState>();
         let redraw_id = opened.id.clone();
         // an id some image already has would share its entry, and letting the redraw go would let the image go
@@ -428,11 +452,10 @@ pub async fn redraw_image(app: tauri::AppHandle, state: State<'_, AppState>, id:
         }
     });
     state.redraws.arm(&id, generation, redraw::abort_handle(&task));
-    let answer = task.await.unwrap_or_else(|_| Err(redraw::error("cancelled")));
-    if answer.is_err() {
-        state.redraws.fail(&id, generation);
+    let answer = task.await.unwrap_or_else(|e| Err(join_failure(e)));
+    if let Some(last) = terminal_phase(&state.redraws, &id, generation, answer.is_ok()) {
+        phase(last);
     }
-    phase(if answer.is_ok() { Phase::Done } else { Phase::Failed });
     answer
 }
 
@@ -495,23 +518,66 @@ mod redraw_tests {
         assert_eq!((v["image"]["id"].as_str(), v["original"]["id"].as_str()), (Some("a"), Some("a-original")));
     }
 
+    fn run<T>(f: impl std::future::Future<Output = T>) -> T {
+        tauri::async_runtime::block_on(f)
+    }
+
     #[test]
     fn no_key_is_answered_before_anything_else_is_done() {
         let images = Images::default();
         images.insert(entry("a", &[1]));
-        let e = redraw_start(&images, None, "a").unwrap_err();
+        let e = run(redraw_start(&images, || None, "a")).unwrap_err();
         assert_eq!((e.code(), e.status), (Some("no_key"), 401));
-        let e = redraw_start(&images, None, "gone").unwrap_err();
+        let asked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = asked.clone();
+        let e = run(redraw_start(&images, move || { flag.store(true, std::sync::atomic::Ordering::SeqCst); None }, "gone")).unwrap_err();
         assert_eq!(e.code(), Some("image_expired"), "an unknown image is named first");
-        let (source, key) = redraw_start(&images, Some("sk-test".into()), "a").unwrap();
+        assert!(!asked.load(std::sync::atomic::Ordering::SeqCst), "and the keychain is not asked");
+        let (source, key) = run(redraw_start(&images, || Some("sk-test".into()), "a")).unwrap();
         assert_eq!((source.id.as_str(), key.as_str()), ("a", "sk-test"));
+    }
+
+    #[test]
+    fn a_cancelled_job_emits_no_terminal_phase_and_a_failure_exactly_one() {
+        let redraws = Redraws::default();
+        // a real failure: the current generation ends once
+        let (g, _) = redraws.reserve("a");
+        assert_eq!(terminal_phase(&redraws, "a", g, false), Some(Phase::Failed));
+        assert_eq!(terminal_phase(&redraws, "a", g, false), None);
+        // an answer is done
+        let (g, _) = redraws.reserve("a");
+        assert_eq!(terminal_phase(&redraws, "a", g, true), Some(Phase::Done));
+        // cancelled, superseded or closed: silent
+        let (g, _) = redraws.reserve("a");
+        assert!(redraws.cancel("a"));
+        assert_eq!(terminal_phase(&redraws, "a", g, false), None);
+        let (old, _) = redraws.reserve("a");
+        let (new, _) = redraws.reserve("a");
+        assert_eq!(terminal_phase(&redraws, "a", old, false), None);
+        assert_eq!(terminal_phase(&redraws, "a", new, false), Some(Phase::Failed));
+        let (g, _) = redraws.reserve("a");
+        redraws.forget("a");
+        assert_eq!(terminal_phase(&redraws, "a", g, false), None);
+    }
+
+    #[test]
+    fn a_panicking_task_is_a_crash_and_an_aborted_one_is_cancelled() {
+        let panicked = run(async { tauri::async_runtime::spawn(async { panic!("the redraw task's own test panic") }).await });
+        let e = join_failure(panicked.unwrap_err());
+        assert_eq!((e.code(), e.status), (Some("engine_crashed"), 500));
+        let aborted = run(async {
+            let task = tauri::async_runtime::spawn(std::future::pending::<()>());
+            task.inner().abort();
+            task.await
+        });
+        assert_eq!(join_failure(aborted.unwrap_err()).code(), Some("cancelled"));
     }
 
     #[test]
     fn a_redraw_starts_from_the_original_of_a_redrawn_image() {
         let (images, redraws) = waiting();
         accept(&images, &redraws, "a").unwrap();
-        let (source, _) = redraw_start(&images, Some("k".into()), "a").unwrap();
+        let (source, _) = run(redraw_start(&images, || Some("k".into()), "a")).unwrap();
         assert_eq!((source.id.as_str(), source.bytes.as_slice()), ("a-original", &[1][..]));
     }
 

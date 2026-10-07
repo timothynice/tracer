@@ -258,11 +258,16 @@ impl Redraws {
         }
     }
 
-    /// `generation` ended without a redraw.
-    pub fn fail(&self, image_id: &str, generation: u64) {
-        if let Some(slot) = self.lock().get_mut(image_id).filter(|s| s.current == Some(generation)) {
-            slot.current = None;
-            slot.abort = None;
+    /// `generation` ended without a redraw. True when it was still the current one (a real failure); false when a
+    /// cancel, a newer request or the image's closing had already ended it, which says nothing more.
+    pub fn fail(&self, image_id: &str, generation: u64) -> bool {
+        match self.lock().get_mut(image_id).filter(|s| s.current == Some(generation)) {
+            Some(slot) => {
+                slot.current = None;
+                slot.abort = None;
+                true
+            }
+            None => false,
         }
     }
 
@@ -341,7 +346,7 @@ mod tests {
         let (second, displaced) = r.reserve("a");
         assert_eq!((aborted.load(Ordering::SeqCst), displaced), (1, None));
         assert_eq!(r.finish("a", first, pending("late")), Err(pending("late")));
-        r.fail("a", first); // the old one's end is not the new one's
+        assert!(!r.fail("a", first)); // the old one's end is not the new one's
         assert!(r.is_running("a"));
         assert_eq!(r.finish("a", second, pending("r2")), Ok(()));
         let (_, displaced) = r.reserve("a");
@@ -359,6 +364,20 @@ mod tests {
         assert_eq!(aborted.load(Ordering::SeqCst), 1);
         assert_eq!(r.finish("a", g, pending("late")), Err(pending("late")));
         assert_eq!(r.take_pending("a"), None);
+    }
+
+    #[test]
+    fn a_failure_is_the_current_generations_alone() {
+        let r = Redraws::default();
+        let (g, _) = r.reserve("a");
+        assert!(r.fail("a", g));
+        assert!(!r.fail("a", g), "ended once");
+        let (g, _) = r.reserve("a");
+        assert!(r.cancel("a"));
+        assert!(!r.fail("a", g), "a cancelled job's end is not a failure");
+        let (g, _) = r.reserve("a");
+        r.forget("a");
+        assert!(!r.fail("a", g), "nor is a closed image's");
     }
 
     #[test]

@@ -23,6 +23,10 @@ fn the_trace_worker_and_the_core_stay_offline() {
     for word in ["reqwest", "redraw", "keychain", "openai"] {
         assert!(!worker.contains(word), "worker.rs names {word}");
     }
+    let main = read("src/main.rs");
+    for word in ["redraw", "keychain"] {
+        assert!(!main.contains(word), "main.rs names {word}");
+    }
     let core = read("../../../crates/studi0trace-core/Cargo.toml");
     for dep in ["reqwest", "hyper", "rustls", "security-framework"] {
         assert!(!core.contains(dep), "the core depends on {dep}");
