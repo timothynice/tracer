@@ -186,7 +186,8 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const layers = useLayerInspector(answer?.svg, item?.image.id, useMemo(() => state.items.map((i) => i.image.id), [state.items]));
 
   const job = item ? currentJob(item) : null;
-  const busy = job ? (job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
+  const candidates = catalog.presets.filter((p) => p.auto_candidate).length;
+  const busy = job ? { phase: job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${candidates} styles…` : "Tracing…", startedAt: job.startedAt } : null;
   const viewer = item ? (
     <Viewer
       ref={viewerRef}
