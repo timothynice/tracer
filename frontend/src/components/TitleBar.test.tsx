@@ -9,7 +9,7 @@ describe("TitleBar", () => {
     const onSettings = vi.fn();
     const { container } = render(<TitleBar native sidebar inspector={false} onToggleSidebar={onToggleSidebar} onToggleInspector={vi.fn()} onSettings={onSettings} />);
     expect(screen.getByRole("heading", { name: "Studi0Trace" })).toBeInTheDocument();
-    expect(screen.getByText("Turn images into clean vectors")).toBeInTheDocument();
+    expect(screen.queryByText("Turn images into clean vectors")).toBeNull(); // the tagline lives on the empty state
     const bar = container.querySelector("header")!;
     expect(bar.getAttribute("data-tauri-drag-region")).toBe("deep");
     expect(bar.style.paddingLeft).toBe("88px");

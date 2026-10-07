@@ -9,7 +9,7 @@ import { ExportMenu } from "./components/ExportMenu";
 import { ImageMenu } from "./components/ImageMenu";
 import { Inspector, InspectorOverlay } from "./components/Inspector";
 import { RedrawConsentSheet } from "./components/RedrawConsentSheet";
-import { RedrawSection } from "./components/RedrawSection";
+import { RedrawChip, RedrawSection } from "./components/RedrawSection";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
@@ -388,11 +388,10 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
             suggest={settings.suggestRedraw}
             onRedraw={() => void startRedraw(item.image.id)}
             onCancel={() => lib.cancelRedraw(item.image.id)}
-            onShowOriginal={() => setReviewing(item.image.id)}
-            onRevert={() => revert(item.image.id)}
           />
         ) : undefined
       }
+      redrawChip={CAN_REDRAW ? <RedrawChip item={item} onShowOriginal={() => setReviewing(item.image.id)} onRevert={() => revert(item.image.id)} /> : undefined}
       exportMenu={<ExportMenu canExport={!!layers.exportSvg} anyVector={anyVector} canPdf={platform.canExportPdf} onExport={(k, s) => void exports.exportImage(k, s)} onCopy={() => void exports.copySvg()} onExportAll={() => void exports.exportAll()} />}
     />
   ) : (

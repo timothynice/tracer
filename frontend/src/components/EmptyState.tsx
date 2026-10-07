@@ -17,6 +17,7 @@ export interface EmptyStateProps {
 export function EmptyState({ formats, canDownscale = true, onOpen, onSample }: EmptyStateProps) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8 p-8 text-center">
+      <h2 className="font-brand text-[22px] font-semibold tracking-tight">Turn images into clean vectors</h2>
       <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-muted-foreground/25 px-10 py-12">
         <ImagePlus className="h-9 w-9 text-muted-foreground" aria-hidden="true" />
         <p className="text-[15px] font-semibold">Drop images here</p>

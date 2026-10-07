@@ -9,8 +9,25 @@ export interface RedrawSectionProps {
   suggest: boolean;
   onRedraw: () => void;
   onCancel: () => void;
-  onShowOriginal: () => void;
-  onRevert: () => void;
+}
+
+/** The chip on a redrawn image, with Show Original and Revert: the inspector's header wears it. */
+export function RedrawChip({ item, onShowOriginal, onRevert }: { item: ImageItem; onShowOriginal: () => void; onRevert: () => void }) {
+  if (!redrawOf(item).active) return null;
+  return (
+    <span className="flex items-center gap-1">
+      <span className="mac-tint inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium">
+        <span className="mac-dot" aria-hidden="true" />
+        AI redraw
+      </span>
+      <button type="button" className="mac-ghost h-7 px-2 text-[12px]" onClick={onShowOriginal}>
+        Show Original
+      </button>
+      <button type="button" className="mac-ghost h-7 px-2 text-[12px]" onClick={onRevert}>
+        Revert
+      </button>
+    </span>
+  );
 }
 
 /** The quiet hint: the accent dot on a muted tint, never a one-sided border. */
@@ -23,29 +40,13 @@ export function RedrawHint({ text }: { text: string }) {
   );
 }
 
-/** The inspector's AI redraw: the chip on a redrawn image, the hint, the button (Cancel while it runs), the last failure. */
-export function RedrawSection({ item, suggest, onRedraw, onCancel, onShowOriginal, onRevert }: RedrawSectionProps) {
+/** The inspector's AI redraw: the hint, the button (Cancel while it runs), the last failure. */
+export function RedrawSection({ item, suggest, onRedraw, onCancel }: RedrawSectionProps) {
   const r = redrawOf(item);
   const hint = suggest && !r.active && !r.phase && !r.pending ? roughHint(item.rough) : null;
   const failure = r.error ? redrawErrorText(r.error) : null;
   return (
     <section aria-label="AI redraw" className="space-y-2">
-      {r.active && (
-        <div className="flex items-center justify-between gap-2">
-          <span className="mac-tint inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium">
-            <span className="mac-dot" aria-hidden="true" />
-            AI redraw
-          </span>
-          <span className="flex items-center gap-0.5">
-            <button type="button" className="mac-ghost h-7 px-2 text-[12px]" onClick={onShowOriginal}>
-              Show Original
-            </button>
-            <button type="button" className="mac-ghost h-7 px-2 text-[12px]" onClick={onRevert}>
-              Revert
-            </button>
-          </span>
-        </div>
-      )}
       {hint && <RedrawHint text={hint} />}
       {r.phase ? (
         <div className="space-y-1.5">

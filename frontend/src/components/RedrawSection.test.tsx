@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
 import { NO_REDRAW, type ImageItem } from "@/state/library";
-import { RedrawSection } from "./RedrawSection";
+import { RedrawChip, RedrawSection } from "./RedrawSection";
 
 const base: ImageItem = {
   image: { id: "a", name: "a.png", path: null, width: 64, height: 64, format: "PNG", previewUrl: "blob:a" },
@@ -17,7 +17,7 @@ const base: ImageItem = {
   errorKey: null,
   auto: null,
 };
-const handlers = () => ({ onRedraw: vi.fn(), onCancel: vi.fn(), onShowOriginal: vi.fn(), onRevert: vi.fn() });
+const handlers = () => ({ onRedraw: vi.fn(), onCancel: vi.fn() });
 const HINT = "This image is small — an AI redraw may trace cleaner.";
 
 describe("RedrawSection", () => {
@@ -56,14 +56,23 @@ describe("RedrawSection", () => {
     expect(h.onCancel).toHaveBeenCalled();
   });
 
-  it("marks a redrawn image with the AI redraw chip and offers the original back", () => {
-    const h = handlers();
-    render(<RedrawSection item={{ ...base, rough: { rough: true, reason: "small" }, redraw: { ...NO_REDRAW, active: true } }} suggest {...h} />);
+  it("does not hint at a redrawn image again, and leaves the chip to the header", () => {
+    render(<RedrawSection item={{ ...base, rough: { rough: true, reason: "small" }, redraw: { ...NO_REDRAW, active: true } }} suggest {...handlers()} />);
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(screen.queryByText("AI redraw")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show Original" })).toBeNull();
+  });
+
+  it("the chip marks a redrawn image and offers the original back; it is nothing on any other", () => {
+    const onShowOriginal = vi.fn();
+    const onRevert = vi.fn();
+    const { rerender } = render(<RedrawChip item={{ ...base, redraw: { ...NO_REDRAW, active: true } }} onShowOriginal={onShowOriginal} onRevert={onRevert} />);
     expect(screen.getByText("AI redraw")).toBeInTheDocument();
-    expect(screen.queryByRole("note")).toBeNull(); // a redraw is not hinted at again
     fireEvent.click(screen.getByRole("button", { name: "Show Original" }));
     fireEvent.click(screen.getByRole("button", { name: "Revert" }));
-    expect([h.onShowOriginal.mock.calls.length, h.onRevert.mock.calls.length]).toEqual([1, 1]);
+    expect([onShowOriginal.mock.calls.length, onRevert.mock.calls.length]).toEqual([1, 1]);
+    rerender(<RedrawChip item={base} onShowOriginal={onShowOriginal} onRevert={onRevert} />);
+    expect(screen.queryByText("AI redraw")).toBeNull();
   });
 
   it("shows a failed redraw in the app's words", () => {
