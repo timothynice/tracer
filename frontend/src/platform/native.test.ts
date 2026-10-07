@@ -254,6 +254,29 @@ describe("native platform", () => {
     expect(calls.some((c) => c.cmd === "read_image")).toBe(false);
   });
 
+  it("a cancel that lands while the redraw is being read forgets its preview and discards it", async () => {
+    const redraw = { ...opened, id: "r".repeat(32), path: null, width: 128, height: 64 };
+    const ctl = new AbortController();
+    let release: (v: unknown) => void = () => {};
+    ipc((cmd) => {
+      if (cmd === "redraw_image") return { redraw, drift: { edgeF1: 1, deltaE: 0, verdict: "close" } };
+      if (cmd === "read_image") return new Promise((r) => (release = r));
+      return true;
+    });
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const p = nativePlatform();
+    const done = p.redrawImage(opened.id, { signal: ctl.signal });
+    await vi.waitFor(() => expect(calls.some((c) => c.cmd === "read_image")).toBe(true));
+    ctl.abort();
+    release(new Uint8Array([7]).buffer);
+    await expect(done).rejects.toMatchObject({ code: "cancelled" });
+    expect(calls.find((c) => c.cmd === "discard_redraw")?.payload).toEqual({ id: opened.id });
+    expect(revoke).toHaveBeenCalledWith(expect.stringMatching(/^blob:/));
+    // nothing is left to accept or discard from here
+    await p.discardRedraw(opened.id);
+    revoke.mockRestore();
+  });
+
   it("Use redraw re-keys the previews: the image shows the redraw, the original keeps its own; Revert swaps back", async () => {
     const redraw = { ...opened, id: "r".repeat(32), path: null, width: 128, height: 64 };
     const original = { ...opened, id: `${opened.id}-original` };

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_SETTINGS } from "@/platform/types";
@@ -61,5 +61,38 @@ describe("SettingsView", () => {
     render(<SettingsView settings={DEFAULT_SETTINGS} onChange={onChange} />);
     for (const mod of ["metaKey", "altKey", "ctrlKey"]) fireEvent.keyDown(screen.getByRole("radio", { name: "System" }), { key: "ArrowRight", [mod]: true });
     expect(onChange).not.toHaveBeenCalled();
+  });
+  it("has an AI redraw group in the app: the key's status with Replace and Remove, the model, the quality and the hint", async () => {
+    const onChange = vi.fn();
+    const onSave = vi.fn(async () => {});
+    const onRemove = vi.fn(async () => {});
+    render(<SettingsView settings={DEFAULT_SETTINGS} onChange={onChange} redraw={{ stored: true, onSave, onRemove }} />);
+    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["General", "Export", "Tracing", "AI redraw"]);
+    expect(screen.getByText("Stored")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "GPT Image 2" })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: "GPT Image 1.5" }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, redrawModel: "gpt-image-1.5" });
+    fireEvent.click(screen.getByRole("radio", { name: "High" }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, redrawQuality: "high" });
+    const hint = screen.getByRole("switch", { name: "Suggest for rough images" });
+    expect(hint).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(hint);
+    expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_SETTINGS, suggestRedraw: false });
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(onRemove).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    fireEvent.change(screen.getByLabelText("New OpenAI API key"), { target: { value: " sk-new " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith("sk-new"));
+  });
+
+  it("says Not set and offers Add when no key is stored; without the app there is no AI redraw group", () => {
+    const { unmount } = render(<SettingsView settings={DEFAULT_SETTINGS} onChange={vi.fn()} redraw={{ stored: false, onSave: vi.fn(), onRemove: vi.fn() }} />);
+    expect(screen.getByText("Not set")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    unmount();
+    render(<SettingsView settings={DEFAULT_SETTINGS} onChange={vi.fn()} />);
+    expect(screen.queryByRole("heading", { name: "AI redraw" })).toBeNull();
   });
 });

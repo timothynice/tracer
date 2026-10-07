@@ -587,6 +587,36 @@ describe("library: AI redraw", () => {
     expect(item.rough).toBeUndefined();
   });
 
+  it("Revert during a Try again redraw abandons it first, and lets a waiting one go", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    let done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    await lib.acceptRedraw("a");
+    done = lib.redraw("a"); // a second redraw, running
+    expect(lib.getState().items[0].redraw).toMatchObject({ active: true, phase: "drawing" });
+    await lib.revertRedraw("a");
+    expect(r.signals.at(-1)!.aborted).toBe(true);
+    expect(lib.getState().items[0].redraw).toEqual(NO_REDRAW);
+    r.fail(new ApiError("cancelled", "The redraw was cancelled", 499)); // the abandoned call ends
+    await done;
+    expect(lib.getState().items[0].redraw).toEqual(NO_REDRAW);
+    // a redraw that finished and waits is let go as well
+    done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    await lib.acceptRedraw("a");
+    done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    expect(lib.getState().items[0].redraw?.pending).not.toBeNull();
+    await lib.revertRedraw("a");
+    expect(r.platform.discardRedraw).toHaveBeenCalledWith("a");
+    expect(lib.getState().items[0].redraw).toEqual(NO_REDRAW);
+  });
+
   it("Discard drops the waiting redraw; Try again replaces it", async () => {
     const r = redrawPlatform();
     const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);

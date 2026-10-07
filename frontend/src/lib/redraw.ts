@@ -1,5 +1,5 @@
 /** AI redraw's words: the drift, the verdicts, the hint, the phases, the failures and the consent. */
-import type { ApiError } from "./api";
+import { ApiError } from "./api";
 import type { Drift, DriftVerdict, RedrawPhase, Roughness } from "@/platform/types";
 
 /** The README's sentence, and the consent sheet's. */
@@ -53,4 +53,10 @@ const ERROR_WORDS: Record<string, string> = {
 export function redrawErrorText(err: ApiError): string | null {
   if (err.code === "cancelled") return null;
   return ERROR_WORDS[err.code] ?? "The redraw failed.";
+}
+
+/** Any failure of a redraw action (accept, revert, a redraw that threw) in the app's words: an `ApiError` by its code,
+ *  anything else as a plain failure; null for a cancel. */
+export function redrawFailureText(err: unknown): string | null {
+  return err instanceof ApiError ? redrawErrorText(err) : "The redraw failed.";
 }

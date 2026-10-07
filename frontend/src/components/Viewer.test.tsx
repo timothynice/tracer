@@ -295,4 +295,13 @@ describe("Viewer refit on resize", () => {
     expect(screen.getByText("AI redraw")).toBeInTheDocument();
     expect(screen.getByAltText("AI redraw")).toBeInTheDocument();
   });
+
+  it("names the right-hand tab and the overlay slider for the redraw, not the vector", () => {
+    const { props, rerender } = setup({ svg: undefined, compare: { url: "blob:redraw", label: "AI redraw" } });
+    expect(screen.getByRole("tab", { name: "AI redraw" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Vector" })).toBeNull();
+    rerender(<Viewer {...props} mode="overlay" />);
+    expect(screen.getByLabelText("AI redraw opacity")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Vector opacity")).toBeNull();
+  });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "./api";
-import { colourText, CONSENT_CHANGES, CONSENT_UPLOAD, edgesText, PRIVACY_SENTENCE, redrawErrorText, roughHint, VERDICT_LABEL } from "./redraw";
+import { colourText, CONSENT_CHANGES, CONSENT_UPLOAD, edgesText, PRIVACY_SENTENCE, redrawErrorText, redrawFailureText, roughHint, VERDICT_LABEL } from "./redraw";
 
 const drift = (edgeF1: number, deltaE: number) => ({ edgeF1, deltaE, verdict: "large" as const });
 
@@ -56,5 +56,12 @@ describe("redraw words", () => {
     expect(PRIVACY_SENTENCE).toBe("Your images stay on your Mac: nothing is uploaded unless you choose AI redraw, which sends that one image to OpenAI with your own API key.");
     expect(CONSENT_UPLOAD).toContain("uploaded to OpenAI with your API key and billed to your OpenAI account");
     expect(CONSENT_CHANGES).toContain("may change shapes, spacing and colours");
+  });
+
+  it("words any failed redraw action, an ApiError by code and anything else plainly; a cancel is silent", () => {
+    expect(redrawFailureText(new ApiError("quota", "sk-secret", 429))).toBe("Your OpenAI account is out of credit or rate limited.");
+    expect(redrawFailureText(new ApiError("cancelled", "x", 499))).toBeNull();
+    expect(redrawFailureText(new Error("sk-secret"))).toBe("The redraw failed.");
+    expect(redrawFailureText("boom")).toBe("The redraw failed.");
   });
 });

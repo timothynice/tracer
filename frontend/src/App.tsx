@@ -3,10 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AppShell } from "./components/AppShell";
+import { DriftCheck } from "./components/DriftCheck";
 import { EmptyState } from "./components/EmptyState";
 import { ExportMenu } from "./components/ExportMenu";
 import { ImageMenu } from "./components/ImageMenu";
 import { Inspector, InspectorOverlay } from "./components/Inspector";
+import { RedrawConsentSheet } from "./components/RedrawConsentSheet";
+import { RedrawSection } from "./components/RedrawSection";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
@@ -16,8 +19,10 @@ import { Viewer, type ViewerHandle } from "./components/Viewer";
 import { useExports } from "./hooks/useExports";
 import { revealInFinder } from "./hooks/reveal";
 import { useLayerInspector } from "./hooks/useLayerInspector";
+import { useRedrawKey } from "./hooks/useRedrawKey";
 import { useSettings } from "./hooks/useSettings";
 import { useWindowDrop } from "./hooks/useWindowDrop";
+import { redrawFailureText } from "./lib/redraw";
 import { loadSample } from "./lib/samples";
 import { specsFor } from "./lib/schema";
 import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
@@ -28,6 +33,13 @@ import { useLibrary } from "./state/useLibrary";
 const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
 // what the empty state lists: the app converts HEIC and TIFF with sips, a browser sends only these five
 const DROP_FORMATS = platform.kind === "native" ? "PNG, JPEG, GIF, WebP, BMP, HEIC or TIFF" : "PNG, JPEG, GIF, WebP or BMP";
+/** AI redraw runs in the Mac app only: a browser has no Keychain and no road to OpenAI. */
+const CAN_REDRAW = platform.kind === "native";
+/** A redraw action that failed, in the app's own words by code (never the message: it can quote a key); a cancel says nothing. */
+const failRedraw = (err: unknown) => {
+  const text = redrawFailureText(err);
+  if (text) toast.error(text);
+};
 
 export default function App() {
   // in the app, the web's context menu (Reload, Inspect Element) never shows, in either window; text fields keep theirs
@@ -45,9 +57,10 @@ export default function App() {
 /** The app's Settings window: the settings, saved as they change, in the window's own appearance. */
 function SettingsWindow() {
   const { settings, change } = useSettings();
+  const key = useRedrawKey();
   return (
     <div className="min-h-dvh bg-background">
-      <SettingsView settings={settings} onChange={change} />
+      <SettingsView settings={settings} onChange={change} redraw={CAN_REDRAW ? { stored: key.stored, onSave: key.save, onRemove: key.remove } : undefined} />
     </div>
   );
 }
@@ -118,6 +131,35 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const viewerRef = useRef<ViewerHandle>(null);
   const specs = useMemo(() => specsFor(catalog.engine), [catalog.engine]);
 
+  // AI redraw: the consent sheet comes when a redraw finds no key; Show Original reviews the redraw in use
+  const redrawKey = useRedrawKey();
+  const [consentFor, setConsentFor] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState<string | null>(null);
+  const startRedraw = useCallback(
+    async (id: string) => {
+      setReviewing(null);
+      try {
+        const failed = await lib.redraw(id);
+        if (failed?.code === "no_key") setConsentFor(id);
+      } catch (err) {
+        failRedraw(err);
+      }
+    },
+    [lib],
+  );
+  const revert = useCallback(
+    (id: string) => {
+      setReviewing(null);
+      void lib.revertRedraw(id).catch(failRedraw);
+    },
+    [lib],
+  );
+  const selectedId = item?.image.id;
+  const roughKnown = item?.rough !== undefined;
+  useEffect(() => {
+    if (CAN_REDRAW && selectedId && settings.suggestRedraw && !roughKnown) lib.checkRough(selectedId);
+  }, [lib, selectedId, roughKnown, settings.suggestRedraw]);
+
   const open = useCallback(
     async (outcomes: Promise<OpenOutcome[]>) => {
       try {
@@ -160,6 +202,28 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   ) : (
     <EmptyState formats={DROP_FORMATS} canDownscale={platform.kind === "native"} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
   );
+  // a redraw waiting for its decision takes the canvas: nothing changes before the drift is seen
+  const pending = item?.redraw?.pending ?? null;
+  const review = item && reviewing === item.image.id ? item.redraw : undefined;
+  const main =
+    item && pending ? (
+      <DriftCheck
+        original={item.redraw?.original ?? item.image}
+        redraw={pending.redraw}
+        drift={pending.drift}
+        mode={mode}
+        onModeChange={setMode}
+        decide={{
+          onUse: () => void lib.acceptRedraw(item.image.id).catch(failRedraw),
+          onTryAgain: () => void startRedraw(item.image.id),
+          onDiscard: () => lib.discardRedraw(item.image.id),
+        }}
+      />
+    ) : item && review?.active && review.original && review.drift ? (
+      <DriftCheck original={review.original} redraw={item.image} drift={review.drift} mode={mode} onModeChange={setMode} onClose={() => setReviewing(null)} />
+    ) : (
+      viewer
+    );
 
   const exports = useExports(state, item, layers.exportSvg, settings, lib.markExported, layers.exportSvgFor);
   const anyVector = state.items.some((i) => i.shown !== null);
@@ -233,9 +297,18 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
           return;
         case "clear":
           return clearAll();
+        case "redraw":
+          if (id && CAN_REDRAW) void startRedraw(id);
+          return;
+        case "show-original":
+          if (id && item?.redraw?.active) setReviewing(id);
+          return;
+        case "revert-redraw":
+          if (id && item?.redraw?.active) revert(id);
+          return;
       }
     },
-    [item, open, openSettings, exports, setMode, lib, clearAll],
+    [item, open, openSettings, exports, setMode, lib, clearAll, startRedraw, revert],
   );
   // the listeners subscribe once and call whatever `run` is now
   const runRef = useRef(run);
@@ -281,7 +354,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const anyTracing = state.items.some((i) => i.job);
   const unexported = unexportedCount(state);
   const redraw = item ? redrawOf(item) : null;
-  const canRedraw = platform.kind === "native" && hasImage && !redraw?.phase;
+  const canRedraw = CAN_REDRAW && hasImage && !redraw?.phase;
   const isRedraw = !!redraw?.active;
   useEffect(() => {
     platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspector: inspectorPane, canRedraw, isRedraw });
@@ -298,6 +371,18 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       onParam={(name, value) => lib.setParam(item.image.id, name, value)}
       onGenerate={() => lib.generate(item.image.id)}
       onCancel={() => lib.cancel(item.image.id)}
+      redraw={
+        CAN_REDRAW ? (
+          <RedrawSection
+            item={item}
+            suggest={settings.suggestRedraw}
+            onRedraw={() => void startRedraw(item.image.id)}
+            onCancel={() => lib.cancelRedraw(item.image.id)}
+            onShowOriginal={() => setReviewing(item.image.id)}
+            onRevert={() => revert(item.image.id)}
+          />
+        ) : undefined
+      }
       exportMenu={<ExportMenu canExport={!!layers.exportSvg} anyVector={anyVector} onExport={(k, s) => void exports.exportImage(k, s)} onCopy={() => void exports.copySvg()} onExportAll={() => void exports.exportAll()} />}
     />
   ) : (
@@ -330,6 +415,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
                 onExport={() => void exports.exportImage("svg", 1, it)}
                 onReveal={() => it.image.path && void revealInFinder(it.image.path)}
                 onRemove={() => lib.remove(it.image.id)}
+                redraw={CAN_REDRAW ? { onRedraw: () => void startRedraw(it.image.id), onShowOriginal: () => setReviewing(it.image.id), onRevert: () => revert(it.image.id) } : undefined}
               >
                 {card}
               </ImageMenu>
@@ -337,7 +423,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
           />
         ) : null
       }
-      main={viewer}
+      main={main}
       inspector={inspectorPane ? panel : null}
       overlay={
         dragging ? (
@@ -348,6 +434,18 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       }
       />
       <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} settings={settings} onChange={onSettingsChange} />
+      <RedrawConsentSheet
+        open={consentFor !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setConsentFor(null);
+        }}
+        onSave={async (key) => {
+          await redrawKey.save(key);
+          const id = consentFor;
+          setConsentFor(null);
+          if (id) void startRedraw(id);
+        }}
+      />
     </>
   );
 }

@@ -382,6 +382,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
         overlay={overlay}
         onOverlay={setOverlay}
         hasVector={!!svg && !compare}
+        rightLabel={rightLabel}
         display={display}
         onDisplayChange={onDisplayChange}
         layersOpen={layersOpen}

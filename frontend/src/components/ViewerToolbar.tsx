@@ -25,6 +25,8 @@ export interface ViewerToolbarProps {
   overlay: number;
   onOverlay: (opacity: number) => void;
   hasVector: boolean;
+  /** What the right-hand view is: the vector, or (comparing two rasters) the AI redraw. */
+  rightLabel?: string;
   display: { points: boolean; outlines: boolean };
   onDisplayChange: (patch: { points?: boolean; outlines?: boolean }) => void;
   layersOpen: boolean;
@@ -36,6 +38,7 @@ const divider = <span aria-hidden="true" className="mx-1 h-4 w-px bg-border" />;
 
 /** The floating toolbar at the foot of the viewer. */
 export function ViewerToolbar(p: ViewerToolbarProps) {
+  const right = p.rightLabel ?? "Vector";
   return (
     <div data-overlay-ui role="toolbar" aria-label="View" className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center rounded-xl border bg-popover/90 p-1 shadow-elevated backdrop-blur-xl">
       <div className={group}>
@@ -74,21 +77,24 @@ export function ViewerToolbar(p: ViewerToolbarProps) {
       {divider}
       <Tabs.Root value={p.mode} onValueChange={(v) => p.onMode(v as ViewMode)}>
         <Tabs.List aria-label="Compare" className="inline-flex h-7 items-center rounded-md bg-muted p-0.5">
-          {MODES.map((m) => (
-            <Tabs.Trigger
-              key={m.value}
-              value={m.value}
-              aria-label={m.label}
-              title={m.label}
-              className="inline-flex h-6 w-7 items-center justify-center rounded-[5px] text-muted-foreground transition-colors data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
-            >
-              <m.icon className="h-3.5 w-3.5" aria-hidden="true" />
-            </Tabs.Trigger>
-          ))}
+          {MODES.map((m) => {
+            const label = m.value === "vector" ? right : m.label;
+            return (
+              <Tabs.Trigger
+                key={m.value}
+                value={m.value}
+                aria-label={label}
+                title={label}
+                className="inline-flex h-6 w-7 items-center justify-center rounded-[5px] text-muted-foreground transition-colors data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+              >
+                <m.icon className="h-3.5 w-3.5" aria-hidden="true" />
+              </Tabs.Trigger>
+            );
+          })}
         </Tabs.List>
       </Tabs.Root>
       {p.mode === "overlay" && (
-        <input type="range" min={0} max={1} step={0.05} value={p.overlay} onChange={(e) => p.onOverlay(Number(e.target.value))} aria-label="Vector opacity" className="ml-2 w-20" style={{ accentColor: "var(--accent-mac)" }} />
+        <input type="range" min={0} max={1} step={0.05} value={p.overlay} onChange={(e) => p.onOverlay(Number(e.target.value))} aria-label={`${right} opacity`} className="ml-2 w-20" style={{ accentColor: "var(--accent-mac)" }} />
       )}
       {p.hasVector && (
         <>

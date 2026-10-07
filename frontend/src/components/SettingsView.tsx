@@ -1,11 +1,92 @@
 import { Switch } from "./Switch";
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { Settings } from "@/platform/types";
+
+/** The OpenAI key's row: whether one is stored, and the two ways to change that (the key never comes back). */
+export interface RedrawKeyControls {
+  stored: boolean | null;
+  onSave: (key: string) => Promise<void>;
+  onRemove: () => Promise<void>;
+}
 
 export interface SettingsViewProps {
   settings: Settings;
   onChange: (next: Settings) => void;
+  /** The AI redraw group, in the Mac app only. */
+  redraw?: RedrawKeyControls;
+}
+
+function KeyRow({ controls }: { controls: RedrawKeyControls }) {
+  const [editing, setEditing] = useState(false);
+  const [key, setKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const status = controls.stored === null ? "…" : controls.stored ? "Stored" : "Not set";
+  const close = () => {
+    setEditing(false);
+    setKey("");
+  };
+  const save = async () => {
+    try {
+      await controls.onSave(key.trim());
+      close();
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  return (
+    <div className="space-y-2 px-3 py-2">
+      <div className="flex min-h-6 items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[13px]">OpenAI API key</p>
+          <p className="text-[11px] text-muted-foreground">
+            <span>{status}</span> · in your Mac's Keychain
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-1.5">
+          <button type="button" className="mac-button h-7" onClick={() => setEditing(true)}>
+            {controls.stored ? "Replace" : "Add"}
+          </button>
+          {controls.stored && (
+            <button type="button" className="mac-button h-7" onClick={() => void controls.onRemove().catch((err: Error) => setError(err.message))}>
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+      {editing && (
+        <form
+          className="flex gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <input
+            aria-label="New OpenAI API key"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            className="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 text-[12px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20"
+          />
+          <button type="submit" className="mac-button h-7" disabled={!key.trim()}>
+            Save
+          </button>
+          <button type="button" className="mac-button h-7" onClick={close}>
+            Cancel
+          </button>
+        </form>
+      )}
+      {error && (
+        <p role="alert" className="text-[11px] text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function Group({ title, children }: { title: string; children: ReactNode }) {
@@ -68,7 +149,7 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 }
 
 /** The settings, as grouped rows in the manner of System Settings. */
-export function SettingsView({ settings, onChange }: SettingsViewProps) {
+export function SettingsView({ settings, onChange, redraw }: SettingsViewProps) {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
   return (
     <div className="space-y-5 p-5">
@@ -96,6 +177,20 @@ export function SettingsView({ settings, onChange }: SettingsViewProps) {
           <Toggle label="Update automatically when tracing is quick" checked={settings.liveUpdate} onChange={(v) => set("liveUpdate", v)} />
         </Row>
       </Group>
+      {redraw && (
+        <Group title="AI redraw">
+          <KeyRow controls={redraw} />
+          <Row label="Model">
+            <Choice label="Model" value={settings.redrawModel} options={[["gpt-image-2", "GPT Image 2"], ["gpt-image-1.5", "GPT Image 1.5"]]} onChange={(v) => set("redrawModel", v)} />
+          </Row>
+          <Row label="Quality" hint="High costs more and takes longer">
+            <Choice label="Quality" value={settings.redrawQuality} options={[["medium", "Medium"], ["high", "High"]]} onChange={(v) => set("redrawQuality", v)} />
+          </Row>
+          <Row label="Suggest for rough images" hint="A hint in the inspector for small or pixel-doubled images">
+            <Toggle label="Suggest for rough images" checked={settings.suggestRedraw} onChange={(v) => set("suggestRedraw", v)} />
+          </Row>
+        </Group>
+      )}
     </div>
   );
 }

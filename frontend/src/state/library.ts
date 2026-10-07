@@ -500,6 +500,11 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     async revertRedraw(id) {
       const item = find(id);
       if (!item || !redrawOf(item).active || !platform.revertRedraw) return;
+      // Revert is open mid-run: a redraw still running is abandoned and one waiting for a decision is let go,
+      // before the original comes back, so neither can land on it
+      abortRedraw(id);
+      patchRedraw(id, { phase: null });
+      if (redrawOf(item).pending) void platform.discardRedraw?.(id).catch(() => {});
       const image = await platform.revertRedraw(id);
       const now = find(id);
       if (!now) return;

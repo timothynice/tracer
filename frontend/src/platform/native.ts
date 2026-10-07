@@ -212,6 +212,12 @@ export function nativePlatform(): Platform {
           throw redrawCancelled();
         }
         const [read] = await outcomes([{ ok: answer.redraw }]);
+        if (signal.aborted) {
+          // cancelled while the reply was being read: the preview just made and the app's copy both go
+          forget(answer.redraw.id);
+          void invoke("discard_redraw", { id }).catch(() => {});
+          throw redrawCancelled();
+        }
         if (!("ok" in read)) throw new ApiError("bad_reply", "The redraw could not be read");
         pendingRedraws.set(id, answer.redraw.id);
         return { redraw: read.ok, drift: answer.drift };

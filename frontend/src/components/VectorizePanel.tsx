@@ -21,9 +21,11 @@ export interface VectorizePanelProps {
   onCancel: () => void;
   /** The export button and its menu. */
   exportMenu: ReactNode;
+  /** AI redraw's section (the Mac app). */
+  redraw?: ReactNode;
 }
 
-export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onParam, onGenerate, onCancel, exportMenu }: VectorizePanelProps) {
+export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onParam, onGenerate, onCancel, exportMenu, redraw }: VectorizePanelProps) {
   const [advanced, setAdvanced] = useState(invalidField !== null);
   useEffect(() => {
     if (invalidField !== null) setAdvanced(true); // a field the server refused is in there
@@ -43,6 +45,7 @@ export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onP
           <p className="text-[12px] leading-snug text-muted-foreground">Convert your image to a clean, scalable vector.</p>
         </div>
       </div>
+      {redraw && <div className="px-3 pb-3">{redraw}</div>}
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-3">
         <PresetCards
           presets={catalog.presets}
