@@ -280,4 +280,19 @@ describe("Viewer refit on resize", () => {
     expect(divider).toHaveAttribute("aria-valuemax", "100");
     expect(divider).toHaveAttribute("aria-valuenow", "50");
   });
+
+  it("compares two rasters: the redraw takes the vector's place, under its own label", () => {
+    const { props, rerender } = setup({ svg: undefined, compare: { url: "blob:redraw", label: "AI redraw" } });
+    expect(screen.getByAltText("Source raster")).toHaveAttribute("src", "blob:src");
+    expect(screen.getByAltText("AI redraw")).toHaveAttribute("src", "blob:redraw");
+    expect(screen.getByText("Original")).toBeInTheDocument();
+    expect(screen.getByText("AI redraw")).toBeInTheDocument();
+    expect(screen.queryByText("Vector")).toBeNull();
+    expect(screen.getByRole("separator", { name: /comparison divider/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Press Generate Vector/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show anchor points" })).toBeNull();
+    rerender(<Viewer {...props} mode="side" />);
+    expect(screen.getByText("AI redraw")).toBeInTheDocument();
+    expect(screen.getByAltText("AI redraw")).toBeInTheDocument();
+  });
 });

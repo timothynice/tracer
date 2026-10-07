@@ -30,6 +30,8 @@ export interface ViewerProps {
   marks?: (scale: number) => ReactNode;
   /** Rendered inside the viewport, e.g. the layer inspector. */
   panel?: ReactNode;
+  /** Raster against raster (the drift check): this image takes the vector's place, drawn in the source's frame, under `label`. */
+  compare?: { url: string; label: string };
 }
 
 interface Transform {
@@ -55,7 +57,7 @@ const keepsSpace = (target: EventTarget | null) =>
 const overUi = (e: Event) => !!(e.target as Element | null)?.closest?.("[data-overlay-ui]");
 
 export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(props, ref) {
-  const { sourceUrl, svg, width, height, mode, onModeChange, busy, errorMessage, onRetry, display, onDisplayChange, layersOpen, onToggleLayers, marks, panel } = props;
+  const { sourceUrl, svg, width, height, mode, onModeChange, busy, errorMessage, onRetry, display, onDisplayChange, layersOpen, onToggleLayers, marks, panel, compare } = props;
   const [split, setSplit] = useState(0.5);
   const [overlay, setOverlay] = useState(0.7);
   const [tool, setTool] = useState<Tool>("pan");
@@ -231,9 +233,14 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
       {marks(t.scale)}
     </div>
   ) : null;
-  const vector = svg ? (
+  const vector = compare ? (
+    <img src={compare.url} alt={compare.label} draggable={false} className="absolute left-0 top-0 max-w-none select-none" style={{ ...imgStyle, imageRendering: t.scale > 3 ? "pixelated" : "auto" }} />
+  ) : svg ? (
     <div aria-label="Vector result" role="img" className={`absolute left-0 top-0 [&>svg]:block [&>svg]:h-full [&>svg]:w-full ${busy ? "opacity-60" : ""}`} style={imgStyle} dangerouslySetInnerHTML={{ __html: svg }} />
   ) : null;
+  // the right-hand side: the vector, or in a drift check the redraw
+  const shown = !!svg || !!compare;
+  const rightLabel = compare?.label ?? "Vector";
   const chip = (text: string, where: string) => <span className={`pointer-events-none absolute top-3 z-20 rounded-full bg-popover/85 px-2.5 py-0.5 text-[11px] font-medium shadow-sm backdrop-blur ${where}`}>{text}</span>;
 
   return (
@@ -265,7 +272,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
               {marksNode}
             </div>
             {chip("Original", "left-1/4 -translate-x-1/2")}
-            {chip("Vector", "left-3/4 -translate-x-1/2")}
+            {chip(rightLabel, "left-3/4 -translate-x-1/2")}
           </>
         ) : (
           <>
@@ -299,7 +306,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
               </>
             )}
             {/* The divider and its handle wait for a vector: before that the centre of the viewport belongs to the hint, the busy pill and the error card. */}
-            {mode === "split" && svg && (
+            {mode === "split" && shown && (
               <>
                 <div
                   role="separator"
@@ -326,21 +333,21 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
               </>
             )}
             {mode === "split" && chip("Original", "left-3")}
-            {mode === "split" && chip("Vector", "right-3")}
+            {mode === "split" && chip(rightLabel, "right-3")}
             {mode === "overlay" && chip("Overlay", "left-1/2 -translate-x-1/2")}
-            {mode === "vector" && chip("Vector", "left-1/2 -translate-x-1/2")}
+            {mode === "vector" && chip(rightLabel, "left-1/2 -translate-x-1/2")}
           </>
         )}
 
         {panel}
 
-        {svg && errorMessage && (
+        {shown && errorMessage && (
           <div className="absolute inset-x-0 bottom-16 mx-auto w-fit max-w-md rounded-lg bg-destructive/90 px-3 py-2 text-[13px] text-destructive-foreground shadow-md" role="alert">
             {errorMessage}
           </div>
         )}
 
-        {!svg && (
+        {!shown && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center p-6">
             {errorMessage ? (
               <div role="alert" data-overlay-ui className="pointer-events-auto max-w-sm rounded-xl border bg-popover/95 p-4 text-center shadow-elevated backdrop-blur">
@@ -374,7 +381,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
         onMode={onModeChange}
         overlay={overlay}
         onOverlay={setOverlay}
-        hasVector={!!svg}
+        hasVector={!!svg && !compare}
         display={display}
         onDisplayChange={onDisplayChange}
         layersOpen={layersOpen}
