@@ -7,7 +7,9 @@
 use crate::error::CommandError;
 use image::ExtendedColorType;
 use serde::Serialize;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use studi0trace_core::api::ApiError;
 use studi0trace_core::color::rgb_on_white;
 use studi0trace_core::intake::{self, Limits};
@@ -187,9 +189,201 @@ pub async fn redraw(api: &openai::Api, source: Arc<Source>, options: Options, ph
     blocking(move || finish(&source, plan, &reply)).await
 }
 
+/// How to abandon a redraw's task.
+pub type Abort = Box<dyn Fn() + Send + Sync>;
+
+/// A finished redraw waiting for Use redraw, Try again or Discard: its own image's id and its drift.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pending {
+    pub redraw_id: String,
+    pub drift: drift::Drift,
+}
+
+#[derive(Default)]
+struct Slot {
+    /// The generation of the redraw running for this image.
+    current: Option<u64>,
+    abort: Option<Abort>,
+    pending: Option<Pending>,
+}
+
+/// The redraws in flight (one per image: a new request for an image abandons the old) and the ones awaiting a
+/// decision. Every abort is a tokio abort: it never blocks, so it is called under the lock.
+#[derive(Default)]
+pub struct Redraws {
+    slots: Mutex<HashMap<String, Slot>>,
+    next: AtomicU64,
+}
+
+impl Redraws {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Slot>> {
+        self.slots.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A new redraw of `image_id`: the one running is abandoned, and the one awaiting a decision is dropped (its
+    /// image id is handed back for the caller to let go of). Answers this redraw's generation.
+    pub fn reserve(&self, image_id: &str) -> (u64, Option<String>) {
+        let generation = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut slots = self.lock();
+        let slot = slots.entry(image_id.to_string()).or_default();
+        if let Some(abort) = slot.abort.take() {
+            abort();
+        }
+        slot.current = Some(generation);
+        (generation, slot.pending.take().map(|p| p.redraw_id))
+    }
+
+    /// How to abandon `generation`'s task, kept while it is the current one; called at once when it no longer is
+    /// (a cancel that came first).
+    pub fn arm(&self, image_id: &str, generation: u64, abort: Abort) {
+        let mut slots = self.lock();
+        match slots.get_mut(image_id).filter(|s| s.current == Some(generation)) {
+            Some(slot) => slot.abort = Some(abort),
+            None => abort(),
+        }
+    }
+
+    /// `generation` finished: its redraw waits for a decision if it is still the current one; else it is handed
+    /// back, to be let go of (a reply that arrived after its cancel).
+    pub fn finish(&self, image_id: &str, generation: u64, pending: Pending) -> Result<(), Pending> {
+        let mut slots = self.lock();
+        match slots.get_mut(image_id).filter(|s| s.current == Some(generation)) {
+            Some(slot) => {
+                slot.current = None;
+                slot.abort = None;
+                slot.pending = Some(pending);
+                Ok(())
+            }
+            None => Err(pending),
+        }
+    }
+
+    /// `generation` ended without a redraw.
+    pub fn fail(&self, image_id: &str, generation: u64) {
+        if let Some(slot) = self.lock().get_mut(image_id).filter(|s| s.current == Some(generation)) {
+            slot.current = None;
+            slot.abort = None;
+        }
+    }
+
+    /// Cancel: abandons the redraw running for `image_id`; true when one was.
+    pub fn cancel(&self, image_id: &str) -> bool {
+        let mut slots = self.lock();
+        let Some(slot) = slots.get_mut(image_id) else { return false };
+        if let Some(abort) = slot.abort.take() {
+            abort();
+        }
+        slot.current.take().is_some()
+    }
+
+    pub fn take_pending(&self, image_id: &str) -> Option<Pending> {
+        self.lock().get_mut(image_id)?.pending.take()
+    }
+
+    pub fn is_running(&self, image_id: &str) -> bool {
+        self.lock().get(image_id).is_some_and(|s| s.current.is_some())
+    }
+
+    /// The image was closed: its redraw is abandoned, and the id of one awaiting a decision handed back.
+    pub fn forget(&self, image_id: &str) -> Option<String> {
+        let slot = self.lock().remove(image_id)?;
+        if let Some(abort) = slot.abort {
+            abort();
+        }
+        slot.pending.map(|p| p.redraw_id)
+    }
+}
+
+/// The [`Abort`] of a task on Tauri's runtime.
+pub fn abort_handle<T: Send + 'static>(task: &tauri::async_runtime::JoinHandle<T>) -> Abort {
+    let handle = task.inner().abort_handle();
+    Box::new(move || handle.abort())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn counter() -> (Arc<AtomicUsize>, Abort) {
+        let n = Arc::new(AtomicUsize::new(0));
+        let m = n.clone();
+        (n, Box::new(move || {
+            m.fetch_add(1, Ordering::SeqCst);
+        }))
+    }
+
+    fn pending(id: &str) -> Pending {
+        Pending { redraw_id: id.into(), drift: drift::Drift { edge_f1: 1.0, delta_e: 0.0, verdict: drift::Verdict::Close } }
+    }
+
+    #[test]
+    fn a_finished_redraw_waits_for_its_decision() {
+        let r = Redraws::default();
+        let (g, displaced) = r.reserve("a");
+        assert_eq!(displaced, None);
+        let (aborted, abort) = counter();
+        r.arm("a", g, abort);
+        assert!(r.is_running("a"));
+        assert_eq!(r.finish("a", g, pending("r1")), Ok(()));
+        assert!(!r.is_running("a"));
+        assert_eq!(aborted.load(Ordering::SeqCst), 0);
+        assert_eq!(r.take_pending("a"), Some(pending("r1")));
+        assert_eq!(r.take_pending("a"), None);
+    }
+
+    #[test]
+    fn a_new_request_abandons_the_old_and_drops_its_waiting_redraw() {
+        let r = Redraws::default();
+        let (first, _) = r.reserve("a");
+        let (aborted, abort) = counter();
+        r.arm("a", first, abort);
+        let (second, displaced) = r.reserve("a");
+        assert_eq!((aborted.load(Ordering::SeqCst), displaced), (1, None));
+        assert_eq!(r.finish("a", first, pending("late")), Err(pending("late")));
+        r.fail("a", first); // the old one's end is not the new one's
+        assert!(r.is_running("a"));
+        assert_eq!(r.finish("a", second, pending("r2")), Ok(()));
+        let (_, displaced) = r.reserve("a");
+        assert_eq!(displaced.as_deref(), Some("r2"));
+    }
+
+    #[test]
+    fn cancel_abandons_the_running_redraw_and_refuses_its_reply() {
+        let r = Redraws::default();
+        assert!(!r.cancel("a"));
+        let (g, _) = r.reserve("a");
+        let (aborted, abort) = counter();
+        r.arm("a", g, abort);
+        assert!(r.cancel("a"));
+        assert_eq!(aborted.load(Ordering::SeqCst), 1);
+        assert_eq!(r.finish("a", g, pending("late")), Err(pending("late")));
+        assert_eq!(r.take_pending("a"), None);
+    }
+
+    #[test]
+    fn a_task_armed_after_its_cancel_is_abandoned_at_once() {
+        let r = Redraws::default();
+        let (g, _) = r.reserve("a");
+        assert!(r.cancel("a"));
+        let (aborted, abort) = counter();
+        r.arm("a", g, abort);
+        assert_eq!(aborted.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn closing_an_image_abandons_its_redraw_and_hands_back_the_waiting_one() {
+        let r = Redraws::default();
+        let (g, _) = r.reserve("a");
+        r.finish("a", g, pending("r1")).unwrap();
+        let (g, _) = r.reserve("b");
+        let (aborted, abort) = counter();
+        r.arm("b", g, abort);
+        assert_eq!(r.forget("a").as_deref(), Some("r1"));
+        assert_eq!(r.forget("b"), None);
+        assert_eq!(aborted.load(Ordering::SeqCst), 1);
+        assert_eq!(r.forget("c"), None);
+    }
 
     #[test]
     fn models_and_qualities_read_their_setting_and_default_safely() {

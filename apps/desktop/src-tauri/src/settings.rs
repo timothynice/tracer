@@ -21,12 +21,28 @@ pub struct Settings {
     pub live_update: bool,
     /// Check for an update at launch, quietly (`updates::check`, Automatic).
     pub check_for_updates: bool,
+    /// AI redraw: the model and quality asked of OpenAI (`redraw::Model::parse`, `Quality::parse`), and whether the
+    /// inspector suggests a redraw for a rough image. The key is never a setting (keychain.rs).
+    pub redraw_model: String,
+    pub redraw_quality: String,
+    pub suggest_redraw: bool,
     pub recent: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { appearance: "system".into(), export_to: "ask".into(), reveal_after_export: false, trace_on_open: false, live_update: true, check_for_updates: true, recent: Vec::new() }
+        Settings {
+            appearance: "system".into(),
+            export_to: "ask".into(),
+            reveal_after_export: false,
+            trace_on_open: false,
+            live_update: true,
+            check_for_updates: true,
+            redraw_model: "gpt-image-2".into(),
+            redraw_quality: "medium".into(),
+            suggest_redraw: true,
+            recent: Vec::new(),
+        }
     }
 }
 
@@ -46,6 +62,9 @@ impl Settings {
         take(value, "traceOnOpen", &mut s.trace_on_open);
         take(value, "liveUpdate", &mut s.live_update);
         take(value, "checkForUpdates", &mut s.check_for_updates);
+        take(value, "redrawModel", &mut s.redraw_model);
+        take(value, "redrawQuality", &mut s.redraw_quality);
+        take(value, "suggestRedraw", &mut s.suggest_redraw);
         take(value, "recent", &mut s.recent);
         s
     }
@@ -147,12 +166,27 @@ mod tests {
     #[test]
     fn defaults_and_camel_case() {
         let v = serde_json::to_value(Settings::default()).unwrap();
-        assert_eq!(v, serde_json::json!({"appearance": "system", "exportTo": "ask", "revealAfterExport": false, "traceOnOpen": false, "liveUpdate": true, "checkForUpdates": true, "recent": []}));
+        assert_eq!(
+            v,
+            serde_json::json!({"appearance": "system", "exportTo": "ask", "revealAfterExport": false, "traceOnOpen": false, "liveUpdate": true, "checkForUpdates": true, "redrawModel": "gpt-image-2", "redrawQuality": "medium", "suggestRedraw": true, "recent": []})
+        );
         // a file from an older version, missing keys, still reads, and checks for updates
         let old: Settings = serde_json::from_value(serde_json::json!({"appearance": "dark"})).unwrap();
         assert_eq!((old.appearance.as_str(), old.live_update, old.check_for_updates), ("dark", true, true));
         let old = Settings::from_value(&serde_json::json!({"appearance": "dark", "liveUpdate": false}));
         assert!(old.check_for_updates);
+    }
+
+    #[test]
+    fn ai_redraw_settings_default_to_gpt_image_2_medium_and_suggest_and_never_hold_a_key() {
+        let s = Settings::default();
+        assert_eq!((s.redraw_model.as_str(), s.redraw_quality.as_str(), s.suggest_redraw), ("gpt-image-2", "medium", true));
+        let s = Settings::from_value(&serde_json::json!({"redrawModel": "gpt-image-1.5", "redrawQuality": "high", "suggestRedraw": false}));
+        assert_eq!((s.redraw_model.as_str(), s.redraw_quality.as_str(), s.suggest_redraw), ("gpt-image-1.5", "high", false));
+        let s = Settings::from_value(&serde_json::json!({"suggestRedraw": "yes"}));
+        assert!(s.suggest_redraw);
+        let v = serde_json::to_value(Settings::default()).unwrap();
+        assert!(v.as_object().unwrap().keys().all(|k| !k.to_ascii_lowercase().contains("key")), "{v}");
     }
 
     #[test]

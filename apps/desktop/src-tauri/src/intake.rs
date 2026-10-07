@@ -162,6 +162,7 @@ fn admit(core: &Core, name: &str, path: Option<&Path>, bytes: Vec<u8>) -> Result
         height: up["height"].as_u64().unwrap_or(0) as u32,
         format: up["format"].as_str().unwrap_or_default().to_string(),
         bytes: Arc::new(bytes),
+        original: None,
     })
 }
 
