@@ -7,6 +7,7 @@
 use crate::error::CommandError;
 
 pub mod geometry;
+pub mod rough;
 
 /// An image whose longest side is under this many pixels looks rough.
 pub const ROUGH_SIDE: u32 = 600;
