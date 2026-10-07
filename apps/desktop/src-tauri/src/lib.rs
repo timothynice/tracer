@@ -3,6 +3,7 @@ pub mod commands;
 pub mod error;
 pub mod export;
 pub mod intake;
+pub mod keychain;
 pub mod menu;
 pub mod opens;
 pub mod queue;

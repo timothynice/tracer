@@ -45,6 +45,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 # already in the tree through tao; used only to answer applicationShouldTerminate: (quit.rs)
 objc2 = "0.6"
+# already in the tree through rustls-platform-verifier; the OpenAI key's generic password (keychain.rs)
+security-framework = "3"
 
 [dev-dependencies]
 muda = "0.20"
