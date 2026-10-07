@@ -45,11 +45,14 @@ describe("redraw words", () => {
     );
     expect(redrawErrorText(new ApiError("engine_crashed", "The trace worker crashed", 500))).toBe("The redraw stopped unexpectedly.");
     expect(redrawErrorText(new ApiError("refused", secret, 422))).toBe("OpenAI declined to redraw this image under its content policy.");
-    expect(redrawErrorText(new ApiError("timeout", secret, 504))).toBe("OpenAI did not answer within 2 minutes. Try again.");
+    expect(redrawErrorText(new ApiError("timeout", secret, 504))).toBe("OpenAI did not answer within 4 minutes. Try again.");
     expect(redrawErrorText(new ApiError("offline", secret, 503))).toBe("Studi0Trace could not reach OpenAI. Check your internet connection.");
     expect(redrawErrorText(new ApiError("bad_reply", secret, 502))).toBe("OpenAI's reply held no usable image. Try again.");
     expect(redrawErrorText(new ApiError("too_large", secret, 413))).toBe("This image is too large to send to OpenAI (50 MB at most).");
     expect(redrawErrorText(new ApiError("no_key", secret, 401))).toBe("Add your OpenAI API key to use AI redraw.");
+    expect(redrawErrorText(new ApiError("keychain", "The keychain refused: -25293", 500))).toBe(
+      "macOS did not let Studi0Trace read the key. Allow access in the prompt, or remove and add the key again in Settings.",
+    );
     expect(redrawErrorText(new ApiError("something_new", secret, 500))).toBe("The redraw failed.");
   });
 

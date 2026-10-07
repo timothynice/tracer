@@ -8,7 +8,7 @@ use std::time::Duration;
 
 pub const DEFAULT_BASE: &str = "https://api.openai.com/v1";
 pub const BASE_ENV: &str = "STUDI0TRACE_OPENAI_BASE";
-pub const TIMEOUT: Duration = Duration::from_secs(120);
+pub const TIMEOUT: Duration = Duration::from_secs(240);
 /// OpenAI's limit on a request; the intake's 20 MB cap keeps every source under it.
 pub const MAX_REQUEST_BYTES: usize = 50 * 1024 * 1024;
 /// The one prompt, for both models.
@@ -18,9 +18,21 @@ pub const MAX_REPLY_BYTES: usize = 96 * 1024 * 1024;
 /// The image is streamed in pieces this size, so the last one says the upload has gone.
 const UPLOAD_CHUNK: usize = 64 * 1024;
 
-/// `STUDI0TRACE_OPENAI_BASE` when set (without a trailing slash), else OpenAI's.
+/// `STUDI0TRACE_OPENAI_BASE` when set to an `https://` address or a loopback one (the tests' mock server), without
+/// a trailing slash; anything else is ignored and OpenAI's is used, so a stray environment variable can never
+/// send the key to a plain-http host elsewhere.
 pub fn base_url() -> String {
-    std::env::var(BASE_ENV).ok().map(|b| b.trim().trim_end_matches('/').to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| DEFAULT_BASE.to_string())
+    chosen_base(std::env::var(BASE_ENV).ok().as_deref())
+}
+
+fn chosen_base(set: Option<&str>) -> String {
+    set.map(|b| b.trim().trim_end_matches('/'))
+        .filter(|b| is_https(b) || is_loopback(b))
+        .map_or_else(|| DEFAULT_BASE.to_string(), str::to_string)
+}
+
+fn is_https(base: &str) -> bool {
+    base.strip_prefix("https://").is_some_and(|rest| !rest.is_empty() && !rest.starts_with(['/', ':']))
 }
 
 /// One image edit: the padded source as PNG and the size the model is asked for.
@@ -90,7 +102,8 @@ fn transport(e: &reqwest::Error) -> CommandError {
 }
 
 fn is_loopback(base: &str) -> bool {
-    ["http://127.0.0.1", "http://localhost", "http://[::1]"].iter().any(|p| base.starts_with(p))
+    // the host ends at the port or the path: `http://127.0.0.1.example.com` is not loopback
+    ["http://127.0.0.1", "http://localhost", "http://[::1]"].iter().any(|p| base.strip_prefix(p).is_some_and(|rest| rest.is_empty() || rest.starts_with([':', '/'])))
 }
 
 /// The PNG as a stream of pieces; `on_sent` runs as the last is handed to the connection.
@@ -241,10 +254,21 @@ mod tests {
     }
 
     #[test]
+    fn the_base_from_the_environment_is_https_or_loopback_and_nothing_else() {
+        for ok in ["https://proxy.example.com/v1", "http://127.0.0.1:9/v1", "http://localhost:8080", "http://[::1]:9/v1/", "  https://x.test/v1/  "] {
+            assert_eq!(chosen_base(Some(ok)), ok.trim().trim_end_matches('/'), "{ok}");
+        }
+        for ignored in ["http://example.com/v1", "http://127.0.0.1.example.com/v1", "http://localhost.evil.test", "ftp://x", "https://", "https:///v1", "api.example.com", "", "   "] {
+            assert_eq!(chosen_base(Some(ignored)), DEFAULT_BASE, "{ignored:?}");
+        }
+        assert_eq!(chosen_base(None), DEFAULT_BASE);
+    }
+
+    #[test]
     fn the_default_base_is_openai_and_an_api_never_prints_its_key() {
         assert_eq!(DEFAULT_BASE, "https://api.openai.com/v1");
         assert_eq!(BASE_ENV, "STUDI0TRACE_OPENAI_BASE");
-        assert_eq!(TIMEOUT, std::time::Duration::from_secs(120));
+        assert_eq!(TIMEOUT, std::time::Duration::from_secs(240));
         let api = Api::new("http://127.0.0.1:9/v1/", "sk-secret-123").unwrap();
         let shown = format!("{api:?}");
         assert!(!shown.contains("sk-secret") && shown.contains("http://127.0.0.1:9/v1"), "{shown}");

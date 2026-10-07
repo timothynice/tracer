@@ -7,7 +7,6 @@ use crate::error::CommandError;
 pub const SERVICE: &str = "com.studi0.trace.openai";
 pub const ACCOUNT: &str = "api-key";
 /// `errSecItemNotFound`.
-#[cfg(target_os = "macos")]
 const NOT_FOUND: i32 = -25300;
 
 /// Whether the app's key is stored (read without its data, so it never prompts).
@@ -25,18 +24,21 @@ pub fn delete_key() -> Result<(), CommandError> {
     delete_key_in(SERVICE)
 }
 
-/// The app's key, for the request's Authorization header only.
-pub fn read_key() -> Option<String> {
+/// The app's key, for the request's Authorization header only: `None` when none is stored, an error when macOS
+/// would not hand it over (a denied prompt), which is not the same as having none.
+pub fn read_key() -> Result<Option<String>, CommandError> {
     read_key_in(SERVICE)
 }
 
-/// A pasted key, trimmed: something, one token, at most 1024 characters. The words never repeat it.
+/// A pasted key, trimmed: something, one token of printable ASCII, at most 1024 characters (a zero-width space
+/// or a byte-order mark in a pasted key is not whitespace, and would only fail later as a header). The words never
+/// repeat it.
 pub fn check_key(key: &str) -> Result<&str, CommandError> {
     let key = key.trim();
     if key.is_empty() {
         return Err(CommandError::bad_request("Paste your OpenAI API key."));
     }
-    if key.len() > 1024 || key.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if key.len() > 1024 || key.chars().any(|c| !c.is_ascii_graphic()) {
         return Err(CommandError::bad_request("That does not look like an OpenAI API key."));
     }
     Ok(key)
@@ -44,6 +46,18 @@ pub fn check_key(key: &str) -> Result<&str, CommandError> {
 
 fn refused(why: impl std::fmt::Display) -> CommandError {
     CommandError::new(500, "keychain", format!("The keychain refused: {why}"))
+}
+
+/// What reading the key's data came to: the key, none (`errSecItemNotFound`, or stored empty or not as text), or
+/// the keychain's refusal, in words that say what to do. The words never carry the OS's reason, which may name
+/// the item.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn classify_read(read: Result<Vec<u8>, i32>) -> Result<Option<String>, CommandError> {
+    match read {
+        Ok(bytes) => Ok(String::from_utf8(bytes).ok().filter(|k| !k.is_empty())),
+        Err(NOT_FOUND) => Ok(None),
+        Err(_) => Err(CommandError::new(500, "keychain", "macOS did not let Studi0Trace read the key. Allow access in the prompt, or remove and add the key again in Settings.")),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -67,8 +81,8 @@ pub fn delete_key_in(service: &str) -> Result<(), CommandError> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn read_key_in(service: &str) -> Option<String> {
-    security_framework::passwords::get_generic_password(service, ACCOUNT).ok().and_then(|bytes| String::from_utf8(bytes).ok()).filter(|k| !k.is_empty())
+pub fn read_key_in(service: &str) -> Result<Option<String>, CommandError> {
+    classify_read(security_framework::passwords::get_generic_password(service, ACCOUNT).map_err(|e| e.code()))
 }
 
 // The app is a Mac app; elsewhere (a Linux `cargo check`) there is no keychain and so no key.
@@ -89,8 +103,8 @@ pub fn delete_key_in(_service: &str) -> Result<(), CommandError> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn read_key_in(_service: &str) -> Option<String> {
-    None
+pub fn read_key_in(_service: &str) -> Result<Option<String>, CommandError> {
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -112,6 +126,29 @@ mod tests {
         assert!(!check_key("sk-one sk-two").unwrap_err().message().contains("sk-"));
     }
 
+    #[test]
+    fn a_key_with_an_invisible_or_non_ascii_character_is_not_a_key() {
+        for pasted in ["\u{200b}sk-abc", "sk-abc\u{feff}", "sk-\u{e9}abc", "sk-a\u{200b}bc"] {
+            let e = check_key(pasted).unwrap_err();
+            assert_eq!(e.code(), Some("bad_request"), "{pasted:?}");
+            assert!(!e.message().contains("sk-"), "the words never repeat the input");
+        }
+        assert_eq!(check_key("sk-proj-AbC_123-xyz").unwrap(), "sk-proj-AbC_123-xyz");
+    }
+
+    #[test]
+    fn only_a_missing_item_is_no_key_any_other_refusal_is_a_keychain_error() {
+        assert_eq!(classify_read(Ok(b"sk-test".to_vec())).unwrap().as_deref(), Some("sk-test"));
+        assert_eq!(classify_read(Ok(Vec::new())).unwrap(), None);
+        assert_eq!(classify_read(Err(NOT_FOUND)).unwrap(), None);
+        // errSecAuthFailed (-25293), errSecUserCanceled (-128), errSecInteractionNotAllowed (-25308)
+        for code in [-25293, -128, -25308] {
+            let e = classify_read(Err(code)).unwrap_err();
+            assert_eq!((e.code(), e.status), (Some("keychain"), 500), "{code}");
+            assert!(e.message().contains("Allow access in the prompt"), "{code}");
+        }
+    }
+
     /// Writes to the login keychain, so it runs only when asked: `STUDI0TRACE_TEST_KEYCHAIN=1` (CI has no login
     /// keychain). Under a test service of its own, never the app's.
     #[test]
@@ -131,12 +168,12 @@ mod tests {
         let _cleanup = Cleanup(&service);
         delete_key_in(&service).unwrap();
         assert!(!has_key_in(&service));
-        assert_eq!(read_key_in(&service), None);
+        assert_eq!(read_key_in(&service).unwrap(), None);
         set_key_in(&service, "sk-test-one").unwrap();
         assert!(has_key_in(&service));
-        assert_eq!(read_key_in(&service).as_deref(), Some("sk-test-one"));
+        assert_eq!(read_key_in(&service).unwrap().as_deref(), Some("sk-test-one"));
         set_key_in(&service, " sk-test-two ").unwrap();
-        assert_eq!(read_key_in(&service).as_deref(), Some("sk-test-two"));
+        assert_eq!(read_key_in(&service).unwrap().as_deref(), Some("sk-test-two"));
         delete_key_in(&service).unwrap();
         assert!(!has_key_in(&service));
         delete_key_in(&service).unwrap(); // removing nothing is not a failure

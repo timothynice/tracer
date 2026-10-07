@@ -528,6 +528,16 @@ describe("library: AI redraw", () => {
     expect(lib.getState().items[0].redraw).toMatchObject({ phase: null, error: null });
   });
 
+  it("keeps a keychain refusal as an error and does not hand it back for the consent sheet", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    const done = lib.redraw("a");
+    r.fail(new ApiError("keychain", "macOS did not let Studi0Trace read the key.", 500));
+    expect(await done).toBeNull();
+    expect(lib.getState().items[0].redraw?.error?.code).toBe("keychain");
+  });
+
   it("keeps other failures by code; a cancel is silent", async () => {
     const r = redrawPlatform();
     const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
@@ -585,6 +595,40 @@ describe("library: AI redraw", () => {
     expect(item.shown).toBe("auto");
     expect(item.traces.auto.svg).toBe("<svg>original</svg>");
     expect(item.rough).toBeUndefined();
+  });
+
+  it("a second Use redraw or Revert while the first is in flight is ignored", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    const done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    const first = lib.acceptRedraw("a");
+    const second = lib.acceptRedraw("a"); // a double click
+    await Promise.all([first, second]);
+    expect(r.platform.acceptRedraw).toHaveBeenCalledTimes(1);
+    expect(lib.getState().items[0].redraw).toMatchObject({ active: true, pending: null });
+    const reverting = lib.revertRedraw("a");
+    const again = lib.revertRedraw("a");
+    await Promise.all([reverting, again]);
+    expect(r.platform.revertRedraw).toHaveBeenCalledTimes(1);
+    expect(lib.getState().items[0].redraw).toEqual(NO_REDRAW);
+  });
+
+  it("a failed decision can be tried again", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    const done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    r.platform.acceptRedraw.mockImplementationOnce(async () => {
+      throw new ApiError("no_redraw", "x", 409);
+    });
+    await expect(lib.acceptRedraw("a")).rejects.toBeInstanceOf(ApiError);
+    await lib.acceptRedraw("a");
+    expect(r.platform.acceptRedraw).toHaveBeenCalledTimes(2);
   });
 
   it("Revert during a Try again redraw abandons it first, and lets a waiting one go", async () => {

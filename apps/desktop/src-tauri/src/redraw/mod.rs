@@ -82,7 +82,7 @@ pub fn error(code: &'static str) -> CommandError {
         "quota" => (429, "Your OpenAI account is out of credit or rate limited."),
         "not_allowed" => (403, "OpenAI did not allow this key to create images. Your organization may need to be verified for image models at platform.openai.com."),
         "refused" => (422, "OpenAI declined to redraw this image under its content policy."),
-        "timeout" => (504, "OpenAI did not answer within 2 minutes. Try again."),
+        "timeout" => (504, "OpenAI did not answer within 4 minutes. Try again."),
         "offline" => (503, "Studi0Trace could not reach OpenAI. Check your internet connection."),
         "bad_reply" => (502, "OpenAI's reply held no usable image. Try again."),
         "too_large" => (413, "This image is too large to send to OpenAI (50 MB at most)."),
@@ -231,6 +231,11 @@ impl Redraws {
         }
         slot.current = Some(generation);
         (generation, slot.pending.take().map(|p| p.redraw_id))
+    }
+
+    /// Whether `generation` is still the redraw current for `image_id`: no cancel, newer request or close has ended it.
+    pub fn is_current(&self, image_id: &str, generation: u64) -> bool {
+        self.lock().get(image_id).is_some_and(|s| s.current == Some(generation))
     }
 
     /// How to abandon `generation`'s task, kept while it is the current one; called at once when it no longer is
@@ -435,6 +440,7 @@ mod tests {
             assert_eq!((e.code(), e.status), (Some(code), status), "{code}");
             assert!(!e.message().is_empty() && !e.message().contains("sk-"), "{code}");
         }
+        assert!(error("timeout").message().contains("4 minutes"), "the request's timeout is 240 s");
         assert!(error("quota").message().to_lowercase().contains("your openai account is out of credit or rate limited"));
     }
 

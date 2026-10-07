@@ -42,10 +42,11 @@ const ERROR_WORDS: Record<string, string> = {
   quota: "Your OpenAI account is out of credit or rate limited.",
   not_allowed: "OpenAI did not allow this key to create images. Your organization may need to be verified for image models at platform.openai.com.",
   refused: "OpenAI declined to redraw this image under its content policy.",
-  timeout: "OpenAI did not answer within 2 minutes. Try again.",
+  timeout: "OpenAI did not answer within 4 minutes. Try again.",
   offline: "Studi0Trace could not reach OpenAI. Check your internet connection.",
   bad_reply: "OpenAI's reply held no usable image. Try again.",
   too_large: "This image is too large to send to OpenAI (50 MB at most).",
+  keychain: "macOS did not let Studi0Trace read the key. Allow access in the prompt, or remove and add the key again in Settings.",
   engine_crashed: "The redraw stopped unexpectedly.",
 };
 

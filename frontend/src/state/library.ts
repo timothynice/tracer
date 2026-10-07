@@ -187,6 +187,8 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
 
   const redrawing = new Map<string, AbortController>();
   const roughAsked = new Set<string>();
+  /** Images whose Use redraw or Revert is in flight: a second click is ignored, since the host answers it with a 409. */
+  const deciding = new Set<string>();
   const patchRedraw = (id: string, change: Partial<RedrawState>) => patch(id, (i) => ({ redraw: { ...redrawOf(i), ...change } }));
   const abortRedraw = (id: string) => {
     redrawing.get(id)?.abort();
@@ -467,27 +469,32 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
     async acceptRedraw(id) {
       const item = find(id);
       const r = item ? redrawOf(item) : NO_REDRAW;
-      if (!item || !r.pending || !platform.acceptRedraw) return;
-      const accepted = await platform.acceptRedraw(id);
-      const now = find(id);
-      if (!now) return;
-      abortJob(now);
-      clearTimer(id);
-      // a second redraw used keeps the first original's traces
-      const kept: KeptTraces = r.kept ?? { preset: now.preset, params: now.params, traces: now.traces, shown: now.shown, exported: now.exported, auto: now.auto };
-      patch(id, {
-        image: accepted.image,
-        traces: {},
-        shown: null,
-        exported: null,
-        auto: null,
-        job: null,
-        error: null,
-        errorKey: null,
-        rough: { rough: false, reason: null },
-        redraw: { ...NO_REDRAW, active: true, original: accepted.original, drift: r.pending.drift, kept },
-      });
-      if (settings.traceOnOpen) generate(id);
+      if (!item || !r.pending || !platform.acceptRedraw || deciding.has(id)) return;
+      deciding.add(id);
+      try {
+        const accepted = await platform.acceptRedraw(id);
+        const now = find(id);
+        if (!now) return;
+        abortJob(now);
+        clearTimer(id);
+        // a second redraw used keeps the first original's traces
+        const kept: KeptTraces = r.kept ?? { preset: now.preset, params: now.params, traces: now.traces, shown: now.shown, exported: now.exported, auto: now.auto };
+        patch(id, {
+          image: accepted.image,
+          traces: {},
+          shown: null,
+          exported: null,
+          auto: null,
+          job: null,
+          error: null,
+          errorKey: null,
+          rough: { rough: false, reason: null },
+          redraw: { ...NO_REDRAW, active: true, original: accepted.original, drift: r.pending.drift, kept },
+        });
+        if (settings.traceOnOpen) generate(id);
+      } finally {
+        deciding.delete(id);
+      }
     },
 
     discardRedraw(id) {
@@ -499,22 +506,27 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
 
     async revertRedraw(id) {
       const item = find(id);
-      if (!item || !redrawOf(item).active || !platform.revertRedraw) return;
-      // Revert is open mid-run: a redraw still running is abandoned and one waiting for a decision is let go,
-      // before the original comes back, so neither can land on it
-      abortRedraw(id);
-      // the decision goes now, so a slow or failed revert never leaves a Drift check whose redraw has been let go of
-      const waiting = redrawOf(item).pending;
-      patchRedraw(id, { phase: null, pending: null });
-      if (waiting) void platform.discardRedraw?.(id).catch(() => {});
-      const image = await platform.revertRedraw(id);
-      const now = find(id);
-      if (!now) return;
-      abortJob(now);
-      clearTimer(id);
-      const kept = redrawOf(now).kept ?? { preset: now.preset, params: now.params, traces: {}, shown: null, exported: null, auto: null };
-      roughAsked.delete(id);
-      patch(id, { ...kept, image, job: null, error: null, errorKey: null, rough: undefined, redraw: NO_REDRAW });
+      if (!item || !redrawOf(item).active || !platform.revertRedraw || deciding.has(id)) return;
+      deciding.add(id);
+      try {
+        // Revert is open mid-run: a redraw still running is abandoned and one waiting for a decision is let go,
+        // before the original comes back, so neither can land on it
+        abortRedraw(id);
+        // the decision goes now, so a slow or failed revert never leaves a Drift check whose redraw has been let go of
+        const waiting = redrawOf(item).pending;
+        patchRedraw(id, { phase: null, pending: null });
+        if (waiting) void platform.discardRedraw?.(id).catch(() => {});
+        const image = await platform.revertRedraw(id);
+        const now = find(id);
+        if (!now) return;
+        abortJob(now);
+        clearTimer(id);
+        const kept = redrawOf(now).kept ?? { preset: now.preset, params: now.params, traces: {}, shown: null, exported: null, auto: null };
+        roughAsked.delete(id);
+        patch(id, { ...kept, image, job: null, error: null, errorKey: null, rough: undefined, redraw: NO_REDRAW });
+      } finally {
+        deciding.delete(id);
+      }
     },
   };
   return lib;

@@ -44,7 +44,7 @@ traced from it. It does not replace engine work on hard inputs.
 - Endpoint `POST https://api.openai.com/v1/images/edits`, multipart: `model`, `image` (the padded PNG), `prompt`,
   `size`, `quality`, `output_format=png`, `background=opaque` (the redraw is compared and traced on an opaque
   ground; a transparent source is composited on white for the request and its alpha is not restored — out of scope),
-  `n=1`. Bearer auth with the stored key. Timeout 120 s.
+  `n=1`. Bearer auth with the stored key. Timeout 240 s (gpt-image-2 at High and 2048 px can approach two minutes).
 - Models offered: `gpt-image-2` (default), `gpt-image-1.5`. `gpt-image-1.5` additionally gets `input_fidelity=high`
   (the parameter exists only for the 1.x models). Quality: `medium` (default) or `high`.
 - **Aspect.** `gpt-image-2` sizes are `WxH` with both multiples of 16, aspect 1:3 to 3:1, at most 3840×2160, at

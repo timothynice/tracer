@@ -324,13 +324,40 @@ pub(crate) fn close(images: &Images, redraws: &Redraws, id: &str) -> bool {
     images.remove(id)
 }
 
+/// A redraw that may go ahead: the image as it was opened, the key, and the generation reserved for it.
+pub(crate) struct Started {
+    pub source: OpenImage,
+    pub key: String,
+    pub generation: u64,
+}
+
 /// What a redraw starts from, checked before anything goes anywhere: the image as it was opened, then the key. An
-/// unknown image is `image_expired` and the keychain is not asked; no key is `no_key`, before any network call.
-/// The keychain is read off the runtime's threads: an unsigned rebuild can make macOS ask to let the app read it.
-pub(crate) async fn redraw_start(images: &Images, read_key: impl FnOnce() -> Option<String> + Send + 'static, id: &str) -> Result<(OpenImage, String), CommandError> {
+/// unknown image is `image_expired` and nothing is reserved or asked; no key is `no_key`, and a keychain that will
+/// not hand the key over is `keychain`, both before any network call. The generation is reserved *before* the
+/// keychain is read, so a cancel or a close during the read (a whole macOS prompt, on an unsigned rebuild) finds
+/// the redraw and ends it: when the read returns and the generation is no longer current, the answer is `cancelled`
+/// and nothing has been built or sent. The keychain is read off the runtime's threads.
+pub(crate) async fn redraw_start(images: &Images, redraws: &Redraws, read_key: impl FnOnce() -> Result<Option<String>, CommandError> + Send + 'static, id: &str) -> Result<Started, CommandError> {
     let source = images.source_of(id).ok_or_else(CommandError::expired)?;
-    let key = redraw::blocking(move || Ok(read_key())).await?.ok_or_else(|| redraw::error("no_key"))?;
-    Ok((source, key))
+    let (generation, displaced) = redraws.reserve(id);
+    if let Some(old) = displaced {
+        let_go(images, id, &old);
+    }
+    let key = match redraw::blocking(read_key).await {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            redraws.fail(id, generation);
+            return Err(redraw::error("no_key"));
+        }
+        Err(e) => {
+            redraws.fail(id, generation);
+            return Err(e);
+        }
+    };
+    if !redraws.is_current(id, generation) || images.source_of(id).is_none() {
+        return Err(redraw::error("cancelled"));
+    }
+    Ok(Started { source, key, generation })
 }
 
 /// How a redraw's task ended without an answer: a panic is a crash and says so; anything else is the abort of a
@@ -419,14 +446,16 @@ pub async fn image_roughness(state: State<'_, AppState>, id: String) -> Result<R
 pub async fn redraw_image(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> Result<RedrawAnswer, CommandError> {
     use tauri::{Emitter, Manager};
     // the image and the key are checked first: with no key nothing is read, built or sent
-    let (source, key) = redraw_start(&state.images, keychain::read_key, &id).await?;
+    let Started { source, key, generation } = redraw_start(&state.images, &state.redraws, keychain::read_key, &id).await?;
     let chosen = settings::load(&app);
     let options = Options { model: Model::parse(&chosen.redraw_model), quality: Quality::parse(&chosen.redraw_quality) };
-    let api = openai::Api::new(&openai::base_url(), &key)?;
-    let (generation, displaced) = state.redraws.reserve(&id);
-    if let Some(old) = displaced {
-        let_go(&state.images, &id, &old);
-    }
+    let api = match openai::Api::new(&openai::base_url(), &key) {
+        Ok(api) => api,
+        Err(e) => {
+            state.redraws.fail(&id, generation);
+            return Err(e);
+        }
+    };
     let (emitter, image_id) = (app.clone(), id.clone());
     let phase: Arc<dyn Fn(Phase) + Send + Sync> = Arc::new(move |p| {
         let _ = emitter.emit("redraw-phase", serde_json::json!({ "id": image_id, "phase": p }));
@@ -524,17 +553,61 @@ mod redraw_tests {
 
     #[test]
     fn no_key_is_answered_before_anything_else_is_done() {
-        let images = Images::default();
+        let (images, redraws) = (Images::default(), Redraws::default());
         images.insert(entry("a", &[1]));
-        let e = run(redraw_start(&images, || None, "a")).unwrap_err();
+        let e = run(redraw_start(&images, &redraws, || Ok(None), "a")).err().unwrap();
         assert_eq!((e.code(), e.status), (Some("no_key"), 401));
+        assert!(!redraws.is_running("a"), "a refused start leaves no job behind");
         let asked = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = asked.clone();
-        let e = run(redraw_start(&images, move || { flag.store(true, std::sync::atomic::Ordering::SeqCst); None }, "gone")).unwrap_err();
+        let e = run(redraw_start(&images, &redraws, move || { flag.store(true, std::sync::atomic::Ordering::SeqCst); Ok(None) }, "gone")).err().unwrap();
         assert_eq!(e.code(), Some("image_expired"), "an unknown image is named first");
         assert!(!asked.load(std::sync::atomic::Ordering::SeqCst), "and the keychain is not asked");
-        let (source, key) = run(redraw_start(&images, || Some("sk-test".into()), "a")).unwrap();
-        assert_eq!((source.id.as_str(), key.as_str()), ("a", "sk-test"));
+        let started = run(redraw_start(&images, &redraws, || Ok(Some("sk-test".into())), "a")).unwrap();
+        assert_eq!((started.source.id.as_str(), started.key.as_str()), ("a", "sk-test"));
+        assert!(redraws.is_current("a", started.generation) && redraws.is_running("a"));
+    }
+
+    #[test]
+    fn a_keychain_that_refuses_is_its_own_error_and_not_no_key() {
+        let (images, redraws) = (Images::default(), Redraws::default());
+        images.insert(entry("a", &[1]));
+        let e = run(redraw_start(&images, &redraws, || Err(CommandError::new(500, "keychain", "denied")), "a")).err().unwrap();
+        assert_eq!((e.code(), e.status), (Some("keychain"), 500));
+        assert!(!redraws.is_running("a"));
+    }
+
+    /// The keychain read can be a whole macOS prompt. A cancel or a close during it must find the redraw, and the
+    /// answer must be `cancelled` with no request: the read here blocks until the test has cancelled.
+    #[test]
+    fn a_cancel_or_close_during_the_key_read_stops_the_redraw_before_anything_is_sent() {
+        for how in ["cancel", "close", "newer"] {
+            let (images, redraws) = (Arc::new(Images::default()), Arc::new(Redraws::default()));
+            images.insert(entry("a", &[1]));
+            let (reading_tx, reading_rx) = std::sync::mpsc::channel::<()>();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let (i, r) = (images.clone(), redraws.clone());
+            let start = std::thread::spawn(move || {
+                run(redraw_start(&i, &r, move || {
+                    reading_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(Some("sk-test".into()))
+                }, "a"))
+            });
+            reading_rx.recv().unwrap();
+            // the redraw is already there to be found while the keychain is being read
+            assert!(redraws.is_running("a"), "{how}");
+            match how {
+                "cancel" => assert!(redraws.cancel("a"), "a cancel finds the redraw"),
+                "close" => assert!(close(&images, &redraws, "a")),
+                _ => {
+                    redraws.reserve("a");
+                }
+            }
+            release_tx.send(()).unwrap();
+            let e = start.join().unwrap().err().unwrap();
+            assert_eq!(e.code(), Some("cancelled"), "{how}");
+        }
     }
 
     #[test]
@@ -577,8 +650,8 @@ mod redraw_tests {
     fn a_redraw_starts_from_the_original_of_a_redrawn_image() {
         let (images, redraws) = waiting();
         accept(&images, &redraws, "a").unwrap();
-        let (source, _) = run(redraw_start(&images, || Some("k".into()), "a")).unwrap();
-        assert_eq!((source.id.as_str(), source.bytes.as_slice()), ("a-original", &[1][..]));
+        let started = run(redraw_start(&images, &redraws, || Ok(Some("k".into())), "a")).unwrap();
+        assert_eq!((started.source.id.as_str(), started.source.bytes.as_slice()), ("a-original", &[1][..]));
     }
 
     #[test]
