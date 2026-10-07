@@ -66,6 +66,19 @@ impl Images {
         Opened::from(&*map.entry(image.id.clone()).or_insert(image))
     }
 
+    /// Keep `image` only if its id is new: None (and nothing kept) when an entry already has it. A redraw takes
+    /// this road, since a redraw whose bytes an open image already has would otherwise share that image's entry
+    /// and let it go with its own.
+    pub fn insert_new(&self, image: OpenImage) -> Option<Opened> {
+        let mut map = self.lock();
+        if map.contains_key(&image.id) {
+            return None;
+        }
+        let shown = Opened::from(&image);
+        map.insert(image.id.clone(), image);
+        Some(shown)
+    }
+
     pub fn get(&self, id: &str) -> Option<OpenImage> {
         self.lock().get(id).cloned()
     }
@@ -96,8 +109,13 @@ impl Images {
 
     /// Use redraw: the image keeps its id and takes the redraw's bytes, size and format; its original moves to
     /// [`original_id`] (a second redraw keeps the first original); the redraw's own entry goes. Answers the image
-    /// and its original, or None (and changes nothing) when either is unknown.
+    /// and its original, or None (and changes nothing) when either is unknown or the redraw's id is the image's own
+    /// or its original's.
     pub fn accept_redraw(&self, id: &str, redraw_id: &str) -> Option<(Opened, Opened)> {
+        // the redraw's entry goes: it can be neither the image itself nor the entry that keeps its original
+        if redraw_id == id || redraw_id == original_id(id) {
+            return None;
+        }
         let mut map = self.lock();
         let redraw = map.get(redraw_id)?.clone();
         let image = map.get(id)?.clone();
@@ -192,6 +210,44 @@ mod tests {
         images.accept_redraw("a", "r").unwrap();
         assert!(images.remove("a"));
         assert!(images.is_empty(), "closing an image lets its original go too");
+    }
+
+    #[test]
+    fn a_redraw_that_is_the_image_or_its_original_is_refused() {
+        let images = Images::default();
+        images.insert(sized("a", 64, &[1]));
+        assert_eq!(images.accept_redraw("a", "a"), None);
+        images.insert(sized("r", 2048, &[2]));
+        images.accept_redraw("a", "r").unwrap();
+        assert_eq!(images.accept_redraw("a", "a"), None);
+        assert_eq!(images.accept_redraw("a", &original_id("a")), None);
+        // nothing moved: the image still shows the redraw, its original is still the one opened
+        assert_eq!(images.bytes("a").unwrap().as_slice(), &[2]);
+        assert_eq!(images.bytes(&original_id("a")).unwrap().as_slice(), &[1]);
+        assert_eq!(images.len(), 2);
+    }
+
+    #[test]
+    fn accepting_twice_then_reverting_returns_the_true_original() {
+        let images = Images::default();
+        images.insert(sized("a", 64, &[1]));
+        images.insert(sized("r1", 2048, &[2]));
+        images.accept_redraw("a", "r1").unwrap();
+        images.insert(sized("r2", 1024, &[3]));
+        images.accept_redraw("a", "r2").unwrap();
+        assert_eq!(images.len(), 2, "the image and its one original");
+        let back = images.revert("a").unwrap();
+        assert_eq!((back.id.as_str(), back.width), ("a", 64));
+        assert_eq!(images.bytes("a").unwrap().as_slice(), &[1]);
+        assert_eq!(images.len(), 1);
+    }
+
+    #[test]
+    fn insert_new_keeps_only_an_id_that_is_new() {
+        let images = Images::default();
+        assert_eq!(images.insert_new(sized("a", 64, &[1])).map(|o| o.id), Some("a".to_string()));
+        assert_eq!(images.insert_new(sized("a", 99, &[9])), None);
+        assert_eq!((images.len(), images.get("a").unwrap().width), (1, 64));
     }
 
     #[test]

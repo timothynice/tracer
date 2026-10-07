@@ -79,7 +79,7 @@ pub async fn read_image(state: State<'_, AppState>, id: String) -> Result<Respon
 
 #[tauri::command]
 pub fn close_image(state: State<'_, AppState>, id: String) -> bool {
-    state.images.remove(&id)
+    close(&state.images, &state.redraws, &id)
 }
 
 use crate::queue::JobSpec;
@@ -259,7 +259,8 @@ pub(crate) fn show_settings_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
     }
     tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
         .title("Settings")
-        .inner_size(520.0, 500.0)
+        // the AI redraw group made the sheet taller
+        .inner_size(520.0, 720.0)
         .resizable(false)
         .minimizable(false)
         .maximizable(false)
@@ -283,5 +284,318 @@ mod clear_tests {
         assert_eq!(clear_prompt(1).as_deref(), Some("1 traced image has not been exported."));
         assert_eq!(clear_prompt(4).as_deref(), Some("4 traced images have not been exported."));
         assert_eq!((CLEAR_TITLE, CLEAR), ("Clear all images?", "Clear All"));
+    }
+}
+
+use crate::keychain;
+use crate::redraw::{self, drift::Drift, openai, rough::Roughness, Model, Options, Pending, Phase, Quality, Redraws, Source};
+use crate::store::{original_id, Images, OpenImage};
+use std::sync::Arc;
+
+/// `redraw_image`'s answer: the redraw (opened as any pasted image is, with its own id) and how far it moved.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedrawAnswer {
+    pub redraw: Opened,
+    pub drift: Drift,
+}
+
+/// `accept_redraw`'s answer: the image, now drawn from the redraw, and the entry that keeps its original.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Accepted {
+    pub image: Opened,
+    pub original: Opened,
+}
+
+/// Lets a redraw's own store entry go, never the image's own or the entry that keeps its original.
+fn let_go(images: &Images, image_id: &str, redraw_id: &str) {
+    if redraw_id != image_id && redraw_id != original_id(image_id) {
+        images.remove(redraw_id);
+    }
+}
+
+/// An image closed: its redraw is abandoned, and one awaiting a decision let go of with its store entry;
+/// `remove` takes the image's original too.
+pub(crate) fn close(images: &Images, redraws: &Redraws, id: &str) -> bool {
+    if let Some(waiting) = redraws.forget(id) {
+        let_go(images, id, &waiting);
+    }
+    images.remove(id)
+}
+
+/// What a redraw starts from, checked before anything goes anywhere: the image as it was opened, and the key. An
+/// unknown image is `image_expired`; no key in the keychain is `no_key`, before any network call.
+pub(crate) fn redraw_start(images: &Images, key: Option<String>, id: &str) -> Result<(OpenImage, String), CommandError> {
+    let source = images.source_of(id).ok_or_else(CommandError::expired)?;
+    let key = key.ok_or_else(|| redraw::error("no_key"))?;
+    Ok((source, key))
+}
+
+/// Use redraw: the redraw awaiting a decision becomes the image's source; the original is kept. Whatever the
+/// outcome, the pending redraw's own entry is gone.
+pub(crate) fn accept(images: &Images, redraws: &Redraws, id: &str) -> Result<Accepted, CommandError> {
+    let pending = redraws.take_pending(id).ok_or_else(|| CommandError::new(409, "no_redraw", "There is no redraw waiting for this image."))?;
+    match images.accept_redraw(id, &pending.redraw_id) {
+        Some((image, original)) => Ok(Accepted { image, original }),
+        None => {
+            let_go(images, id, &pending.redraw_id);
+            Err(CommandError::expired())
+        }
+    }
+}
+
+/// Discard: the redraw awaiting a decision is let go of; the image is as it was.
+pub(crate) fn discard(images: &Images, redraws: &Redraws, id: &str) -> bool {
+    match redraws.take_pending(id) {
+        Some(pending) => {
+            let_go(images, id, &pending.redraw_id);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Whether an OpenAI key is stored; the key itself never reaches the webview.
+#[tauri::command]
+pub async fn redraw_key_status() -> bool {
+    keychain::has_key()
+}
+
+#[tauri::command]
+pub async fn set_redraw_key(app: tauri::AppHandle, key: String) -> Result<(), CommandError> {
+    use tauri::Emitter;
+    keychain::set_key(&key)?;
+    let _ = app.emit("redraw-key", true);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_redraw_key(app: tauri::AppHandle) -> Result<(), CommandError> {
+    use tauri::Emitter;
+    keychain::delete_key()?;
+    let _ = app.emit("redraw-key", false);
+    Ok(())
+}
+
+/// Whether the image looks rough (the inspector's hint).
+#[tauri::command]
+pub async fn image_roughness(state: State<'_, AppState>, id: String) -> Result<Roughness, CommandError> {
+    let bytes = state.images.bytes(&id).ok_or_else(CommandError::expired)?;
+    redraw::blocking(move || {
+        let source = Source::decode(&bytes)?;
+        Ok(redraw::rough::assess(&source.rgba, source.width, source.height))
+    })
+    .await
+}
+
+/// Redraws the image with AI, always from the image as it was opened. The answer waits in `redraws` for Use
+/// redraw, Try again or Discard; nothing about the image changes here. A new request for the image abandons the
+/// one running, and `cancel_redraw` abandons it too: a reply that arrives after either is let go of.
+#[tauri::command]
+pub async fn redraw_image(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> Result<RedrawAnswer, CommandError> {
+    use tauri::{Emitter, Manager};
+    // the image and the key are checked first: with no key nothing is read, built or sent
+    let (source, key) = redraw_start(&state.images, keychain::read_key(), &id)?;
+    let chosen = settings::load(&app);
+    let options = Options { model: Model::parse(&chosen.redraw_model), quality: Quality::parse(&chosen.redraw_quality) };
+    let api = openai::Api::new(&openai::base_url(), &key)?;
+    let (generation, displaced) = state.redraws.reserve(&id);
+    if let Some(old) = displaced {
+        let_go(&state.images, &id, &old);
+    }
+    let (emitter, image_id) = (app.clone(), id.clone());
+    let phase: Arc<dyn Fn(Phase) + Send + Sync> = Arc::new(move |p| {
+        let _ = emitter.emit("redraw-phase", serde_json::json!({ "id": image_id, "phase": p }));
+    });
+    let (handle, task_id, task_phase) = (app.clone(), id.clone(), phase.clone());
+    let task = tauri::async_runtime::spawn(async move {
+        let bytes = source.bytes.clone();
+        let decoded = Arc::new(redraw::blocking(move || Source::decode(&bytes)).await?);
+        let done = redraw::redraw(&api, decoded, options, task_phase).await?;
+        let (opener, name, png) = (handle.clone(), source.name.clone(), done.png);
+        let opened = redraw::blocking(move || intake::open_bytes(&opener.state::<AppState>().core, &name, png)).await?;
+        let state = handle.state::<AppState>();
+        let redraw_id = opened.id.clone();
+        // an id some image already has would share its entry, and letting the redraw go would let the image go
+        let shown = state.images.insert_new(opened).ok_or_else(|| redraw::error("bad_reply"))?;
+        match state.redraws.finish(&task_id, generation, Pending { redraw_id: redraw_id.clone(), drift: done.drift }) {
+            Ok(()) => Ok(RedrawAnswer { redraw: shown, drift: done.drift }),
+            Err(_) => {
+                state.images.remove(&redraw_id);
+                Err(redraw::error("cancelled"))
+            }
+        }
+    });
+    state.redraws.arm(&id, generation, redraw::abort_handle(&task));
+    let answer = task.await.unwrap_or_else(|_| Err(redraw::error("cancelled")));
+    if answer.is_err() {
+        state.redraws.fail(&id, generation);
+    }
+    phase(if answer.is_ok() { Phase::Done } else { Phase::Failed });
+    answer
+}
+
+#[tauri::command]
+pub fn cancel_redraw(state: State<'_, AppState>, id: String) -> bool {
+    state.redraws.cancel(&id)
+}
+
+/// Use redraw: the image's source becomes its redraw; the original is kept for Show Original and Revert.
+#[tauri::command]
+pub fn accept_redraw(state: State<'_, AppState>, id: String) -> Result<Accepted, CommandError> {
+    accept(&state.images, &state.redraws, &id)
+}
+
+/// Discard: the redraw awaiting a decision is let go of; the image is as it was.
+#[tauri::command]
+pub fn discard_redraw(state: State<'_, AppState>, id: String) -> bool {
+    discard(&state.images, &state.redraws, &id)
+}
+
+/// Revert to Original: the image's source is its original again.
+#[tauri::command]
+pub fn revert_redraw(state: State<'_, AppState>, id: String) -> Result<Opened, CommandError> {
+    state.images.revert(&id).ok_or_else(|| CommandError::new(409, "not_redrawn", "This image is not drawn from a redraw."))
+}
+
+#[cfg(test)]
+mod redraw_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn opened(id: &str) -> Opened {
+        Opened { id: id.into(), name: "a.png".into(), path: None, width: 8, height: 4, format: "PNG".into() }
+    }
+
+    fn entry(id: &str, bytes: &[u8]) -> OpenImage {
+        OpenImage { id: id.into(), name: "logo.png".into(), path: Some(PathBuf::from("/pics/logo.png")), width: 8, height: 4, format: "PNG".into(), bytes: Arc::new(bytes.to_vec()), original: None }
+    }
+
+    fn pending(id: &str) -> Pending {
+        Pending { redraw_id: id.into(), drift: Drift { edge_f1: 1.0, delta_e: 0.0, verdict: redraw::drift::Verdict::Close } }
+    }
+
+    /// `a` open, and a redraw `r` of it finished and waiting for a decision.
+    fn waiting() -> (Images, Redraws) {
+        let (images, redraws) = (Images::default(), Redraws::default());
+        images.insert(entry("a", &[1]));
+        let (g, _) = redraws.reserve("a");
+        images.insert(entry("r", &[2]));
+        redraws.finish("a", g, pending("r")).unwrap();
+        (images, redraws)
+    }
+
+    #[test]
+    fn the_answers_are_the_webviews_json() {
+        let drift = Drift { edge_f1: 0.97, delta_e: 1.25, verdict: redraw::drift::Verdict::Close };
+        let v = serde_json::to_value(RedrawAnswer { redraw: opened("r"), drift }).unwrap();
+        assert_eq!(v, serde_json::json!({"redraw": {"id": "r", "name": "a.png", "path": null, "width": 8, "height": 4, "format": "PNG"}, "drift": {"edgeF1": 0.97, "deltaE": 1.25, "verdict": "close"}}));
+        let v = serde_json::to_value(Accepted { image: opened("a"), original: opened("a-original") }).unwrap();
+        assert_eq!((v["image"]["id"].as_str(), v["original"]["id"].as_str()), (Some("a"), Some("a-original")));
+    }
+
+    #[test]
+    fn no_key_is_answered_before_anything_else_is_done() {
+        let images = Images::default();
+        images.insert(entry("a", &[1]));
+        let e = redraw_start(&images, None, "a").unwrap_err();
+        assert_eq!((e.code(), e.status), (Some("no_key"), 401));
+        let e = redraw_start(&images, None, "gone").unwrap_err();
+        assert_eq!(e.code(), Some("image_expired"), "an unknown image is named first");
+        let (source, key) = redraw_start(&images, Some("sk-test".into()), "a").unwrap();
+        assert_eq!((source.id.as_str(), key.as_str()), ("a", "sk-test"));
+    }
+
+    #[test]
+    fn a_redraw_starts_from_the_original_of_a_redrawn_image() {
+        let (images, redraws) = waiting();
+        accept(&images, &redraws, "a").unwrap();
+        let (source, _) = redraw_start(&images, Some("k".into()), "a").unwrap();
+        assert_eq!((source.id.as_str(), source.bytes.as_slice()), ("a-original", &[1][..]));
+    }
+
+    #[test]
+    fn closing_an_image_with_a_decision_pending_leaks_nothing() {
+        let (images, redraws) = waiting();
+        assert_eq!(images.len(), 2);
+        assert!(close(&images, &redraws, "a"));
+        assert!(images.is_empty(), "the redraw's own entry went with the image");
+        assert!(redraws.take_pending("a").is_none());
+        assert!(!close(&images, &redraws, "a"));
+    }
+
+    #[test]
+    fn closing_an_image_mid_redraw_abandons_it_and_a_late_reply_is_let_go_of() {
+        let (images, redraws) = (Images::default(), Redraws::default());
+        images.insert(entry("a", &[1]));
+        let (g, _) = redraws.reserve("a");
+        let aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = aborted.clone();
+        redraws.arm("a", g, Box::new(move || flag.store(true, std::sync::atomic::Ordering::SeqCst)));
+        assert!(close(&images, &redraws, "a"));
+        assert!(aborted.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!redraws.is_running("a"));
+        // the reply that still arrives has nowhere to wait: the task lets its own entry go
+        assert!(redraws.finish("a", g, pending("late")).is_err());
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn closing_a_redrawn_image_lets_its_original_go_too() {
+        let (images, redraws) = waiting();
+        accept(&images, &redraws, "a").unwrap();
+        assert_eq!(images.len(), 2);
+        assert!(close(&images, &redraws, "a"));
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn accept_swaps_once_and_then_has_nothing_waiting() {
+        let (images, redraws) = waiting();
+        let done = accept(&images, &redraws, "a").unwrap();
+        assert_eq!((done.image.id.as_str(), done.original.id.as_str()), ("a", "a-original"));
+        assert_eq!(images.bytes("a").unwrap().as_slice(), &[2]);
+        assert!(images.get("r").is_none());
+        let e = accept(&images, &redraws, "a").unwrap_err();
+        assert_eq!((e.status, e.code()), (409, Some("no_redraw")));
+    }
+
+    #[test]
+    fn a_pending_redraw_that_cannot_be_used_is_still_let_go_of() {
+        let (images, redraws) = (Images::default(), Redraws::default());
+        images.insert(entry("a", &[1]));
+        let (g, _) = redraws.reserve("a");
+        redraws.finish("a", g, pending("a")).unwrap(); // its id is the image's own: never swapped, never removed
+        let e = accept(&images, &redraws, "a").unwrap_err();
+        assert_eq!(e.code(), Some("image_expired"));
+        assert_eq!(images.bytes("a").unwrap().as_slice(), &[1]);
+        // discarding such a redraw does not close the image it shares an id with
+        let g = redraws.reserve("a").0;
+        redraws.finish("a", g, pending("a")).unwrap();
+        assert!(discard(&images, &redraws, "a"));
+        assert!(images.get("a").is_some());
+        let g = redraws.reserve("a").0;
+        redraws.finish("a", g, pending("a")).unwrap();
+        assert!(close(&images, &redraws, "a"));
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn discard_lets_the_waiting_redraw_go_and_leaves_the_image() {
+        let (images, redraws) = waiting();
+        assert!(discard(&images, &redraws, "a"));
+        assert!(images.get("r").is_none());
+        assert_eq!(images.bytes("a").unwrap().as_slice(), &[1]);
+        assert!(!discard(&images, &redraws, "a"));
+    }
+
+    #[test]
+    fn a_new_request_lets_the_waiting_redraw_go() {
+        let (images, redraws) = waiting();
+        let (_, displaced) = redraws.reserve("a");
+        let_go(&images, "a", &displaced.unwrap());
+        assert!(images.get("r").is_none());
+        assert!(images.get("a").is_some());
     }
 }

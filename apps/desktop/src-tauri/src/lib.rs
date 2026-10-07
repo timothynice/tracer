@@ -21,6 +21,8 @@ pub struct AppState {
     pub core: Core,
     pub images: store::Images,
     pub queue: queue::TraceQueue,
+    /// AI redraws in flight and awaiting a decision (redraw/mod.rs).
+    pub redraws: redraw::Redraws,
 }
 
 pub fn run() {
@@ -40,6 +42,7 @@ pub fn run() {
         // (the core keeps the newest alone when nothing fits), not 256 MiB of pixels nobody traces here.
         .manage(AppState { core: Core::with_limits(studi0trace_core::intake::Limits::default(), 0), images: store::Images::default(),
             queue: queue::TraceQueue::new(std::env::current_exe().expect("the app knows where it is")),
+            redraws: redraw::Redraws::default(),
         })
         .invoke_handler(tauri::generate_handler![
             commands::engines,
@@ -61,6 +64,15 @@ pub fn run() {
             commands::confirm_clear,
             commands::take_pending_opens,
             commands::open_settings_window,
+            commands::redraw_key_status,
+            commands::set_redraw_key,
+            commands::delete_redraw_key,
+            commands::image_roughness,
+            commands::redraw_image,
+            commands::cancel_redraw,
+            commands::accept_redraw,
+            commands::discard_redraw,
+            commands::revert_redraw,
         ])
         .setup(|app| {
             use tauri::Manager;

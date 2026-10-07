@@ -44,6 +44,9 @@ pub const MENU: &[Entry] = &[
     e("toggle-inspector", "Show Inspector", Some("Alt+Super+I")),
     e("generate", "Generate Vector", Some("CmdOrCtrl+Enter")),
     e("cancel", "Cancel Trace", Some("CmdOrCtrl+.")),
+    e("redraw", "Redraw with AI…", None),
+    e("show-original", "Show Original", None),
+    e("revert-redraw", "Revert to Original", None),
     e("remove", "Remove Image", Some("CmdOrCtrl+Backspace")),
     e("clear", "Clear All", None),
     e("clear-recent", "Clear Menu", None),
@@ -70,6 +73,10 @@ pub struct MenuState {
     pub mode: String,
     pub sidebar: bool,
     pub inspector: bool,
+    /// The selected image can be redrawn with AI (the Mac app, and no redraw running for it).
+    pub can_redraw: bool,
+    /// The selected image is drawn from an AI redraw.
+    pub is_redraw: bool,
 }
 
 /// For each item the state governs: (id, enabled, checked).
@@ -84,6 +91,9 @@ pub fn plan(s: &MenuState) -> Vec<(&'static str, bool, Option<bool>)> {
         ("reveal", s.has_path, None),
         ("generate", s.has_image && !s.tracing, None),
         ("cancel", s.tracing, None),
+        ("redraw", s.has_image && s.can_redraw, None),
+        ("show-original", s.is_redraw, None),
+        ("revert-redraw", s.is_redraw, None),
         ("remove", s.has_image, None),
         ("clear", s.has_items, None),
         ("zoom-in", s.has_image, None),
@@ -240,6 +250,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
     let image = SubmenuBuilder::new(app, "Image")
         .item(&item("generate")?)
         .item(&item("cancel")?)
+        .separator()
+        .item(&item("redraw")?)
+        .item(&item("show-original")?)
+        .item(&item("revert-redraw")?)
         .separator()
         .item(&item("remove")?)
         .item(&item("clear")?)
@@ -437,6 +451,19 @@ mod tests {
     }
 
     #[test]
+    fn the_redraw_items_follow_the_state() {
+        let get = |p: &[(&'static str, bool, Option<bool>)], id: &str| p.iter().find(|x| x.0 == id).unwrap().1;
+        assert_eq!((entry("redraw").label, entry("show-original").label, entry("revert-redraw").label), ("Redraw with AI…", "Show Original", "Revert to Original"));
+        let none = plan(&MenuState::default());
+        assert!(!get(&none, "redraw") && !get(&none, "show-original") && !get(&none, "revert-redraw"));
+        let s: MenuState = serde_json::from_value(serde_json::json!({"hasImage": true, "canRedraw": true, "isRedraw": false})).unwrap();
+        let p = plan(&s);
+        assert!(get(&p, "redraw") && !get(&p, "show-original") && !get(&p, "revert-redraw"));
+        let p = plan(&MenuState { is_redraw: true, ..s });
+        assert!(get(&p, "show-original") && get(&p, "revert-redraw"));
+    }
+
+    #[test]
     fn quit_is_ours_and_reads_what_the_ui_reports() {
         let q = entry("quit");
         assert_eq!((q.label, q.accel), ("Quit Studi0Trace", Some("CmdOrCtrl+Q")));
@@ -459,7 +486,7 @@ mod tests {
 
     #[test]
     fn only_the_commands_that_act_on_the_image_wait_for_the_main_window() {
-        for id in ["remove", "clear", "generate", "cancel", "export-svg", "export-png-2", "export-all", "copy-svg", "reveal", "zoom-in", "zoom-fit", "mode-split", "mode-vector", "toggle-sidebar", "toggle-inspector"] {
+        for id in ["remove", "clear", "generate", "cancel", "export-svg", "export-png-2", "export-all", "copy-svg", "reveal", "zoom-in", "zoom-fit", "mode-split", "mode-vector", "toggle-sidebar", "toggle-inspector", "redraw", "show-original", "revert-redraw"] {
             assert!(acts_on_document(id), "{id}");
         }
         for id in ["open", "settings", "help", "recent:0", "recent:9", "quit", "check-updates", "acknowledgements", "clear-recent"] {
