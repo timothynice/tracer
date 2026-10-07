@@ -188,7 +188,13 @@ mod tests {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient><filter id="b"><feGaussianBlur stdDeviation="2"/></filter></defs><rect width="64" height="64" fill="url(#g)"/><circle cx="32" cy="32" r="10" filter="url(#b)"/></svg>"##;
         let pdf = to_pdf(svg.as_bytes()).unwrap();
         assert!(pdf.starts_with(b"%PDF-"));
-        assert!(pdf.len() > 500);
+        let text = String::from_utf8_lossy(&pdf);
+        // the gradient is a PDF shading, still a vector; the blur is a raster image, the one thing a PDF cannot draw
+        assert!(text.contains("/ShadingType"), "the gradient should be a shading");
+        assert!(text.contains("/Subtype /Image") || text.contains("/Subtype/Image"), "the filter should be rasterised");
+        if let Ok(path) = std::env::var("STUDI0TRACE_DUMP_PDF") {
+            std::fs::write(path, &pdf).unwrap();
+        }
     }
 
     #[test]
