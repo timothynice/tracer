@@ -7,6 +7,7 @@ pub mod menu;
 pub mod opens;
 pub mod queue;
 pub mod quit;
+pub mod redraw;
 pub mod settings;
 pub mod store;
 pub mod updates;
