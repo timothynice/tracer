@@ -120,7 +120,19 @@ pub async fn export_file(app: tauri::AppHandle, state: State<'_, AppState>, requ
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err(CommandError::bad_request("export_file takes the file's bytes"));
     };
-    let ext = if header(&request, "x-kind").as_deref() == Some("png") { "png" } else { "svg" };
+    let ext = match header(&request, "x-kind").as_deref() {
+        Some("png") => "png",
+        Some("pdf") => "pdf",
+        _ => "svg",
+    };
+    // a PDF arrives as the SVG's text and is converted here, before anything is written
+    let converted;
+    let bytes: &[u8] = if ext == "pdf" {
+        converted = export::to_pdf(bytes)?;
+        &converted
+    } else {
+        bytes
+    };
     let name = export::safe_name(&header(&request, "x-name").unwrap_or_default(), ext);
     let original = header(&request, "x-image").and_then(|id| state.images.get(&id)).and_then(|i| i.path);
     let destination = export::Destination::parse(&header(&request, "x-destination").unwrap_or_default());
@@ -151,11 +163,20 @@ pub async fn export_file(app: tauri::AppHandle, state: State<'_, AppState>, requ
             "Studi0Trace cannot save next to the original. Choose where to save."
         } else if ext == "png" {
             "Export PNG"
+        } else if ext == "pdf" {
+            "Export PDF"
         } else {
             "Export SVG"
         })
         .set_file_name(export::panel_name(&name, original.as_deref()))
-        .add_filter(if ext == "png" { "PNG image" } else { "SVG image" }, &[ext]);
+        .add_filter(
+            match ext {
+                "png" => "PNG image",
+                "pdf" => "PDF document",
+                _ => "SVG image",
+            },
+            &[ext],
+        );
     if let Some(dir) = original.as_deref().and_then(Path::parent).filter(|d| d.is_dir()) {
         panel = panel.set_directory(dir);
     }

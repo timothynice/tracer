@@ -26,6 +26,7 @@ pub const MENU: &[Entry] = &[
     e("quit", "Quit Studi0Trace", Some("CmdOrCtrl+Q")),
     e("open", "Open…", Some("CmdOrCtrl+O")),
     e("export-svg", "Export SVG…", Some("CmdOrCtrl+E")),
+    e("export-pdf", "Export PDF…", None),
     e("export-png-1", "1×…", None),
     e("export-png-2", "2×…", Some("Shift+CmdOrCtrl+E")),
     e("export-png-4", "4×…", None),
@@ -83,6 +84,7 @@ pub struct MenuState {
 pub fn plan(s: &MenuState) -> Vec<(&'static str, bool, Option<bool>)> {
     let mut out = vec![
         ("export-svg", s.has_vector, None),
+        ("export-pdf", s.has_vector, None),
         ("export-png-1", s.has_vector, None),
         ("export-png-2", s.has_vector, None),
         ("export-png-4", s.has_vector, None),
@@ -223,6 +225,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recent: &[String]) -> tauri::Result
         .item(&recent_menu)
         .separator()
         .item(&item("export-svg")?)
+        .item(&item("export-pdf")?)
         .item(&png)
         .item(&item("export-all")?)
         .separator()
@@ -422,10 +425,12 @@ mod tests {
         let none = plan(&MenuState::default());
         let get = |p: &[(&'static str, bool, Option<bool>)], id: &str| *p.iter().find(|x| x.0 == id).unwrap();
         assert_eq!(get(&none, "export-svg"), ("export-svg", false, None));
+        assert_eq!(get(&none, "export-pdf"), ("export-pdf", false, None));
         assert_eq!(get(&none, "generate"), ("generate", false, None));
         let s = MenuState { has_items: true, has_image: true, has_vector: true, any_vector: true, has_path: true, mode: "side".into(), sidebar: true, ..MenuState::default() };
         let p = plan(&s);
         assert!(get(&p, "export-svg").1);
+        assert!(get(&p, "export-pdf").1);
         assert!(get(&p, "reveal").1);
         assert!(get(&p, "generate").1);
         assert!(!get(&p, "cancel").1);

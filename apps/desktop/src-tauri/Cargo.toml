@@ -41,6 +41,9 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 futures-util = { version = "0.3", default-features = false }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# PDF export (export.rs): a vector PDF from the SVG, gradients kept; `filters` rasterises a blur through resvg.
+# No `text`: the engine writes no text, and fonts would bring fontdb.
+svg2pdf = { version = "0.13", default-features = false, features = ["filters"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # already in the tree through tao; used only to answer applicationShouldTerminate: (quit.rs)

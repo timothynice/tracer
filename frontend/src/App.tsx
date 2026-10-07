@@ -98,7 +98,7 @@ function MainWindow() {
 
 const VIEW_KEY = "studi0trace.view";
 // the commands that read the parameters or the traced SVG, which a number field still being typed in has not yet committed
-const READS_SETTINGS = new Set<Command>(["generate", "export-svg", "export-png-1", "export-png-2", "export-png-4", "export-all", "copy-svg"]);
+const READS_SETTINGS = new Set<Command>(["generate", "export-svg", "export-pdf", "export-png-1", "export-png-2", "export-png-4", "export-all", "copy-svg"]);
 const MODES: ViewMode[] = ["split", "side", "overlay", "vector"];
 
 function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; settings: Settings; onSettingsChange: (next: Settings) => void }) {
@@ -264,6 +264,8 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
           return openSettings();
         case "export-svg":
           return void exports.exportImage("svg", 1);
+        case "export-pdf":
+          return void exports.exportImage("pdf", 1);
         case "export-png-1":
           return void exports.exportImage("png", 1);
         case "export-png-2":
@@ -391,7 +393,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
           />
         ) : undefined
       }
-      exportMenu={<ExportMenu canExport={!!layers.exportSvg} anyVector={anyVector} onExport={(k, s) => void exports.exportImage(k, s)} onCopy={() => void exports.copySvg()} onExportAll={() => void exports.exportAll()} />}
+      exportMenu={<ExportMenu canExport={!!layers.exportSvg} anyVector={anyVector} canPdf={platform.canExportPdf} onExport={(k, s) => void exports.exportImage(k, s)} onCopy={() => void exports.copySvg()} onExportAll={() => void exports.exportAll()} />}
     />
   ) : (
     <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground">Open an image to vectorize it.</div>

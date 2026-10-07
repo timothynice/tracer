@@ -1,16 +1,20 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ChevronDown, Download } from "lucide-react";
 
+import type { ExportKind } from "@/platform";
+
 export interface ExportMenuProps {
   canExport: boolean;
   anyVector: boolean;
-  onExport: (kind: "svg" | "png", scale: number) => void;
+  /** Whether this platform can write a PDF (the Mac app). */
+  canPdf: boolean;
+  onExport: (kind: ExportKind, scale: number) => void;
   onCopy: () => void;
   onExportAll: () => void;
 }
 
-/** Export SVG, with the rest a click away: PNG at three sizes, Copy SVG, Export All. */
-export function ExportMenu({ canExport, anyVector, onExport, onCopy, onExportAll }: ExportMenuProps) {
+/** Export SVG, with the rest a click away: PDF, PNG at three sizes, Copy SVG, Export All. */
+export function ExportMenu({ canExport, anyVector, canPdf, onExport, onCopy, onExportAll }: ExportMenuProps) {
   return (
     <div className="flex">
       <button type="button" className="mac-button h-9 flex-1 rounded-r-none" disabled={!canExport} onClick={() => onExport("svg", 1)} title="Export SVG… (⌘E)">
@@ -27,6 +31,9 @@ export function ExportMenu({ canExport, anyVector, onExport, onCopy, onExportAll
           <DropdownMenu.Content align="end" sideOffset={6} className="mac-menu">
             <DropdownMenu.Item className="mac-menu-item" disabled={!canExport} onSelect={() => onExport("svg", 1)}>
               Export SVG…<span className="mac-menu-shortcut">⌘E</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="mac-menu-item" disabled={!canExport || !canPdf} onSelect={() => onExport("pdf", 1)}>
+              Export PDF…
             </DropdownMenu.Item>
             {[1, 2, 4].map((s) => (
               <DropdownMenu.Item key={s} className="mac-menu-item" disabled={!canExport} onSelect={() => onExport("png", s)}>
