@@ -5,9 +5,17 @@
 //! `rough` (the inspector's hint), `drift` (how far a redraw moved the image), `openai` (the request and its
 //! reply); this file holds the error words, the pipeline and the jobs in flight.
 use crate::error::CommandError;
+use image::ExtendedColorType;
+use serde::Serialize;
+use std::sync::Arc;
+use studi0trace_core::api::ApiError;
+use studi0trace_core::color::rgb_on_white;
+use studi0trace_core::intake::{self, Limits};
+use studi0trace_core::resample::{resize_rgba, Filter};
 
 pub mod drift;
 pub mod geometry;
+pub mod openai;
 pub mod rough;
 
 /// An image whose longest side is under this many pixels looks rough.
@@ -81,6 +89,103 @@ pub fn error(code: &'static str) -> CommandError {
     CommandError::new(status, code, message)
 }
 
+/// Where a redraw is (the `redraw-phase` event's `phase`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    Uploading,
+    Drawing,
+    Checking,
+    Done,
+    Failed,
+}
+
+/// What the settings ask of OpenAI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    pub model: Model,
+    pub quality: Quality,
+}
+
+/// A decoded image, RGBA.
+#[derive(Debug, Clone)]
+pub struct Source {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Source {
+    /// An open image's bytes, decoded by the core's intake (its own refusal if they will not decode).
+    pub fn decode(bytes: &[u8]) -> Result<Source, CommandError> {
+        let image = intake::load(bytes, Limits::default()).map_err(|e| CommandError::from(ApiError::from(e)))?;
+        Ok(Source { rgba: image.rgba, width: image.width, height: image.height })
+    }
+}
+
+/// A reply may be larger than an upload may be (up to 3840 px a side).
+const REPLY_LIMITS: Limits = Limits { max_bytes: 64 * 1024 * 1024, max_pixels: 40_000_000, max_side: None };
+
+/// A finished redraw: an opaque PNG in the original's framing, and its drift from the original.
+#[derive(Debug, Clone)]
+pub struct Redrawn {
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub drift: drift::Drift,
+}
+
+fn encode_png(pixels: &[u8], w: u32, h: u32, colour: ExtendedColorType) -> Result<Vec<u8>, CommandError> {
+    use image::ImageEncoder;
+    let mut out = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut out).write_image(pixels, w, h, colour).map_err(|e| CommandError::crashed(format!("the PNG could not be written: {e}")))?;
+    Ok(out)
+}
+
+/// What is sent: the source on white (a transparent one loses its alpha, which is not restored), padded with its
+/// border colour to the plan's canvas, as PNG.
+pub fn prepare(source: &Source, model: Model) -> Result<(geometry::Plan, Vec<u8>), CommandError> {
+    let rgb = rgb_on_white(&source.rgba);
+    let plan = geometry::plan(model, source.width, source.height);
+    let colour = geometry::border_colour(&rgb, source.width, source.height);
+    let padded = geometry::pad_rgb(&rgb, source.width, source.height, plan.pad, colour);
+    let png = encode_png(&padded, plan.pad.width, plan.pad.height, ExtendedColorType::Rgb8)?;
+    if png.len() > openai::MAX_REQUEST_BYTES {
+        return Err(error("too_large"));
+    }
+    Ok((plan, png))
+}
+
+/// The reply in the original's framing: the original's rectangle found in it, resized once (Lanczos) to the final
+/// size, its drift measured, encoded as an opaque PNG.
+pub fn finish(source: &Source, plan: geometry::Plan, reply_png: &[u8]) -> Result<Redrawn, CommandError> {
+    let reply = intake::load(reply_png, REPLY_LIMITS).map_err(|_| error("bad_reply"))?;
+    let rect = geometry::crop_back(plan.pad, source.width, source.height, reply.width, reply.height);
+    let cropped = geometry::crop_rgba(&reply.rgba, reply.width, rect);
+    let (fw, fh) = geometry::final_size(source.width, source.height);
+    let out = resize_rgba(&cropped, rect.width, rect.height, fw, fh, Filter::Lanczos).map_err(|_| error("bad_reply"))?;
+    let drift = drift::measure(&source.rgba, source.width, source.height, &out, fw, fh)?;
+    let png = encode_png(&rgb_on_white(&out), fw, fh, ExtendedColorType::Rgb8)?;
+    Ok(Redrawn { png, width: fw, height: fh, drift })
+}
+
+/// `f` on the blocking pool (the pixels and the drift are not work for the async runtime's threads).
+pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, CommandError> + Send + 'static) -> Result<T, CommandError> {
+    tauri::async_runtime::spawn_blocking(f).await.unwrap_or_else(|e| Err(CommandError::crashed(e)))
+}
+
+/// The whole redraw of `source`: prepared, sent, cropped back and measured, with each phase reported.
+pub async fn redraw(api: &openai::Api, source: Arc<Source>, options: Options, phase: Arc<dyn Fn(Phase) + Send + Sync>) -> Result<Redrawn, CommandError> {
+    phase(Phase::Uploading);
+    let src = source.clone();
+    let (plan, png) = blocking(move || prepare(&src, options.model)).await?;
+    let sent = phase.clone();
+    let request = openai::EditRequest { png, width: plan.request.0, height: plan.request.1, model: options.model, quality: options.quality };
+    let reply = api.edit(request, move || sent(Phase::Drawing)).await?;
+    phase(Phase::Checking);
+    blocking(move || finish(&source, plan, &reply)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +221,70 @@ mod tests {
             assert!(!e.message().is_empty() && !e.message().contains("sk-"), "{code}");
         }
         assert!(error("quota").message().to_lowercase().contains("your openai account is out of credit or rate limited"));
+    }
+
+    /// A 400 x 100 RGBA source: a blue bar (x 50..350, y 30..70) on `ground`.
+    fn bar_source(ground: [u8; 4]) -> Source {
+        let rgba = (0..400u32 * 100)
+            .flat_map(|i| -> [u8; 4] {
+                let (x, y) = (i % 400, i / 400);
+                if (50..350).contains(&x) && (30..70).contains(&y) {
+                    [0, 80, 200, 255]
+                } else {
+                    ground
+                }
+            })
+            .collect();
+        Source { rgba, width: 400, height: 100 }
+    }
+
+    fn rgb_png(w: u32, h: u32, colour: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_fn(w, h, |x, y| image::Rgb(colour(x, y))).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn a_transparent_source_is_sent_on_white_padded_with_its_border_colour() {
+        let (plan, png) = prepare(&bar_source([0, 0, 0, 0]), Model::GptImage2).unwrap();
+        assert_eq!(plan.pad, geometry::Pad { left: 0, top: 17, width: 400, height: 134 });
+        assert_eq!(plan.request, (2048, 688));
+        let sent = image::load_from_memory(&png).unwrap().to_rgb8();
+        assert_eq!(sent.dimensions(), (400, 134));
+        assert_eq!(sent.get_pixel(0, 0).0, [255, 255, 255]); // padding: the border colour, white
+        assert_eq!(sent.get_pixel(5, 20).0, [255, 255, 255]); // the transparent ground, on white
+        assert_eq!(sent.get_pixel(200, 17 + 50).0, [0, 80, 200]);
+    }
+
+    #[test]
+    fn a_reply_comes_back_in_the_original_framing_at_the_largest_size() {
+        let source = bar_source([255, 255, 255, 255]);
+        let (plan, _) = prepare(&source, Model::GptImage2).unwrap();
+        // what a faithful model would draw at 2048 x 688: the padded source, scaled
+        let reply = rgb_png(2048, 688, |x, y| {
+            let (px, py) = ((f64::from(x) + 0.5) * 400.0 / 2048.0, (f64::from(y) + 0.5) * 134.0 / 688.0 - 17.0);
+            if (50.0..350.0).contains(&px) && (30.0..70.0).contains(&py) {
+                [0, 80, 200]
+            } else {
+                [255, 255, 255]
+            }
+        });
+        let done = finish(&source, plan, &reply).unwrap();
+        assert_eq!((done.width, done.height), (2048, 512));
+        assert_eq!(image::load_from_memory(&done.png).unwrap().to_rgb8().dimensions(), (2048, 512));
+        assert_eq!(done.drift.verdict, drift::Verdict::Close, "{:?}", done.drift);
+    }
+
+    #[test]
+    fn a_reply_that_is_not_an_image_is_a_bad_reply() {
+        let source = bar_source([255, 255, 255, 255]);
+        let (plan, _) = prepare(&source, Model::GptImage2).unwrap();
+        assert_eq!(finish(&source, plan, b"not a png").err().and_then(|e| e.code().map(str::to_string)).as_deref(), Some("bad_reply"));
+    }
+
+    #[test]
+    fn phases_are_the_events_words() {
+        let words: Vec<_> = [Phase::Uploading, Phase::Drawing, Phase::Checking, Phase::Done, Phase::Failed].iter().map(|p| serde_json::to_value(p).unwrap()).collect();
+        assert_eq!(words, ["uploading", "drawing", "checking", "done", "failed"]);
     }
 }

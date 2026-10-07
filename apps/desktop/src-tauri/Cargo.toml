@@ -32,11 +32,19 @@ studi0trace-core = { path = "../../../crates/studi0trace-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
+# AI redraw (src/redraw/): the reqwest tauri-plugin-updater already brings, on the same TLS stack (rustls with ring
+# and the platform verifier). No default features: they would add aws-lc-rs, a second crypto provider with C in it.
+# `multipart` for the image edit, `stream` to know when the upload has gone.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "multipart", "stream"] }
+# the provider the updater installs; redraw/openai.rs installs it when it comes first
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+futures-util = { version = "0.3", default-features = false }
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # already in the tree through tao; used only to answer applicationShouldTerminate: (quit.rs)
 objc2 = "0.6"
 
 [dev-dependencies]
-image = { version = "0.25", default-features = false, features = ["png"] }
 muda = "0.20"
