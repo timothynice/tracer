@@ -215,4 +215,93 @@ describe("native platform", () => {
     expect(settings).toEqual([{ ...DEFAULT_SETTINGS, appearance: "dark" }]);
     expect(p.windowRole()).toBe("main");
   });
+  it("redraws through the app: this image's phases, the redraw's preview and its drift", async () => {
+    const redraw = { ...opened, id: "r".repeat(32), path: null, width: 128, height: 64 };
+    let finish: (v: unknown) => void = () => {};
+    ipc((cmd) => {
+      if (cmd === "redraw_image") return new Promise((r) => (finish = r));
+      if (cmd === "read_image") return new Uint8Array([7]).buffer;
+      return null;
+    });
+    const p = nativePlatform();
+    const phases: string[] = [];
+    const done = p.redrawImage(opened.id, { signal: new AbortController().signal, onPhase: (ph) => phases.push(ph) });
+    await new Promise((r) => setTimeout(r, 0));
+    await emit("redraw-phase", { id: "other", phase: "drawing" });
+    await emit("redraw-phase", { id: opened.id, phase: "uploading" });
+    await emit("redraw-phase", { id: opened.id, phase: "drawing" });
+    finish({ redraw, drift: { edgeF1: 0.97, deltaE: 1.2, verdict: "close" } });
+    const result = await done;
+    expect(phases).toEqual(["uploading", "drawing"]);
+    expect(result.redraw).toMatchObject({ ...redraw, previewUrl: expect.stringMatching(/^blob:/) });
+    expect(result.drift).toEqual({ edgeF1: 0.97, deltaE: 1.2, verdict: "close" });
+    expect(calls.find((c) => c.cmd === "redraw_image")?.payload).toEqual({ id: opened.id });
+    expect(calls.find((c) => c.cmd === "read_image")?.payload).toEqual({ id: redraw.id });
+  });
+
+  it("a cancel abandons the redraw and discards a reply that still arrives", async () => {
+    let finish: (v: unknown) => void = () => {};
+    ipc((cmd) => (cmd === "redraw_image" ? new Promise((r) => (finish = r)) : true));
+    const p = nativePlatform();
+    const ctl = new AbortController();
+    const done = p.redrawImage("i", { signal: ctl.signal });
+    await new Promise((r) => setTimeout(r, 0));
+    ctl.abort();
+    finish({ redraw: { ...opened, id: "late" }, drift: { edgeF1: 1, deltaE: 0, verdict: "close" } });
+    await expect(done).rejects.toMatchObject({ code: "cancelled" });
+    expect(calls.find((c) => c.cmd === "cancel_redraw")?.payload).toEqual({ id: "i" });
+    expect(calls.find((c) => c.cmd === "discard_redraw")?.payload).toEqual({ id: "i" });
+    expect(calls.some((c) => c.cmd === "read_image")).toBe(false);
+  });
+
+  it("Use redraw re-keys the previews: the image shows the redraw, the original keeps its own; Revert swaps back", async () => {
+    const redraw = { ...opened, id: "r".repeat(32), path: null, width: 128, height: 64 };
+    const original = { ...opened, id: `${opened.id}-original` };
+    ipc((cmd) => {
+      if (cmd === "open_paths") return [{ ok: opened }];
+      if (cmd === "read_image") return new Uint8Array([1]).buffer;
+      if (cmd === "redraw_image") return { redraw, drift: { edgeF1: 0.9, deltaE: 3, verdict: "noticeable" } };
+      if (cmd === "accept_redraw") return { image: { ...opened, width: 128, height: 64 }, original };
+      if (cmd === "revert_redraw") return opened;
+      return null;
+    });
+    let n = 0;
+    const create = vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:${(n += 1)}`);
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const p = nativePlatform();
+    const [first] = await p.openPaths([opened.path!]);
+    if (!("ok" in first)) throw new Error("shape");
+    const r = await p.redrawImage(opened.id, { signal: new AbortController().signal });
+    const accepted = await p.acceptRedraw(opened.id);
+    expect(accepted.image).toMatchObject({ id: opened.id, width: 128, previewUrl: r.redraw.previewUrl });
+    expect(accepted.original).toMatchObject({ id: original.id, previewUrl: first.ok.previewUrl });
+    const back = await p.revertRedraw(opened.id);
+    expect(back).toMatchObject({ id: opened.id, width: 64, previewUrl: first.ok.previewUrl });
+    expect(revoke).toHaveBeenCalledWith(r.redraw.previewUrl);
+    expect(calls.filter((c) => c.cmd === "read_image")).toHaveLength(2); // the original and the redraw, once each
+    create.mockRestore();
+    revoke.mockRestore();
+  });
+
+  it("keeps the key in the app: status, set and delete are commands, and the key is never read back", async () => {
+    ipc((cmd) => (cmd === "redraw_key_status" ? false : null));
+    const p = nativePlatform();
+    await expect(p.redrawKeyStatus()).resolves.toBe(false);
+    await p.setRedrawKey("sk-test-123");
+    await p.deleteRedrawKey();
+    expect(calls.map((c) => c.cmd)).toEqual(["redraw_key_status", "set_redraw_key", "delete_redraw_key"]);
+    expect(calls[1].payload).toEqual({ key: "sk-test-123" });
+    const stored: boolean[] = [];
+    const off = p.onRedrawKey((s) => stored.push(s));
+    await new Promise((r) => setTimeout(r, 0));
+    await emit("redraw-key", true);
+    off();
+    expect(stored).toEqual([true]);
+  });
+
+  it("asks the app whether an image looks rough", async () => {
+    ipc((cmd) => (cmd === "image_roughness" ? { rough: true, reason: "doubled" } : null));
+    await expect(nativePlatform().imageRoughness("i")).resolves.toEqual({ rough: true, reason: "doubled" });
+    expect(calls[0]).toEqual({ cmd: "image_roughness", payload: { id: "i" } });
+  });
 });

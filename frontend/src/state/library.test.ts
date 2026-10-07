@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, type EngineDescription, type Preset, type VectorizeResponse } from "@/lib/api";
 import { paramsKey } from "@/lib/schema";
-import type { OpenOutcome, Phase, Platform, TraceRequest } from "@/platform/types";
+import type { Drift, OpenOutcome, Phase, Platform, RedrawPhase, RedrawResult, TraceRequest } from "@/platform/types";
 import { DEFAULT_SETTINGS } from "@/platform/types";
-import { createLibrary, DEBOUNCE_MS, errorOf, needsUpdate, traceKey, unexportedCount, type Catalog } from "./library";
+import { createLibrary, DEBOUNCE_MS, errorOf, needsUpdate, NO_REDRAW, traceKey, unexportedCount, type Catalog } from "./library";
 
 const ENGINE: EngineDescription = {
   id: "vexel",
@@ -465,5 +465,218 @@ describe("library", () => {
     lib.add([ok("b")]);
     expect(seen).toHaveLength(2);
     expect(seen[0]).not.toBe(seen[1]);
+  });
+});
+
+const DRIFT: Drift = { edgeF1: 0.59, deltaE: 3.8, verdict: "large" };
+const RESULT: RedrawResult = { redraw: { ...image("r1"), width: 128, height: 64, previewUrl: "blob:r1" }, drift: DRIFT };
+
+function redrawPlatform() {
+  const base = fakePlatform();
+  let finish: (r: RedrawResult) => void = () => {};
+  let failWith: (e: unknown) => void = () => {};
+  const signals: AbortSignal[] = [];
+  const platform = {
+    ...base.platform,
+    imageRoughness: vi.fn(async () => ({ rough: true, reason: "small" as const })),
+    redrawImage: vi.fn((_id: string, opts: { signal: AbortSignal; onPhase?: (p: RedrawPhase) => void }) => {
+      signals.push(opts.signal);
+      opts.onPhase?.("drawing");
+      return new Promise<RedrawResult>((resolve, reject) => {
+        finish = resolve;
+        failWith = reject;
+      });
+    }),
+    acceptRedraw: vi.fn(async (id: string) => ({ image: { ...image(id), previewUrl: "blob:redraw", width: 128, height: 64 }, original: { ...image(id), id: `${id}-original` } })),
+    discardRedraw: vi.fn(async () => {}),
+    revertRedraw: vi.fn(async (id: string) => image(id)),
+  };
+  return { calls: base.calls, platform, signals, finish: (r: RedrawResult) => finish(r), fail: (e: unknown) => failWith(e) };
+}
+
+describe("library: AI redraw", () => {
+  it("asks once whether an image looks rough", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    lib.checkRough("a");
+    lib.checkRough("a");
+    await flush();
+    expect(r.platform.imageRoughness).toHaveBeenCalledTimes(1);
+    expect(lib.getState().items[0].rough).toEqual({ rough: true, reason: "small" });
+  });
+
+  it("reports the redraw's phase, then keeps it waiting for a decision without touching the image", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    const done = lib.redraw("a");
+    expect(lib.getState().items[0].redraw).toMatchObject({ phase: "drawing", pending: null });
+    r.finish(RESULT);
+    await expect(done).resolves.toBeNull();
+    expect(lib.getState().items[0].redraw).toMatchObject({ phase: null, pending: RESULT, active: false });
+    expect(lib.getState().items[0].image.previewUrl).toBe("blob:a");
+  });
+
+  it("hands back no_key for the consent sheet and keeps no error for it", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    const done = lib.redraw("a");
+    r.fail(new ApiError("no_key", "Add your OpenAI API key to use AI redraw.", 401));
+    expect((await done)?.code).toBe("no_key");
+    expect(lib.getState().items[0].redraw).toMatchObject({ phase: null, error: null });
+  });
+
+  it("keeps other failures by code; a cancel is silent", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    let done = lib.redraw("a");
+    r.fail(new ApiError("quota", "Your OpenAI account is out of credit or rate limited.", 429));
+    expect(await done).toBeNull();
+    expect(lib.getState().items[0].redraw?.error?.code).toBe("quota");
+    done = lib.redraw("a");
+    lib.cancelRedraw("a");
+    expect(r.signals.at(-1)!.aborted).toBe(true);
+    r.fail(new ApiError("cancelled", "The redraw was cancelled", 499));
+    await done;
+    expect(lib.getState().items[0].redraw).toMatchObject({ phase: null, error: null });
+  });
+
+  it("Use redraw swaps the source, keeps the original's traces and traces again when Trace on open is set", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    lib.generate("a");
+    r.calls[0].resolve(response("<svg>original</svg>", 100));
+    await flush();
+    lib.setSettings({ ...DEFAULT_SETTINGS, traceOnOpen: true });
+    const done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    await lib.acceptRedraw("a");
+    const item = lib.getState().items[0];
+    expect(r.platform.acceptRedraw).toHaveBeenCalledWith("a");
+    expect(item.image).toMatchObject({ id: "a", previewUrl: "blob:redraw", width: 128 });
+    expect(item.redraw).toMatchObject({ active: true, pending: null, drift: DRIFT, original: { id: "a-original" } });
+    expect(item.redraw?.kept?.traces.auto?.svg).toBe("<svg>original</svg>");
+    expect(item.shown).toBeNull();
+    expect(r.platform.vectorize).toHaveBeenCalledTimes(2);
+    expect(r.calls[1].req.imageId).toBe("a");
+  });
+
+  it("Revert brings the original back with its traces", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    lib.generate("a");
+    r.calls[0].resolve(response("<svg>original</svg>", 100));
+    await flush();
+    const done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    await lib.acceptRedraw("a");
+    await lib.revertRedraw("a");
+    const item = lib.getState().items[0];
+    expect(r.platform.revertRedraw).toHaveBeenCalledWith("a");
+    expect(item.image.previewUrl).toBe("blob:a");
+    expect(item.redraw).toEqual(NO_REDRAW);
+    expect(item.shown).toBe("auto");
+    expect(item.traces.auto.svg).toBe("<svg>original</svg>");
+    expect(item.rough).toBeUndefined();
+  });
+
+  it("Discard drops the waiting redraw; Try again replaces it", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    let done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    lib.discardRedraw("a");
+    expect(r.platform.discardRedraw).toHaveBeenCalledWith("a");
+    expect(lib.getState().items[0].redraw?.pending).toBeNull();
+    expect(lib.getState().items[0].image.previewUrl).toBe("blob:a");
+    done = lib.redraw("a");
+    r.finish(RESULT);
+    await done;
+    done = lib.redraw("a"); // Try again
+    expect(lib.getState().items[0].redraw?.pending).toBeNull();
+    r.finish({ ...RESULT, drift: { ...DRIFT, verdict: "close" } });
+    await done;
+    expect(lib.getState().items[0].redraw?.pending?.drift.verdict).toBe("close");
+  });
+
+  it("removing an image abandons its redraw", () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    void lib.redraw("a");
+    lib.remove("a");
+    expect(r.signals[0].aborted).toBe(true);
+  });
+
+  it("keeps not_allowed and engine_crashed by code, with their words", async () => {
+    const r = redrawPlatform();
+    const lib = createLibrary(r.platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    let done = lib.redraw("a");
+    r.fail(new ApiError("not_allowed", "OpenAI did not allow this key to create images.", 403));
+    expect(await done).toBeNull();
+    expect(lib.getState().items[0].redraw?.error).toMatchObject({ code: "not_allowed", status: 403 });
+    done = lib.redraw("a");
+    expect(lib.getState().items[0].redraw?.error).toBeNull();
+    r.fail(new ApiError("engine_crashed", "the redraw stopped unexpectedly", 500));
+    await done;
+    expect(lib.getState().items[0].redraw?.error?.code).toBe("engine_crashed");
+  });
+
+  it("ignores phase events once the redraw is not running, and terminal phases never show", async () => {
+    const base = fakePlatform();
+    let emit: (p: RedrawPhase) => void = () => {};
+    let finish: (r: RedrawResult) => void = () => {};
+    const platform = {
+      ...base.platform,
+      redrawImage: vi.fn((_id: string, opts: { signal: AbortSignal; onPhase?: (p: RedrawPhase) => void }) => {
+        emit = (p) => opts.onPhase?.(p);
+        return new Promise<RedrawResult>((resolve) => (finish = resolve));
+      }),
+    };
+    const lib = createLibrary(platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    const done = lib.redraw("a");
+    emit("drawing");
+    expect(lib.getState().items[0].redraw?.phase).toBe("drawing");
+    emit("failed");
+    expect(lib.getState().items[0].redraw?.phase).toBe("drawing");
+    lib.cancelRedraw("a");
+    emit("checking");
+    expect(lib.getState().items[0].redraw?.phase).toBeNull();
+    finish(RESULT);
+    await done;
+    expect(lib.getState().items[0].redraw).toMatchObject({ phase: null, pending: null });
+  });
+
+  it("a redraw superseded by Try again is silent and does not touch the new one", async () => {
+    const base = fakePlatform();
+    const jobs: { resolve: (r: RedrawResult) => void; reject: (e: unknown) => void }[] = [];
+    const platform = {
+      ...base.platform,
+      redrawImage: vi.fn((_id: string, opts: { onPhase?: (p: RedrawPhase) => void }) => {
+        opts.onPhase?.("drawing");
+        return new Promise<RedrawResult>((resolve, reject) => jobs.push({ resolve, reject }));
+      }),
+    };
+    const lib = createLibrary(platform, CATALOG, DEFAULT_SETTINGS);
+    lib.add([ok("a")]);
+    const first = lib.redraw("a");
+    const second = lib.redraw("a");
+    jobs[0].reject(new ApiError("cancelled", "The redraw was cancelled", 499));
+    expect(await first).toBeNull();
+    expect(lib.getState().items[0].redraw).toMatchObject({ phase: "drawing", error: null });
+    jobs[1].resolve(RESULT);
+    await second;
+    expect(lib.getState().items[0].redraw?.pending).toEqual(RESULT);
   });
 });

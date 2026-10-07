@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ApiError, apiErrorFromBody, type EngineDescription, type Preset, type VectorizeResponse } from "@/lib/api";
-import { DEFAULT_SETTINGS, type ExportAllResult, type MenuCommand, type OpenFailure, type OpenOutcome, type Platform, type Settings } from "./types";
+import { DEFAULT_SETTINGS, type Drift, type ExportAllResult, type MenuCommand, type OpenFailure, type OpenOutcome, type Platform, type RedrawPhase, type Roughness, type Settings } from "./types";
 
 interface CommandError {
   status: number;
@@ -63,8 +63,18 @@ async function listening<T>(event: string, cb: (payload: T) => void): Promise<()
   return listen<T>(event, (e) => cb(e.payload));
 }
 
+const redrawCancelled = () => new ApiError("cancelled", "The redraw was cancelled", 499);
+
 export function nativePlatform(): Platform {
   const previews = new Map<string, string>();
+  // AI redraw: the redraw waiting for a decision, by image, and the entry that keeps an image's original while its source is a redraw
+  const pendingRedraws = new Map<string, string>();
+  const originals = new Map<string, string>();
+  const forget = (id: string) => {
+    const url = previews.get(id);
+    if (url) URL.revokeObjectURL(url);
+    previews.delete(id);
+  };
 
   // Paths from outside the page. The app holds the ones that came before the page listened; they are taken once
   // per page load, after the first listener is registered, and go to whichever listener is current when they
@@ -102,9 +112,13 @@ export function nativePlatform(): Platform {
       outcomes(await Promise.all(files.map(async (f) => call<OutcomeDto>("open_bytes", new Uint8Array(await f.arrayBuffer()), { "x-name": encodeURIComponent(f.name) })))),
     openPaths: async (paths, opts) => outcomes(await call<OutcomeDto[]>("open_paths", { paths, downscale: !!opts?.downscale })),
     closeImage(id) {
-      const url = previews.get(id);
-      if (url) URL.revokeObjectURL(url);
-      previews.delete(id);
+      forget(id);
+      const waiting = pendingRedraws.get(id);
+      if (waiting) forget(waiting);
+      pendingRedraws.delete(id);
+      const original = originals.get(id);
+      if (original) forget(original);
+      originals.delete(id);
       void invoke("close_image", { id }).catch(() => {});
     },
     async vectorize(req, { signal, onPhase }) {
@@ -173,5 +187,75 @@ export function nativePlatform(): Platform {
       return true;
     },
     windowRole: () => (getCurrentWindow().label === "settings" ? "settings" : "main"),
+    redrawKeyStatus: () => call<boolean>("redraw_key_status"),
+    setRedrawKey: (key) => call<void>("set_redraw_key", { key }),
+    deleteRedrawKey: () => call<void>("delete_redraw_key"),
+    onRedrawKey: (cb) => on<boolean>("redraw-key", cb),
+    imageRoughness: (id) => call<Roughness>("image_roughness", { id }),
+    async redrawImage(id, { signal, onPhase }) {
+      if (signal.aborted) throw redrawCancelled();
+      // Try again: the redraw it replaces is let go of here, as the app lets it go
+      const previous = pendingRedraws.get(id);
+      if (previous) forget(previous);
+      pendingRedraws.delete(id);
+      const offPhase = await listening<{ id: string; phase: RedrawPhase }>("redraw-phase", (p) => {
+        if (p.id === id && !signal.aborted) onPhase?.(p.phase);
+      }).catch(() => () => {});
+      const abort = () => void invoke("cancel_redraw", { id }).catch(() => {});
+      try {
+        if (signal.aborted) throw redrawCancelled();
+        signal.addEventListener("abort", abort, { once: true });
+        const answer = await call<{ redraw: OpenedDto; drift: Drift }>("redraw_image", { id });
+        if (signal.aborted) {
+          // a reply that landed as it was cancelled: let it go
+          void invoke("discard_redraw", { id }).catch(() => {});
+          throw redrawCancelled();
+        }
+        const [read] = await outcomes([{ ok: answer.redraw }]);
+        if (!("ok" in read)) throw new ApiError("bad_reply", "The redraw could not be read");
+        pendingRedraws.set(id, answer.redraw.id);
+        return { redraw: read.ok, drift: answer.drift };
+      } finally {
+        offPhase();
+        signal.removeEventListener("abort", abort);
+      }
+    },
+    async acceptRedraw(id) {
+      const redrawId = pendingRedraws.get(id);
+      const answer = await call<{ image: OpenedDto; original: OpenedDto }>("accept_redraw", { id });
+      pendingRedraws.delete(id);
+      const shown = previews.get(id);
+      // the first redraw used: the image's preview becomes its original's; a later one replaces the redraw shown
+      if (originals.has(id)) {
+        if (shown) URL.revokeObjectURL(shown);
+      } else if (shown) previews.set(answer.original.id, shown);
+      originals.set(id, answer.original.id);
+      const redrawUrl = redrawId ? previews.get(redrawId) : undefined;
+      if (redrawId) previews.delete(redrawId);
+      if (redrawUrl) previews.set(id, redrawUrl);
+      else previews.delete(id);
+      return {
+        image: { ...answer.image, previewUrl: previews.get(id) ?? "" },
+        original: { ...answer.original, previewUrl: previews.get(answer.original.id) ?? "" },
+      };
+    },
+    async discardRedraw(id) {
+      const waiting = pendingRedraws.get(id);
+      if (waiting) forget(waiting);
+      pendingRedraws.delete(id);
+      await call<boolean>("discard_redraw", { id });
+    },
+    async revertRedraw(id) {
+      const answer = await call<OpenedDto>("revert_redraw", { id });
+      const originalId = originals.get(id);
+      const back = originalId ? previews.get(originalId) : undefined;
+      forget(id);
+      if (originalId) previews.delete(originalId);
+      originals.delete(id);
+      let url = back;
+      if (!url) url = URL.createObjectURL(new Blob([await call<ArrayBuffer>("read_image", { id })]));
+      previews.set(id, url);
+      return { ...answer, previewUrl: url };
+    },
   };
 }

@@ -4,7 +4,7 @@
  */
 import { ApiError, type AutoResult, type EngineDescription, type ParamValues, type Preset, type VectorizeResponse } from "@/lib/api";
 import { normalizeValues, paramsKey, specsFor } from "@/lib/schema";
-import type { OpenedImage, OpenFailure, OpenOutcome, Phase, Platform, Settings } from "@/platform/types";
+import type { Drift, OpenedImage, OpenFailure, OpenOutcome, Phase, Platform, RedrawPhase, RedrawResult, Roughness, Settings } from "@/platform/types";
 
 export const ENGINE = "vexel";
 /** A trace quicker than this is run again by itself when its settings move. */
@@ -44,7 +44,33 @@ export interface ImageItem {
   errorKey: string | null;
   /** The last Auto run on this image. */
   auto: AutoResult | null;
+  /** AI redraw (the Mac app); absent until one is asked for. */
+  redraw?: RedrawState;
+  /** Whether the image looks rough (the inspector's hint); absent until the app has answered. */
+  rough?: Roughness;
 }
+
+/** An image's AI redraw: the one running, the one waiting for a decision, and the original while the source is a redraw. */
+export interface RedrawState {
+  phase: RedrawPhase | null;
+  pending: RedrawResult | null;
+  /** The image as it was opened; set while the source is a redraw. */
+  original: OpenedImage | null;
+  /** How far the redraw in use moved the image. */
+  drift: Drift | null;
+  /** The source is the redraw. */
+  active: boolean;
+  /** The last redraw that failed (never `cancelled`, never `no_key`: the consent sheet answers that one). */
+  error: ApiError | null;
+  /** The original's traces and settings, back on Revert. */
+  kept: KeptTraces | null;
+}
+
+export type KeptTraces = Pick<ImageItem, "preset" | "params" | "traces" | "shown" | "exported" | "auto">;
+
+export const NO_REDRAW: RedrawState = { phase: null, pending: null, original: null, drift: null, active: false, error: null, kept: null };
+
+export const redrawOf = (item: Pick<ImageItem, "redraw">): RedrawState => item.redraw ?? NO_REDRAW;
 
 export interface LibraryState {
   items: ImageItem[];
@@ -58,7 +84,8 @@ export interface Catalog {
   presets: Preset[];
 }
 
-export type LibraryPlatform = Pick<Platform, "vectorize" | "closeImage" | "openPaths">;
+/** What the library asks of the platform; the redraw methods are there in the Mac app (tests may leave them out). */
+export type LibraryPlatform = Pick<Platform, "vectorize" | "closeImage" | "openPaths"> & Partial<Pick<Platform, "imageRoughness" | "redrawImage" | "acceptRedraw" | "discardRedraw" | "revertRedraw">>;
 
 export interface Library {
   getState(): LibraryState;
@@ -79,6 +106,16 @@ export interface Library {
   setSettings(settings: Settings): void;
   /** These traces were exported or copied (by image id and trace key). */
   markExported(marks: ExportMark[]): void;
+  /** Asks the app, once, whether the image looks rough. */
+  checkRough(id: string): void;
+  /** Redraws the image with AI; the answer waits in `redraw.pending`. Resolves with the error when it failed for want of a key (`no_key`), else null. */
+  redraw(id: string): Promise<ApiError | null>;
+  cancelRedraw(id: string): void;
+  /** The waiting redraw becomes the image's source; the original's traces are kept for Revert. */
+  acceptRedraw(id: string): Promise<void>;
+  discardRedraw(id: string): void;
+  /** The original is the source again, with its traces. */
+  revertRedraw(id: string): Promise<void>;
 }
 
 export interface ExportMark {
@@ -147,6 +184,14 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
   const find = (id: string) => state.items.find((i) => i.image.id === id);
   const patch = (id: string, change: Partial<ImageItem> | ((item: ImageItem) => Partial<ImageItem>)) =>
     set({ ...state, items: state.items.map((i) => (i.image.id === id ? { ...i, ...(typeof change === "function" ? change(i) : change) } : i)) });
+
+  const redrawing = new Map<string, AbortController>();
+  const roughAsked = new Set<string>();
+  const patchRedraw = (id: string, change: Partial<RedrawState>) => patch(id, (i) => ({ redraw: { ...redrawOf(i), ...change } }));
+  const abortRedraw = (id: string) => {
+    redrawing.get(id)?.abort();
+    redrawing.delete(id);
+  };
 
   const clearTimer = (id: string) => {
     clearTimeout(timers.get(id));
@@ -304,6 +349,8 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
       if (!item) return;
       abortJob(item);
       clearTimer(id);
+      abortRedraw(id);
+      roughAsked.delete(id);
       platform.closeImage(id);
       set({ ...state, selected: selectAfterRemoving(id), items: state.items.filter((i) => i.image.id !== id) });
     },
@@ -312,6 +359,8 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
       for (const item of state.items) {
         abortJob(item);
         clearTimer(item.image.id);
+        abortRedraw(item.image.id);
+        roughAsked.delete(item.image.id);
         platform.closeImage(item.image.id);
       }
       set({ items: [], failed: [], selected: null });
@@ -370,6 +419,95 @@ export function createLibrary(platform: LibraryPlatform, catalog: Catalog, initi
       const byId = new Map(marks.map((m) => [m.id, m.key]));
       if (!state.items.some((i) => byId.has(i.image.id))) return;
       set({ ...state, items: state.items.map((i) => (byId.has(i.image.id) ? { ...i, exported: byId.get(i.image.id)! } : i)) });
+    },
+
+    checkRough(id) {
+      if (!find(id) || roughAsked.has(id) || !platform.imageRoughness) return;
+      roughAsked.add(id);
+      platform.imageRoughness(id).then(
+        (rough) => {
+          if (find(id)) patch(id, { rough });
+        },
+        () => roughAsked.delete(id),
+      );
+    },
+
+    async redraw(id) {
+      if (!find(id) || !platform.redrawImage) return null;
+      abortRedraw(id);
+      const controller = new AbortController();
+      redrawing.set(id, controller);
+      const current = () => redrawing.get(id) === controller && !!find(id);
+      patchRedraw(id, { phase: "uploading", pending: null, error: null });
+      try {
+        const result = await platform.redrawImage(id, {
+          signal: controller.signal,
+          onPhase: (phase) => {
+            // the command's answer is the authority on how it ended: done and failed are not shown as phases
+            if (current() && phase !== "done" && phase !== "failed") patchRedraw(id, { phase });
+          },
+        });
+        if (current()) patchRedraw(id, { phase: null, pending: result });
+        return null;
+      } catch (err) {
+        if (!current()) return null;
+        const e = err instanceof ApiError ? err : new ApiError("bad_reply", (err as Error | null)?.message || "The redraw failed");
+        patchRedraw(id, { phase: null, error: e.code === "cancelled" || e.code === "no_key" ? null : e });
+        return e.code === "no_key" ? e : null;
+      } finally {
+        if (redrawing.get(id) === controller) redrawing.delete(id);
+      }
+    },
+
+    cancelRedraw(id) {
+      abortRedraw(id);
+      if (find(id)) patchRedraw(id, { phase: null });
+    },
+
+    async acceptRedraw(id) {
+      const item = find(id);
+      const r = item ? redrawOf(item) : NO_REDRAW;
+      if (!item || !r.pending || !platform.acceptRedraw) return;
+      const accepted = await platform.acceptRedraw(id);
+      const now = find(id);
+      if (!now) return;
+      abortJob(now);
+      clearTimer(id);
+      // a second redraw used keeps the first original's traces
+      const kept: KeptTraces = r.kept ?? { preset: now.preset, params: now.params, traces: now.traces, shown: now.shown, exported: now.exported, auto: now.auto };
+      patch(id, {
+        image: accepted.image,
+        traces: {},
+        shown: null,
+        exported: null,
+        auto: null,
+        job: null,
+        error: null,
+        errorKey: null,
+        rough: { rough: false, reason: null },
+        redraw: { ...NO_REDRAW, active: true, original: accepted.original, drift: r.pending.drift, kept },
+      });
+      if (settings.traceOnOpen) generate(id);
+    },
+
+    discardRedraw(id) {
+      const item = find(id);
+      if (!item || !redrawOf(item).pending) return;
+      void platform.discardRedraw?.(id).catch(() => {});
+      patchRedraw(id, { pending: null });
+    },
+
+    async revertRedraw(id) {
+      const item = find(id);
+      if (!item || !redrawOf(item).active || !platform.revertRedraw) return;
+      const image = await platform.revertRedraw(id);
+      const now = find(id);
+      if (!now) return;
+      abortJob(now);
+      clearTimer(id);
+      const kept = redrawOf(now).kept ?? { preset: now.preset, params: now.params, traces: {}, shown: null, exported: null, auto: null };
+      roughAsked.delete(id);
+      patch(id, { ...kept, image, job: null, error: null, errorKey: null, rough: undefined, redraw: NO_REDRAW });
     },
   };
   return lib;

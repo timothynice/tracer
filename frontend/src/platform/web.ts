@@ -5,6 +5,8 @@ import { downloadBlob } from "@/lib/raster";
 import { DEFAULT_SETTINGS, type OpenOutcome, type Platform, type Settings } from "./types";
 
 const SETTINGS_KEY = "studi0trace.settings";
+/** AI redraw runs in the Mac app only: the browser harness has no Keychain and no road to OpenAI. */
+const noRedraw = () => Promise.reject(new ApiError("unavailable", "AI redraw needs the Mac app"));
 export const ACCEPTED = "image/png,image/jpeg,image/gif,image/webp,image/bmp";
 
 function readSettings(): Settings {
@@ -107,5 +109,14 @@ export function webPlatform(): Platform {
       window.confirm(`Clear all images?\n\n${unexported === 1 ? "1 traced image has not been exported." : `${unexported} traced images have not been exported.`}`),
     openSettingsWindow: () => false,
     windowRole: () => "main",
+    redrawKeyStatus: noRedraw,
+    setRedrawKey: noRedraw,
+    deleteRedrawKey: noRedraw,
+    onRedrawKey: () => () => {},
+    imageRoughness: noRedraw,
+    redrawImage: noRedraw,
+    acceptRedraw: noRedraw,
+    discardRedraw: noRedraw,
+    revertRedraw: noRedraw,
   };
 }

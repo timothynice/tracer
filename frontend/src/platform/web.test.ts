@@ -76,4 +76,19 @@ describe("web platform", () => {
     ask.mockRestore();
     expect(p.windowRole()).toBe("main");
   });
+  it("has no AI redraw: every redraw call says it needs the Mac app", async () => {
+    const p = webPlatform();
+    const attempts = [
+      () => p.redrawKeyStatus(),
+      () => p.setRedrawKey("k"),
+      () => p.deleteRedrawKey(),
+      () => p.imageRoughness("a"),
+      () => p.redrawImage("a", { signal: new AbortController().signal }),
+      () => p.acceptRedraw("a"),
+      () => p.discardRedraw("a"),
+      () => p.revertRedraw("a"),
+    ];
+    for (const attempt of attempts) await expect(attempt()).rejects.toMatchObject({ code: "unavailable", message: "AI redraw needs the Mac app" });
+    expect(typeof p.onRedrawKey(() => {})).toBe("function");
+  });
 });

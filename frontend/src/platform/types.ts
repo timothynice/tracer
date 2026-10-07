@@ -38,6 +38,42 @@ export interface TraceOptions {
   onPhase?: (phase: Phase) => void;
 }
 
+export type RedrawModel = "gpt-image-2" | "gpt-image-1.5";
+export type RedrawQuality = "medium" | "high";
+/** What the app reports while it redraws an image; `done` and `failed` come as the answer does. */
+export type RedrawPhase = "uploading" | "drawing" | "checking" | "done" | "failed";
+export type DriftVerdict = "close" | "noticeable" | "large";
+
+/** How far a redraw moved the image: the original's edges it kept (F1, matched within 2 px) and the mean colour shift (CIEDE2000). */
+export interface Drift {
+  edgeF1: number;
+  deltaE: number;
+  verdict: DriftVerdict;
+}
+
+/** A finished redraw, waiting for Use redraw, Try again or Discard. */
+export interface RedrawResult {
+  redraw: OpenedImage;
+  drift: Drift;
+}
+
+/** The image once its source is the redraw, and its original (kept for Show Original and Revert). */
+export interface AcceptedRedraw {
+  image: OpenedImage;
+  original: OpenedImage;
+}
+
+/** Whether an image looks rough (under 600 px, or an exact 2× upscale). */
+export interface Roughness {
+  rough: boolean;
+  reason: "small" | "doubled" | null;
+}
+
+export interface RedrawOptions {
+  signal: AbortSignal;
+  onPhase?: (phase: RedrawPhase) => void;
+}
+
 export interface Settings {
   appearance: "system" | "light" | "dark";
   exportTo: "ask" | "beside";
@@ -46,11 +82,26 @@ export interface Settings {
   liveUpdate: boolean;
   /** Check for an update at launch, quietly (the Mac app; the browser harness has no updater). */
   checkForUpdates: boolean;
+  /** AI redraw (the Mac app): the model and quality asked of OpenAI, and whether the inspector suggests a redraw for a rough image. The key is never a setting. */
+  redrawModel: RedrawModel;
+  redrawQuality: RedrawQuality;
+  suggestRedraw: boolean;
   /** Paths, most recent first; only the app changes it. */
   recent: string[];
 }
 
-export const DEFAULT_SETTINGS: Settings = { appearance: "system", exportTo: "ask", revealAfterExport: false, traceOnOpen: false, liveUpdate: true, checkForUpdates: true, recent: [] };
+export const DEFAULT_SETTINGS: Settings = {
+  appearance: "system",
+  exportTo: "ask",
+  revealAfterExport: false,
+  traceOnOpen: false,
+  liveUpdate: true,
+  checkForUpdates: true,
+  redrawModel: "gpt-image-2",
+  redrawQuality: "medium",
+  suggestRedraw: true,
+  recent: [],
+};
 
 export type ViewMode = "split" | "side" | "overlay" | "vector";
 
@@ -75,7 +126,10 @@ export type MenuCommand =
   | "generate"
   | "cancel"
   | "remove"
-  | "clear";
+  | "clear"
+  | "redraw"
+  | "show-original"
+  | "revert-redraw";
 
 export interface MenuState {
   hasItems: boolean;
@@ -92,6 +146,10 @@ export interface MenuState {
   mode: ViewMode;
   sidebar: boolean;
   inspector: boolean;
+  /** The selected image can be redrawn with AI (the Mac app, no redraw running for it). */
+  canRedraw: boolean;
+  /** The selected image is drawn from an AI redraw. */
+  isRedraw: boolean;
 }
 
 export interface ExportFile {
@@ -142,4 +200,16 @@ export interface Platform {
   /** Settings in a window of its own; false where there is none (a browser shows its own sheet). */
   openSettingsWindow(): boolean;
   windowRole(): "main" | "settings";
+  /** AI redraw (the Mac app; a browser answers "not available"). Whether an OpenAI key is in the Keychain: the key itself never reaches the page. */
+  redrawKeyStatus(): Promise<boolean>;
+  setRedrawKey(key: string): Promise<void>;
+  deleteRedrawKey(): Promise<void>;
+  /** The key was stored (true) or removed (false), from any window. */
+  onRedrawKey(cb: (stored: boolean) => void): () => void;
+  imageRoughness(id: string): Promise<Roughness>;
+  /** Redraws the image with AI; the answer waits in the app for accept/discard. Aborting the signal abandons it. */
+  redrawImage(id: string, opts: RedrawOptions): Promise<RedrawResult>;
+  acceptRedraw(id: string): Promise<AcceptedRedraw>;
+  discardRedraw(id: string): Promise<void>;
+  revertRedraw(id: string): Promise<OpenedImage>;
 }

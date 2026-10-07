@@ -22,7 +22,7 @@ import { loadSample } from "./lib/samples";
 import { specsFor } from "./lib/schema";
 import { commandForKey, isTyping, type Command } from "./lib/shortcuts";
 import { platform, type OpenOutcome, type Settings, type ViewMode } from "./platform";
-import { createLibrary, ENGINE, currentJob, errorOf, shownAnswer, unexportedCount, type Catalog } from "./state/library";
+import { createLibrary, ENGINE, currentJob, errorOf, redrawOf, shownAnswer, unexportedCount, type Catalog } from "./state/library";
 import { useLibrary } from "./state/useLibrary";
 
 const FORMATS = platform.kind === "native" ? "PNG, JPG, HEIC, etc." : "PNG, JPG, GIF, WebP, BMP";
@@ -280,9 +280,12 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const tracing = !!job;
   const anyTracing = state.items.some((i) => i.job);
   const unexported = unexportedCount(state);
+  const redraw = item ? redrawOf(item) : null;
+  const canRedraw = platform.kind === "native" && hasImage && !redraw?.phase;
+  const isRedraw = !!redraw?.active;
   useEffect(() => {
-    platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspector: inspectorPane });
-  }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspectorPane]);
+    platform.setMenuState({ hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspector: inspectorPane, canRedraw, isRedraw });
+  }, [hasItems, hasImage, hasVector, anyVector, hasPath, tracing, anyTracing, unexported, mode, sidebar, inspectorPane, canRedraw, isRedraw]);
   const invalidField = visibleError?.code === "validation_error" ? (((visibleError.detail as { loc?: unknown[] }[] | undefined)?.[0]?.loc?.[1] as string | undefined) ?? null) : null;
 
   const panel = item ? (
