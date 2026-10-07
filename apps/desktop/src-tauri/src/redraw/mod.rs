@@ -6,6 +6,7 @@
 //! reply); this file holds the error words, the pipeline and the jobs in flight.
 use crate::error::CommandError;
 
+pub mod drift;
 pub mod geometry;
 pub mod rough;
 
