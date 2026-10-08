@@ -4,6 +4,7 @@ import { ChevronDown, Columns2, Hand, Layers, Layers2, Maximize, Search, Spline,
 
 import { formatPercent } from "@/lib/format";
 import type { ViewMode } from "@/platform/types";
+import { Slider } from "./Slider";
 
 export type Tool = "pan" | "zoom";
 export const ZOOM_LEVELS = [0.5, 1, 2, 4];
@@ -92,7 +93,7 @@ export function ViewerToolbar(p: ViewerToolbarProps) {
         </Tabs.List>
       </Tabs.Root>
       {p.mode === "overlay" && (
-        <input type="range" min={0} max={1} step={0.05} value={p.overlay} onChange={(e) => p.onOverlay(Number(e.target.value))} aria-label={`${right} opacity`} className="ml-2 w-20" style={{ accentColor: "var(--accent-mac)" }} />
+        <Slider min={0} max={1} step={0.05} value={p.overlay} onValueChange={p.onOverlay} aria-label={`${right} opacity`} className="ml-2 w-20" />
       )}
       {p.hasVector && (
         <>

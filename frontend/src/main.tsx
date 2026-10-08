@@ -26,7 +26,11 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <App />
       {/* In the title bar's empty middle: the foot of the window is the view toolbar's, and a panel in the viewer reaches both ends of it */}
-      <Toaster position="top-center" offset={TOAST_TOP} toastOptions={{ className: "font-sans" }} />
+      <Toaster
+        position="top-center"
+        offset={TOAST_TOP}
+        toastOptions={{ className: "font-sans", style: { background: "hsl(var(--popover) / 0.95)", color: "hsl(var(--popover-foreground))", border: "1px solid hsl(var(--border))", backdropFilter: "blur(16px)" } }}
+      />
     </QueryClientProvider>
   </StrictMode>,
 );

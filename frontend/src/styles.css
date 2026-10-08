@@ -244,43 +244,8 @@
   .mac-menu-shortcut {
     @apply ml-auto pl-4 text-[12px] opacity-60;
   }
-  .card {
-    @apply rounded-lg border bg-card text-card-foreground shadow-sm;
-  }
-  .btn {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors
-      disabled:pointer-events-none disabled:opacity-50;
-  }
-  .btn-primary {
-    @apply btn bg-primary text-primary-foreground hover:bg-primary/90 font-semibold;
-  }
-  .btn-secondary {
-    @apply btn bg-secondary text-secondary-foreground hover:bg-secondary/80;
-  }
-  .btn-outline {
-    @apply btn border bg-background hover:bg-accent hover:text-accent-foreground;
-  }
-  .btn-ghost {
-    @apply btn hover:bg-accent hover:text-accent-foreground;
-  }
-  .btn-icon {
-    @apply h-10 w-10 px-0;
-  }
-  .btn-sm {
-    @apply h-9 px-3;
-  }
-  .pill {
-    @apply inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground;
-  }
-  .dot {
-    @apply inline-block h-1.5 w-1.5 rounded-full bg-primary-foreground;
-  }
   .dot-brand {
     @apply inline-block h-1.5 w-1.5 rounded-full bg-brand;
-  }
-  .input {
-    @apply h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground
-      focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2;
   }
   /* One conic-gradient tile of two squares each way (8 px cells, a 16 px tile): a single layer, so no two gradients
      meet along a diagonal to leave a seam at any zoom. Two mid greys, so white and black artwork both read. */
@@ -293,6 +258,18 @@
       hsl(var(--checker-a)) 0
     );
     background-size: 16px 16px;
+  }
+  /* The one slider (components/Slider.tsx): the accent's fill on the switch's off track, the switch's thumb. */
+  .mac-slider-track {
+    @apply relative h-1.5 w-full grow overflow-hidden rounded-full bg-muted-foreground/30;
+  }
+  .mac-slider-range {
+    @apply absolute h-full;
+    background: var(--accent-mac);
+  }
+  .mac-slider-thumb {
+    @apply block h-4 w-4 rounded-full bg-white shadow;
+    border: 0.5px solid rgb(0 0 0 / 0.1);
   }
   /* The one switch (components/Switch.tsx): the accent when on, a neutral track when off. */
   .mac-switch {

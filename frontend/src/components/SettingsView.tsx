@@ -72,7 +72,7 @@ function KeyRow({ controls }: { controls: RedrawKeyControls }) {
             spellCheck={false}
             value={key}
             onChange={(e) => setKey(e.target.value)}
-            className="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 text-[12px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20"
+            className="h-7 min-w-0 flex-1 rounded-md border bg-background/70 px-2 text-[12px]"
           />
           <button type="submit" className="mac-button h-7" disabled={!key.trim()}>
             Save

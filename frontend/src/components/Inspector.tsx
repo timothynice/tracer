@@ -3,6 +3,7 @@ import { useMemo } from "react";
 
 import { formatBytes, formatInt, formatMs } from "@/lib/format";
 import { shapeLabel, type SvgDoc } from "@/lib/svgdoc";
+import { Slider } from "./Slider";
 
 export interface InspectorState {
   open: boolean;
@@ -86,16 +87,7 @@ function InspectorBody({ doc, bytes, elapsedMs, edited, state, onChange, onToggl
             <span>Drop specks under</span>
             <span className="tabular text-muted-foreground">{state.minArea ? `${formatInt(Math.round(state.minArea))} px²` : "off"}</span>
           </span>
-          <input
-            type="range"
-            min={0}
-            max={Math.round(maxArea / 20)}
-            step={1}
-            value={state.minArea}
-            onChange={(e) => onChange({ minArea: Number(e.target.value) })}
-            className="w-full accent-[hsl(var(--primary))]"
-            aria-label="Drop shapes smaller than"
-          />
+          <Slider min={0} max={Math.round(maxArea / 20)} step={1} value={state.minArea} onValueChange={(v) => onChange({ minArea: v })} aria-label="Drop shapes smaller than" />
         </label>
         <p className="text-[11px] text-muted-foreground">
           {tiny.length ? `${tiny.length} shape${tiny.length === 1 ? "" : "s"} will be left out of the export.` : "Nothing dropped."}
@@ -111,7 +103,7 @@ function InspectorBody({ doc, bytes, elapsedMs, edited, state, onChange, onToggl
             return (
               <li key={s.index}>
                 <div
-                  className={`flex items-center gap-2 rounded-sm px-1.5 py-1 text-xs transition-colors ${on ? "bg-accent ring-1 ring-primary/20" : "hover:bg-accent/60"}`}
+                  className={`flex items-center gap-2 rounded-sm px-1.5 py-1 text-xs transition-colors ${on ? "mac-tint" : "hover:bg-accent/60"}`}
                   onMouseEnter={() => onChange({ highlight: s.index })}
                   onMouseLeave={() => onChange({ highlight: null })}
                 >
@@ -126,7 +118,7 @@ function InspectorBody({ doc, bytes, elapsedMs, edited, state, onChange, onToggl
                   <span className="tabular shrink-0 text-[11px] text-muted-foreground">{s.anchors.length}</span>
                   <button
                     type="button"
-                    className="btn-ghost btn-icon h-6 w-6 shrink-0"
+                    className="mac-icon h-6 w-6 shrink-0"
                     aria-label={`${off ? "Show" : "Hide"} ${shapeLabel(s)}`}
                     onClick={() => onToggle(s.index)}
                   >

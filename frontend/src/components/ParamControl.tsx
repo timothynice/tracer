@@ -1,5 +1,5 @@
 import * as Select from "@radix-ui/react-select";
-import * as Slider from "@radix-ui/react-slider";
+import { Slider } from "./Slider";
 import { Switch } from "./Switch";
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useId, useState } from "react";
@@ -54,25 +54,7 @@ export function ParamControl({ spec, value, onChange, disabled, invalid }: Param
       )}
 
       {spec.control === "slider" && (
-        <Slider.Root
-          aria-labelledby={labelId}
-          aria-describedby={descId}
-          value={[Number(value)]}
-          min={spec.min ?? 0}
-          max={spec.max ?? 100}
-          step={spec.step}
-          disabled={disabled}
-          onValueChange={([v]) => onChange(v)}
-          className="relative flex h-5 w-full touch-none select-none items-center"
-        >
-          <Slider.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-muted">
-            <Slider.Range className="absolute h-full bg-primary" />
-          </Slider.Track>
-          <Slider.Thumb
-            aria-label={spec.label}
-            className="block h-4 w-4 rounded-full border-2 border-primary bg-background shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none"
-          />
-        </Slider.Root>
+        <Slider aria-labelledby={labelId} aria-describedby={descId} aria-label={spec.label} value={Number(value)} min={spec.min ?? 0} max={spec.max ?? 100} step={spec.step} disabled={disabled} onValueChange={onChange} />
       )}
 
       {spec.control === "select" && (
@@ -81,7 +63,7 @@ export function ParamControl({ spec, value, onChange, disabled, invalid }: Param
             id={id}
             aria-labelledby={labelId}
             aria-describedby={descId}
-            className={`input flex items-center justify-between gap-2 text-left capitalize ${invalid ? "ring-2 ring-destructive" : ""}`}
+            className={`mac-button h-8 w-full justify-between font-normal capitalize ${invalid ? "ring-2 ring-destructive" : ""}`}
           >
             <Select.Value />
             <Select.Icon>
@@ -89,15 +71,15 @@ export function ParamControl({ spec, value, onChange, disabled, invalid }: Param
             </Select.Icon>
           </Select.Trigger>
           <Select.Portal>
-            <Select.Content position="popper" sideOffset={4} className="z-50 min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md">
+            <Select.Content position="popper" sideOffset={4} className="mac-menu min-w-[var(--radix-select-trigger-width)]">
               <Select.Viewport className="p-1">
                 {spec.options?.map((opt) => (
                   <Select.Item
                     key={opt}
                     value={opt}
-                    className="relative flex h-9 cursor-default select-none items-center rounded-sm pl-8 pr-3 text-sm capitalize outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                    className="mac-menu-item relative h-7 pl-7 capitalize"
                   >
-                    <Select.ItemIndicator className="absolute left-2 inline-flex items-center">
+                    <Select.ItemIndicator className="absolute left-1.5 inline-flex items-center">
                       <Check className="h-4 w-4" />
                     </Select.ItemIndicator>
                     <Select.ItemText>{opt}</Select.ItemText>
@@ -164,7 +146,7 @@ function NumberField({
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === "Enter" && commit()}
-        className={`tabular h-7 w-16 rounded-md border border-input bg-background pl-2 pr-2.5 text-right text-xs text-foreground focus-visible:ring-2 focus-visible:ring-ring ${invalid ? "border-destructive" : ""}`}
+        className={`tabular h-7 w-16 rounded-md border bg-background/70 pl-2 pr-2.5 text-right text-xs text-foreground ${invalid ? "border-destructive" : ""}`}
       />
       {spec.unit && <span aria-hidden="true">{spec.unit}</span>}
     </span>

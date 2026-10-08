@@ -68,7 +68,7 @@ export function RedrawConsentSheet({ open, onOpenChange, onSave }: RedrawConsent
               placeholder="sk-…"
               value={key}
               onChange={(e) => setKey(e.target.value)}
-              className="h-9 w-full rounded-md border bg-background px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/20"
+              className="h-9 w-full rounded-md border bg-background/70 px-2.5 text-[13px]"
             />
             <p className="text-[11px] text-muted-foreground">Kept in your Mac's Keychain. Change or remove it in Settings ▸ AI redraw.</p>
             {error && (
