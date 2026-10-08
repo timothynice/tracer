@@ -14,11 +14,13 @@ export interface TitleBarProps {
 export function TitleBar({ native, sidebar, inspector, onToggleSidebar, onToggleInspector, onSettings }: TitleBarProps) {
   return (
     <header data-tauri-drag-region="deep" className="flex h-[52px] shrink-0 items-center gap-2.5 pr-3" style={{ paddingLeft: native ? 88 : 16 }}>
-      {/* the mark's trace is pale yellow on nothing: on the light window it needs the icon's slate tile behind it */}
-      <span aria-hidden="true" className="flex h-7 w-7 shrink-0 rounded-[8px] bg-[#3F4D60]">
-        <img src="/brand/studi0trace-mark.svg" alt="" draggable={false} className="h-7 w-7" />
-      </span>
-      <h1 className="min-w-0 font-brand text-[15px] font-semibold tracking-tight">Studi0Trace</h1>
+      {/* the icon tile and the wordmark, one of each per appearance: the light pair on the light window, the dark pair under `.dark` */}
+      <img src="/brand/icon-light.png" alt="" draggable={false} className="h-7 w-auto shrink-0 dark:hidden" />
+      <img src="/brand/icon-dark.png" alt="" draggable={false} className="hidden h-7 w-auto shrink-0 dark:block" />
+      <h1 className="flex min-w-0 items-center">
+        <img src="/brand/wordmark-light.png" alt="Studi0Trace" draggable={false} className="h-[15px] w-auto dark:hidden" />
+        <img src="/brand/wordmark-dark.png" alt="" aria-hidden="true" draggable={false} className="hidden h-[15px] w-auto dark:block" />
+      </h1>
       <div className="ml-auto flex items-center gap-0.5">
         <button type="button" className="mac-icon" aria-label="Show sidebar" aria-pressed={sidebar} title="Show Sidebar (⌃⌘S)" onClick={onToggleSidebar}>
           <PanelLeft className="h-4 w-4" aria-hidden="true" />

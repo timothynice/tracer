@@ -9,6 +9,9 @@ describe("TitleBar", () => {
     const onSettings = vi.fn();
     const { container } = render(<TitleBar native sidebar inspector={false} onToggleSidebar={onToggleSidebar} onToggleInspector={vi.fn()} onSettings={onSettings} />);
     expect(screen.getByRole("heading", { name: "Studi0Trace" })).toBeInTheDocument();
+    // the wordmark and the icon come as a pair per appearance
+    expect(container.querySelectorAll('img[src^="/brand/wordmark-"]')).toHaveLength(2);
+    expect(container.querySelectorAll('img[src^="/brand/icon-"]')).toHaveLength(2);
     expect(screen.queryByText("Turn images into clean vectors")).toBeNull(); // the tagline lives on the empty state
     const bar = container.querySelector("header")!;
     expect(bar.getAttribute("data-tauri-drag-region")).toBe("deep");
