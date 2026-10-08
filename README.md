@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/timothynice/Studi0Trace/releases"><img alt="Download for Mac" src="https://img.shields.io/badge/Download-Mac%20(Apple%20silicon)-007aff?style=for-the-badge&logo=apple&logoColor=white"></a>
+  <a href="https://github.com/timothynice/Studi0Trace/releases"><img alt="Download for Mac" src="https://img.shields.io/badge/Download-Mac%20(Universal)-007aff?style=for-the-badge&logo=apple&logoColor=white"></a>
   &nbsp;
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-3f4a5c?style=for-the-badge"></a>
   &nbsp;
@@ -97,14 +97,13 @@ studi0trace-desktop --release -- --ignored live_redraw --nocapture` does, by han
 
 ## Get it
 
-**Download** the latest `Studi0Trace.app` or `.dmg` from [Releases](https://github.com/timothynice/Studi0Trace/releases). macOS 13 or later, Apple silicon. Free and MIT licensed.
+**Download** the latest `.dmg` from [Releases](https://github.com/timothynice/Studi0Trace/releases), open it and drag Studi0Trace to Applications. macOS 13 or later, Intel or Apple silicon. Free and MIT licensed.
 
-**The app is not signed**, so macOS stops it the first time. On macOS 13 and 14,
-right-click the app and choose Open (or open System Settings ▸ Privacy & Security
-and click Open Anyway). On macOS 15 and later, only the second works: try to open
-the app once, then open System Settings ▸ Privacy & Security and click Open Anyway
-under the message about Studi0Trace. Or, wherever you put the app, run
-`xattr -dr com.apple.quarantine /path/to/Studi0Trace.app`.
+Releases starting with **0.3.1** are signed with Developer ID and notarized by
+Apple. macOS may ask you to confirm opening an app downloaded from the Internet;
+no changes to your security settings are needed. If you downloaded the older
+0.3.0 build and see “Apple could not verify” or “Not Opened,” replace it with the
+latest release.
 
 It opens PNG, JPEG, GIF, WebP, BMP, HEIC and TIFF, up to 2048 px a side, and
 offers Downscale for larger ones. It is listed under Finder's Open With for those
@@ -144,7 +143,7 @@ Build it:
 ```bash
 cd apps/desktop && npm run build
 # target/release/bundle/macos/Studi0Trace.app
-# target/release/bundle/dmg/Studi0Trace_0.3.0_aarch64.dmg
+# target/release/bundle/dmg/Studi0Trace_0.3.1_aarch64.dmg
 npm run smoke                                          # opens a sample with the built app, as Finder does, and checks it traced
 ```
 
@@ -154,6 +153,12 @@ makes it first. The `.dmg` step styles its window by scripting Finder; where tha
 times out (no Automation permission for Finder, or no one logged in at the
 screen) the build fails after the `.app` is made, and `CI=true npm run build`
 makes the same `.dmg` with a plain window.
+
+Local builds use an ad hoc signature. The distribution build uses
+`npm run build:release` and requires Developer ID and notarization credentials;
+see [macOS release signing](docs/macos-release-signing.md). GitHub's release
+workflow uses that same command and uploads assets only after the app, updater
+archive and disk image pass signature, notarization and Gatekeeper verification.
 
 **Third-party notices.** `apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.html`
 is generated and committed, bundled into the app and shown by Help ▸

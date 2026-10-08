@@ -24,6 +24,13 @@ coverage/
 # Local env overrides
 .env.*.local
 
+# Apple signing and notarization credentials stay outside the repository.
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
+
 # Rust build output
 /target/
 backend/vexel-rs/target/

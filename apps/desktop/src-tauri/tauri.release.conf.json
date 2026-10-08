@@ -1,1 +1,9 @@
-{ "bundle": { "createUpdaterArtifacts": true } }
+{
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Timothy Nice (B7VLZJMQAL)",
+      "hardenedRuntime": true
+    }
+  }
+}

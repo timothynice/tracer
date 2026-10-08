@@ -14,6 +14,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Require signing and notarization credentials
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_PRIVATE_KEY APPLE_API_KEY APPLE_API_ISSUER TAURI_SIGNING_PRIVATE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing repository secret ${name}; refusing to create an unsigned release"
+              exit 1
+            fi
+          done
+          umask 077
+          key_path="${RUNNER_TEMP}/studi0trace-notary.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$key_path"
+          echo "APPLE_API_KEY_PATH=${key_path}" >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 26
@@ -57,21 +78,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         with:
           projectPath: apps/desktop
+          tauriScript: bash scripts/release.sh
           tagName: v__VERSION__
           releaseName: Studi0Trace __VERSION__
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
           args: --target universal-apple-darwin --config src-tauri/tauri.release.conf.json
           releaseBody: |
             Download the `.dmg`, open it and drag Studi0Trace to Applications.
 
-            Studi0Trace is not notarized, so macOS blocks it the first time. To open it, go to System Settings ▸ Privacy & Security and choose Open Anyway, or run this in Terminal:
-
-            ```
-            xattr -dr com.apple.quarantine /Applications/Studi0Trace.app
-            ```
+            Signed with Developer ID and notarized by Apple for Intel and Apple silicon Macs. No security-setting changes are needed.
 
             The app checks for updates itself (Studi0Trace ▸ Check for Updates…).
+
+      - name: Remove notarization key
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/studi0trace-notary.p8"
