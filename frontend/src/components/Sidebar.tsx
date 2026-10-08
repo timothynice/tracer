@@ -61,7 +61,7 @@ export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd,
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div role="listbox" aria-label="Image list" tabIndex={items.length ? 0 : -1} aria-activedescendant={selected ? `image-${selected}` : undefined} onKeyDown={onKeyDown} className={`space-y-3 px-3 ${items.length ? "pb-3" : ""}`}>
+        <div role="listbox" aria-label="Image list" tabIndex={items.length ? 0 : -1} aria-activedescendant={selected ? `image-${selected}` : undefined} onKeyDown={onKeyDown} className={`space-y-3 px-3 pt-1 ${items.length ? "pb-3" : ""}`}>
           {items.map((item) => (
             <Fragment key={item.image.id}>{wrapCard(item, <ImageCard item={item} selected={item.image.id === selected} onSelect={() => onSelect(item.image.id)} />)}</Fragment>
           ))}

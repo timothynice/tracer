@@ -1,4 +1,4 @@
-import { AlertCircle, ChevronLeft, ChevronRight, Loader2, RotateCw } from "lucide-react";
+import { AlertCircle, ChevronLeft, ChevronRight, Loader2, RotateCw, Wand2 } from "lucide-react";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import type { ViewMode } from "@/platform/types";
@@ -30,6 +30,8 @@ export interface ViewerProps {
   marks?: (scale: number) => ReactNode;
   /** Rendered inside the viewport, e.g. the layer inspector. */
   panel?: ReactNode;
+  /** The canvas's own Generate Vector button, shown over an untraced image. */
+  onGenerate?: () => void;
   /** Raster against raster (the drift check): this image takes the vector's place, drawn in the source's frame, under `label`. */
   compare?: { url: string; label: string };
 }
@@ -69,7 +71,7 @@ const reducedMotion = () => typeof window.matchMedia !== "function" || window.ma
 const WIPE = "transition-[clip-path] duration-[450ms] delay-150 ease-out";
 
 export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(props, ref) {
-  const { sourceUrl, svg, width, height, mode, onModeChange, busy, errorMessage, onRetry, display, onDisplayChange, layersOpen, onToggleLayers, marks, panel, compare } = props;
+  const { sourceUrl, svg, width, height, mode, onModeChange, busy, errorMessage, onRetry, display, onDisplayChange, layersOpen, onToggleLayers, marks, panel, compare, onGenerate } = props;
   const [split, setSplit] = useState(0.5);
   const [overlay, setOverlay] = useState(0.7);
   const [tool, setTool] = useState<Tool>("pan");
@@ -252,7 +254,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
     return () => clearInterval(id);
   }, [busy]);
   const counting = busy && busy.phase !== "Queued…";
-  const pill = busy ? (counting ? `${busy.phase} ${Math.max(0, Math.floor((now - busy.startedAt) / 1000))} s` : busy.phase) : "Press ⌘↩ to trace";
+  const pill = busy ? (counting ? `${busy.phase} ${Math.max(0, Math.floor((now - busy.startedAt) / 1000))} s` : busy.phase) : null;
 
   // The reveal, once, when a vector (or a redraw) first arrives: "start" paints it clipped away, "run" lets it wipe in.
   const [wipe, setWipe] = useState<"start" | "run" | null>(null);
@@ -403,11 +405,19 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
                   </button>
                 )}
               </div>
-            ) : (
-              <p className={`flex items-center gap-2.5 rounded-full border bg-popover/90 px-3.5 py-1.5 text-[13px] font-medium shadow-sm backdrop-blur ${busy ? "" : "text-muted-foreground"}`} aria-live="polite">
-                {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />}
+            ) : pill ? (
+              <p className="flex items-center gap-2.5 rounded-full border bg-popover/90 px-3.5 py-1.5 text-[13px] font-medium shadow-sm backdrop-blur" aria-live="polite">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
                 <span className="tabular">{pill}</span>
               </p>
+            ) : (
+              <button type="button" data-overlay-ui className="mac-primary pointer-events-auto w-auto px-4 shadow-elevated" onClick={onGenerate} title="Generate Vector (⌘↩)">
+                <Wand2 className="h-4 w-4" aria-hidden="true" />
+                Generate Vector
+                <kbd className="ml-1 font-sans text-[11px] font-medium opacity-70" aria-hidden="true">
+                  ⌘↩
+                </kbd>
+              </button>
             )}
           </div>
         )}

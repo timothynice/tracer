@@ -28,7 +28,7 @@ describe("VectorizePanel", () => {
     render(
       <VectorizePanel item={item} catalog={{ engine: VEXEL, presets: VEXEL_PRESETS }} specs={specsFor(VEXEL)} invalidField={null} onPick={vi.fn()} onParam={onParam} onGenerate={vi.fn()} onCancel={vi.fn()} exportMenu={<span>export</span>} />,
     );
-    expect(screen.getByRole("heading", { name: "Vectorize" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading")).toBeNull(); // no title: the pane is named for assistive technology
     expect(screen.queryByText("Convert your image to a clean, scalable vector.")).toBeNull();
     expect(screen.getByText("16 shapes · 43 nodes · 4.4 KB · 1.5 s")).toBeInTheDocument();
     expect(screen.queryByText("Shapes")).toBeNull();
@@ -44,9 +44,9 @@ describe("VectorizePanel", () => {
     rerender(<VectorizePanel {...props} invalidField="detail" />);
     expect(screen.getByText("Shapes")).toBeInTheDocument();
   });
-  it("wears the redraw chip beside its title", () => {
+  it("wears the redraw chip at its head", () => {
     render(<VectorizePanel item={item} catalog={{ engine: VEXEL, presets: VEXEL_PRESETS }} specs={specsFor(VEXEL)} invalidField={null} onPick={vi.fn()} onParam={vi.fn()} onGenerate={vi.fn()} onCancel={vi.fn()} exportMenu={null} redrawChip={<span>chip</span>} />);
-    expect(screen.getByRole("heading", { name: "Vectorize" }).parentElement).toContainElement(screen.getByText("chip"));
+    expect(screen.getByText("chip")).toBeInTheDocument();
   });
 
   it("says one shape, not 1 shapes", () => {

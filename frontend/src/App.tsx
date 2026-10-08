@@ -198,6 +198,7 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       mode={mode}
       onModeChange={setMode}
       busy={busy}
+      onGenerate={() => lib.generate(item.image.id)}
       errorMessage={visibleError?.message}
       onRetry={() => lib.generate(item.image.id)}
       display={{ points: layers.state.points, outlines: layers.state.outlines }}

@@ -23,7 +23,7 @@ export interface VectorizePanelProps {
   exportMenu: ReactNode;
   /** AI redraw's section (the Mac app). */
   redraw?: ReactNode;
-  /** The chip on a redrawn image, beside the title (the Mac app). */
+  /** The chip on a redrawn image, at the head of the pane (the Mac app). */
   redrawChip?: ReactNode;
 }
 
@@ -38,12 +38,14 @@ export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onP
   const candidates = catalog.presets.filter((p) => p.auto_candidate).length;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-[44px] items-center justify-between gap-2 px-4 pb-2 pt-3">
-        <h2 className="text-[15px] font-semibold">Vectorize</h2>
-        {redrawChip}
-      </div>
-      {redraw && <div className="px-3 pb-3">{redraw}</div>}
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-3">
+      {/* no title: the pane is named for assistive technology, and the eye needs none */}
+      {(redrawChip || redraw) && (
+        <div className="space-y-2 px-3 pb-3 pt-3">
+          {redrawChip}
+          {redraw}
+        </div>
+      )}
+      <div className={`min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-3 ${redrawChip || redraw ? "" : "pt-3"}`}>
         <PresetCards
           presets={catalog.presets}
           defaults={catalog.engine.defaults}

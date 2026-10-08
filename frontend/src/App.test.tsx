@@ -61,7 +61,7 @@ describe("App", () => {
     await screen.findByText("Drop images here");
     drop([png()]);
     await screen.findByRole("option", { name: /logo\.png/ });
-    fireEvent.click(screen.getByRole("button", { name: /Generate Vector/ }));
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Vectorize" })).getByRole("button", { name: /Generate Vector/ }));
     expect(await screen.findByRole("img", { name: "Vector result" })).toBeInTheDocument();
     expect(within(screen.getByRole("complementary", { name: "Vectorize" })).getByLabelText(/Auto chose Logo & icon/)).toBeInTheDocument();
   });
@@ -71,7 +71,7 @@ describe("App", () => {
     await screen.findByText("Drop images here");
     drop([png()]);
     await screen.findByRole("option", { name: /logo\.png/ });
-    fireEvent.click(screen.getByRole("button", { name: /Generate Vector/ }));
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Vectorize" })).getByRole("button", { name: /Generate Vector/ }));
     await screen.findByRole("img", { name: "Vector result" });
     pickStyle("Balanced");
     await waitFor(() => expect(document.querySelector('[data-trace="balanced"]')).not.toBeNull());

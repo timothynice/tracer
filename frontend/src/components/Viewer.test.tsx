@@ -49,11 +49,24 @@ describe("Viewer", () => {
     expect(screen.queryByRole("separator", { name: /comparison divider/i })).not.toBeInTheDocument();
     expect(screen.queryByText("Original")).toBeNull();
     expect(screen.queryByText("Vector")).toBeNull();
-    expect(screen.getByText("Press ⌘↩ to trace")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Vector" })).toBeInTheDocument();
     rerender(<Viewer {...props} svg={SVG} />);
+    expect(screen.queryByRole("button", { name: "Generate Vector" })).toBeNull();
     expect(screen.getByTestId("source-pane")).not.toHaveClass("ghost");
     expect(screen.getByRole("separator", { name: /comparison divider/i })).toBeInTheDocument();
     expect(screen.getByText("Original")).toBeInTheDocument();
+  });
+
+  it("the canvas's Generate button traces, and its click is not swallowed by panning", () => {
+    const onGenerate = vi.fn();
+    setup({ svg: undefined, onGenerate });
+    const button = screen.getByRole("button", { name: "Generate Vector" });
+    fireEvent.pointerDown(button, { button: 0, pointerId: 1 });
+    const before = screen.getByAltText("Source raster").style.transform;
+    fireEvent.pointerMove(button, { clientX: 120, clientY: 40, pointerId: 1 });
+    expect(screen.getByAltText("Source raster").style.transform).toBe(before);
+    fireEvent.click(button);
+    expect(onGenerate).toHaveBeenCalledOnce();
   });
 
   it("side by side before a trace is the same ghost, not two panes", () => {
@@ -316,7 +329,7 @@ describe("Viewer refit on resize", () => {
     expect(screen.getByText("AI redraw")).toBeInTheDocument();
     expect(screen.queryByText("Vector")).toBeNull();
     expect(screen.getByRole("separator", { name: /comparison divider/i })).toBeInTheDocument();
-    expect(screen.queryByText(/Press ⌘↩ to trace/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Generate Vector" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Show anchor points" })).toBeNull();
     rerender(<Viewer {...props} mode="side" />);
     expect(screen.getByText("AI redraw")).toBeInTheDocument();

@@ -11,22 +11,24 @@ export interface RedrawSectionProps {
   onCancel: () => void;
 }
 
-/** The chip on a redrawn image, with Show Original and Revert: the inspector's header wears it. */
+/** The chip on a redrawn image, with Show Original and Revert, at the head of the inspector: one row, never wrapped. */
 export function RedrawChip({ item, onShowOriginal, onRevert }: { item: ImageItem; onShowOriginal: () => void; onRevert: () => void }) {
   if (!redrawOf(item).active) return null;
   return (
-    <span className="flex items-center gap-1">
-      <span className="mac-tint inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium">
+    <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+      <span className="mac-tint inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium">
         <span className="mac-dot" aria-hidden="true" />
         AI redraw
       </span>
-      <button type="button" className="mac-ghost h-7 px-2 text-[12px]" onClick={onShowOriginal}>
-        Show Original
-      </button>
-      <button type="button" className="mac-ghost h-7 px-2 text-[12px]" onClick={onRevert}>
-        Revert
-      </button>
-    </span>
+      <span className="flex shrink-0 items-center">
+        <button type="button" className="mac-ghost h-7 px-2 text-[12px]" onClick={onShowOriginal}>
+          Show Original
+        </button>
+        <button type="button" className="mac-ghost h-7 px-2 text-[12px]" onClick={onRevert}>
+          Revert
+        </button>
+      </span>
+    </div>
   );
 }
 
