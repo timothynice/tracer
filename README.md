@@ -1,17 +1,184 @@
-# Studi0Trace
+<p align="center">
+  <img src="docs/marketing/app-icon.png" width="128" alt="">
+</p>
 
-Raster → SVG tracing with pluggable engines, and **Vexel Bench**, a fidelity
-scoreboard that says which trace is more true to the source image.
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="frontend/public/brand/wordmark-dark.png">
+    <img src="frontend/public/brand/wordmark-light.png" width="300" alt="Studi0Trace">
+  </picture>
+</h1>
+
+<p align="center"><strong>Turn images into clean vectors.</strong></p>
+
+<p align="center">
+  A Mac app that traces logos, icons and illustrations into SVG you would actually ship:
+  real gradients and drop shadows, straight edges that stay straight, circles that are circles,
+  and neighbouring shapes that meet without a hairline. Everything runs on your Mac. Nothing is uploaded.
+</p>
+
+<p align="center">
+  <a href="https://github.com/timothynice/tracer/releases"><img alt="Download for Mac" src="https://img.shields.io/badge/Download-Mac%20(Apple%20silicon)-007aff?style=for-the-badge&logo=apple&logoColor=white"></a>
+  &nbsp;
+  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-3f4a5c?style=for-the-badge"></a>
+  &nbsp;
+  <img alt="macOS 13 or later" src="https://img.shields.io/badge/macOS-13%2B-3f4a5c?style=for-the-badge">
+</p>
+
+<p align="center">
+  <img src="docs/marketing/hero-dark.png" width="900" alt="Studi0Trace tracing a cherries emoji: the original on the left of a draggable divider, the vector on the right, with Auto having chosen a style">
+</p>
+
+## Why it traces better
+
+Most tracers quantise an image into a few flat colours and outline the bands. Studi0Trace's engine, **Vexel**, reads the image the way a designer drew it:
+
+- **Gradients and shadows come back as gradients and shadows.** A red-to-blue ramp is one shape with one `<linearGradient>`; a drop shadow is an SVG `<filter>` with the blur, offset and colour it was made with, not forty stacked bands.
+- **Edges are placed at sub-pixel positions** from the anti-aliasing, so a straight edge is a straight line, a circle is a `<circle>`, a rounded rectangle is a `<rect rx>`, and a symmetric mark comes out exactly symmetric.
+- **Neighbouring shapes share one edge.** The boundary is built once as a graph, so two shapes that touch are described by the same curve and there is never a hairline of background between them.
+
+On the bench against two well-known open-source tracers, Vexel is the most faithful on 102 of 104 images, with a third of the paths and bytes:
+
+| image class | Potrace | VTracer | **Vexel** |
+|---|---|---|---|
+| logo | 11.4 | 1.20 | **0.24** |
+| flat art | 20.4 | 0.98 | **0.57** |
+| gradient | 23.2 | 10.40 | **0.81** |
+| shadow | 14.8 | 3.24 | **0.28** |
+
+<sub>Mean CIEDE2000 colour error between the source and the rendered SVG; lower is better. Details and how to reproduce it are under [Under the hood](#under-the-hood).</sub>
+
+## What you get
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/marketing/auto.png" alt="The Auto card: it tried four styles and chose Simplified, the cleanest at the same fidelity">
+      <p><strong>Auto picks the style.</strong> Every image starts on Auto, which traces it four ways and keeps the cleanest result that is as faithful as the best. It tells you what it chose and why, and every other style's verdict is one click away.</p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/marketing/inspect.png" alt="The Inspect tab: anchor points drawn over the vector, the shape count, size and time, the speck slider and the layer list">
+      <p><strong>Inspect every shape.</strong> Anchor points and outlines over the canvas, a layer list with every shape's colour and node count, and a speck slider that drops the one-pixel shards tracing can leave, before they reach the export.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/marketing/export.png" alt="The export menu: SVG, PDF, PNG at 1×, 2× and 4×, Copy SVG and Export All">
+      <p><strong>Export what the next tool wants.</strong> SVG for the web and your editor, a vector PDF for print and Keynote, PNG at 1×, 2× or 4×, or the SVG straight onto the clipboard. Export All writes every traced image in one go.</p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/marketing/hero-light.png" alt="The same trace in the light appearance">
+      <p><strong>Made for the Mac.</strong> Light and dark appearances, the system accent, a draggable split and side-by-side, overlay and vector-only views, the keyboard for everything, and HEIC straight from Photos. Images never leave your Mac.</p>
+    </td>
+  </tr>
+</table>
+
+**Rough source? Redraw it first (optional).** A small, blurry or pixel-doubled image is the hardest thing to trace. Image ▸ Redraw with AI… sends that one image to OpenAI's image model with your own key, shows the result against the original with a drift check, and only replaces the image when you say so. It is the only thing in the app that touches the network, and it is off until you turn it on.
+
+<details>
+<summary>AI redraw, in detail</summary>
+
+A small, blurry or pixel-doubled image is the hardest
+thing to trace. Image ▸ Redraw with AI… (also in the image's right-click menu and
+the inspector, which suggests it for an image under 600 px or an exact 2× upscale)
+sends that one image to OpenAI's image model with your own API key, billed to your
+OpenAI account; the first time it asks for the key and keeps it in your Mac's
+Keychain. The redraw may change shapes, spacing and colours, so it is always shown
+against the original first — edges matched, colour shift and a verdict — and the
+image changes only when you choose Use redraw. Image ▸ Revert to Original swaps
+back. Settings ▸ AI redraw holds the key, the model (GPT Image 2 or 1.5), the
+quality and the hint. Cancel Redraw abandons the request and any reply that still
+arrives; an invalid key, an account out of credit, an organization OpenAI has not
+verified for image models, a refusal, a timeout or no connection each say so and
+leave the image as it was. No test calls OpenAI; `OPENAI_API_KEY=… cargo test -p
+studi0trace-desktop --release -- --ignored live_redraw --nocapture` does, by hand.
+
+</details>
+
+## Get it
+
+**Download** the latest `Studi0Trace.app` or `.dmg` from [Releases](https://github.com/timothynice/tracer/releases). macOS 13 or later, Apple silicon. Free and MIT licensed.
+
+**The app is not signed**, so macOS stops it the first time. On macOS 13 and 14,
+right-click the app and choose Open (or open System Settings ▸ Privacy & Security
+and click Open Anyway). On macOS 15 and later, only the second works: try to open
+the app once, then open System Settings ▸ Privacy & Security and click Open Anyway
+under the message about Studi0Trace. Or, wherever you put the app, run
+`xattr -dr com.apple.quarantine /path/to/Studi0Trace.app`.
+
+It opens PNG, JPEG, GIF, WebP, BMP, HEIC and TIFF, up to 2048 px a side, and
+offers Downscale for larger ones. It is listed under Finder's Open With for those
+types and never becomes their default app.
+
+| Keys | Does |
+|---|---|
+| ⌘O | Open images |
+| ⌘↩ | Generate Vector |
+| ⌘. | Cancel Trace |
+| ⌘E | Export SVG |
+| ⇧⌘E | Export PNG at 2× |
+| ⌥⌘E | Export All |
+| ⌥⌘R | Show in Finder |
+| ⇧⌘C | Copy SVG |
+| ⌘1 – ⌘4 | Split, Side by Side, Overlay, Vector Only |
+| ⌘+ / ⌘- | Zoom In / Zoom Out |
+| ⌘0 | Actual Size |
+| ⌘9 | Zoom to Fit |
+| ⌃⌘S | Show or hide the sidebar |
+| ⌥⌘I | Show or hide the inspector |
+| ⌘⌫ | Remove Image |
+| ⌘, | Settings |
+
+<details>
+<summary><strong>Build it from source</strong></summary>
+
+Run it from source (needs Node ≥ 20 and Rust ≥ 1.90, <https://rustup.rs>):
+
+```bash
+cd frontend && npm ci                                  # the UI's dependencies, once per checkout
+cd ../apps/desktop && npm ci && npm run dev            # the Tauri CLI; starts the frontend's Vite server itself
+```
+
+Build it:
+
+```bash
+cd apps/desktop && npm run build
+# target/release/bundle/macos/Studi0Trace.app
+# target/release/bundle/dmg/Studi0Trace_0.3.0_aarch64.dmg
+npm run smoke                                          # opens a sample with the built app, as Finder does, and checks it traced
+```
+
+The first release build takes ten minutes or more (the workspace's release profile
+is LTO with one codegen unit). The build embeds `frontend/dist`; `npm run build`
+makes it first. The `.dmg` step styles its window by scripting Finder; where that
+times out (no Automation permission for Finder, or no one logged in at the
+screen) the build fails after the `.app` is made, and `CI=true npm run build`
+makes the same `.dmg` with a plain window.
+
+**Third-party notices.** `apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.html`
+is generated and committed, bundled into the app and shown by Help ▸
+Acknowledgements. It lists the Rust crates (cargo-about) and the frontend's
+production npm packages and font, with their licence texts. Regenerate it after a
+dependency change with `bash apps/desktop/scripts/notices.sh` (needs
+`cargo install cargo-about --locked --version 0.9.2 --features cli` and
+`npm ci` in `frontend/`); the same lockfiles give the same bytes. A new licence in
+the Rust tree fails the run until `apps/desktop/about.toml` accepts it.
+
+</details>
+
+## Under the hood
+
+Studi0Trace is a Tauri 2 shell around a Rust core: image intake, the presets, the artifact scorecard and Auto are `crates/studi0trace-core`, and the tracing engine is `backend/vexel-rs`. Every trace runs in a child process, so a cancel is a kill and the window never waits. The Python service in `backend/` is the engine's reference implementation and the development harness, and **Vexel Bench** is the fidelity scoreboard every quality change is judged on.
 
 ```
-backend/   FastAPI service + engines + bench     (Python ≥ 3.12)
-backend/vexel-rs/   Vexel's pipeline in Rust, built as an extension module
+apps/desktop/              Studi0Trace for Mac (Tauri 2)
 crates/studi0trace-core/   Everything around the engine, in Rust: intake, presets, the scorecard, Auto
-frontend/  Studi0Trace web app: React 18 + TS + Tailwind on the Studi0 design system (Node ≥ 20)
+backend/vexel-rs/          Vexel's pipeline in Rust, built as an extension module for the bench
+backend/                   FastAPI reference service + the Python Vexel + Vexel Bench   (Python ≥ 3.12)
+frontend/                  The app's UI: React 18 + TS + Tailwind                      (Node ≥ 20)
 ```
 
-Engines: **Potrace** (1-bit outlines), **VTracer** (colour layers), and
-**Vexel** — Studi0's own fidelity-first engine.
+The bench compares Vexel with **Potrace** (1-bit outlines) and **VTracer** (colour layers).
 
 ### Vexel
 
@@ -113,93 +280,10 @@ python -m bench run                 # every registered engine
 Design and research notes: `docs/superpowers/specs/2026-09-17-vexel-engine-design.md`,
 and `2026-09-20-vexel-rust-port-design.md` for the Rust implementation.
 
-## Studi0Trace for Mac
+## Run it (the development harness)
 
-A Mac app (macOS 13 or later, Apple silicon) that turns images into clean vectors.
-Your images stay on your Mac: nothing is uploaded unless you choose AI redraw, which sends that one image to OpenAI with your own API key.
-The tracing engine runs inside the app. Free and MIT licensed.
-
-Run it from source (needs Node ≥ 20 and Rust ≥ 1.90, <https://rustup.rs>):
-
-```bash
-cd frontend && npm ci                                  # the UI's dependencies, once per checkout
-cd ../apps/desktop && npm ci && npm run dev            # the Tauri CLI; starts the frontend's Vite server itself
-```
-
-Build it:
-
-```bash
-cd apps/desktop && npm run build
-# target/release/bundle/macos/Studi0Trace.app
-# target/release/bundle/dmg/Studi0Trace_0.3.0_aarch64.dmg
-npm run smoke                                          # opens a sample with the built app, as Finder does, and checks it traced
-```
-
-The first release build takes ten minutes or more (the workspace's release profile
-is LTO with one codegen unit). The build embeds `frontend/dist`; `npm run build`
-makes it first. The `.dmg` step styles its window by scripting Finder; where that
-times out (no Automation permission for Finder, or no one logged in at the
-screen) the build fails after the `.app` is made, and `CI=true npm run build`
-makes the same `.dmg` with a plain window.
-
-**Third-party notices.** `apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.html`
-is generated and committed, bundled into the app and shown by Help ▸
-Acknowledgements. It lists the Rust crates (cargo-about) and the frontend's
-production npm packages and font, with their licence texts. Regenerate it after a
-dependency change with `bash apps/desktop/scripts/notices.sh` (needs
-`cargo install cargo-about --locked --version 0.9.2 --features cli` and
-`npm ci` in `frontend/`); the same lockfiles give the same bytes. A new licence in
-the Rust tree fails the run until `apps/desktop/about.toml` accepts it.
-
-**The app is not signed**, so macOS stops it the first time. On macOS 13 and 14,
-right-click the app and choose Open (or open System Settings ▸ Privacy & Security
-and click Open Anyway). On macOS 15 and later, only the second works: try to open
-the app once, then open System Settings ▸ Privacy & Security and click Open Anyway
-under the message about Studi0Trace. Or, wherever you put the app, run
-`xattr -dr com.apple.quarantine /path/to/Studi0Trace.app`.
-
-It opens PNG, JPEG, GIF, WebP, BMP, HEIC and TIFF, up to 2048 px a side, and
-offers Downscale for larger ones. It is listed under Finder's Open With for those
-types and never becomes their default app.
-
-**AI redraw (optional).** A small, blurry or pixel-doubled image is the hardest
-thing to trace. Image ▸ Redraw with AI… (also in the image's right-click menu and
-the inspector, which suggests it for an image under 600 px or an exact 2× upscale)
-sends that one image to OpenAI's image model with your own API key, billed to your
-OpenAI account; the first time it asks for the key and keeps it in your Mac's
-Keychain. The redraw may change shapes, spacing and colours, so it is always shown
-against the original first — edges matched, colour shift and a verdict — and the
-image changes only when you choose Use redraw. Image ▸ Revert to Original swaps
-back. Settings ▸ AI redraw holds the key, the model (GPT Image 2 or 1.5), the
-quality and the hint. Cancel Redraw abandons the request and any reply that still
-arrives; an invalid key, an account out of credit, an organization OpenAI has not
-verified for image models, a refusal, a timeout or no connection each say so and
-leave the image as it was. No test calls OpenAI; `OPENAI_API_KEY=… cargo test -p
-studi0trace-desktop --release -- --ignored live_redraw --nocapture` does, by hand.
-
-| Keys | Does |
-|---|---|
-| ⌘O | Open images |
-| ⌘↩ | Generate Vector |
-| ⌘. | Cancel Trace |
-| ⌘E | Export SVG |
-| ⇧⌘E | Export PNG at 2× |
-| ⌥⌘E | Export All |
-| ⌥⌘R | Show in Finder |
-| ⇧⌘C | Copy SVG |
-| ⌘1 – ⌘4 | Split, Side by Side, Overlay, Vector Only |
-| ⌘+ / ⌘- | Zoom In / Zoom Out |
-| ⌘0 | Actual Size |
-| ⌘9 | Zoom to Fit |
-| ⌃⌘S | Show or hide the sidebar |
-| ⌥⌘I | Show or hide the inspector |
-| ⌘⌫ | Remove Image |
-| ⌘, | Settings |
-
-The FastAPI server and the browser build below are kept for development of
-the app and of the engine.
-
-## Run it
+The FastAPI server and the browser build are kept for developing the app and
+the engine; the Mac app does not need them.
 
 Backend (needs the `potrace` binary: `brew install potrace` / `apt install
 potrace`, and a Rust toolchain for Vexel: <https://rustup.rs>):
@@ -347,55 +431,6 @@ opaque ground; on a transparent ground the unsharp mask over straight RGB
 brightens the rim instead. A fix aimed at a
 degraded input is judged there on both sides, where it helps and where it
 costs; `tools/qloop.sh full` gates all three sets per item.
-
-## Deploy
-
-Two independent services, described in `render.yaml` and deployed from `main`:
-
-```
-┌─ tracer-frontend ──────────┐        ┌─ tracer-backend ─────────────┐
-│ Render static site          │        │ Render web service (Docker)  │
-│ frontend/dist, built by Vite│  HTTPS │ backend/Dockerfile + uvicorn │
-│ VITE_API_URL baked in       │ ─────▶ │ ALLOWED_ORIGINS gates CORS   │
-└─────────────────────────────┘        └──────────────────────────────┘
-```
-
-The frontend is **static files only** — there is no server-side rendering and
-no Node process in production. `VITE_API_URL` is substituted at build time, so
-the backend URL is baked into the bundle: change it and you must rebuild, not
-just restart.
-
-The backend is a single container: `backend/Dockerfile` builds the Vexel crate
-in its own stage, installs potrace and the two wheels, and runs uvicorn. It
-fails the build rather than the first request if the extension did not land — a
-silent fall back to the Python pipeline would only show up as every trace taking
-ten times as long. It is stateless apart from an in-memory
-upload cache (LRU with a sliding TTL), so it can be restarted or scaled without
-coordination — but uploads do not survive a restart, and a second instance will
-not see the first one's `image_id`. The client already handles that: an expired
-id returns 404 `image_expired` and it re-uploads once.
-
-### Pointing a domain at it
-
-Both services take custom domains on Render's free tier; only the certificate
-and DNS change, no code:
-
-1. Render → each service → **Settings → Custom Domains → Add**, e.g.
-   `studi0trace.com` for the frontend and `api.studi0trace.com` for the backend.
-2. Add the CNAME records Render shows you at your registrar. Certificates are
-   issued automatically.
-3. Add the new frontend origin to the backend's `ALLOWED_ORIGINS`, and set the
-   frontend's `VITE_API_URL` to the new API domain — **then redeploy the
-   frontend**, since that value is compiled in.
-
-### Free tier, honestly
-
-The backend sleeps after inactivity, so the first request after a quiet period
-pays 30–50 s of cold start. The shared CPU also costs more than it used to:
-Vexel is parallel now, so a 512 px trace that takes ~0.2 s on a laptop's twelve
-threads gets most of the way back to a second on a single shared core. Taking
-the backend off the free instance type is the one change that fixes both;
-nothing else about the deployment needs to move.
 
 ## Design docs
 
