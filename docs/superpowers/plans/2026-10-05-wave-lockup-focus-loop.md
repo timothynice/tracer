@@ -31,9 +31,9 @@
 | `wave` 0 60 440 250 | two tapered ribbons, multi-stop gradients with specular streaks (navy→blue→navy, blue→cyan→green) | gradient banding at 1×, ribbon split into pieces, wrong stop placement |
 | `gap` 120 110 400 200 | white channel 6–10 px wide between the ribbons, tapering to points at both ends | channel pinched/broken, backdrop not continuous, tips blunt |
 | `tips` the four ribbon ends | acute soft wedges | truncated wedge, nub, hairpin |
-| `light` 440 30 760 190 | thin geometric sans, ~6 px stems, soft edges, i-dot, g/h counters | stroke-vs-fill misclassification, stem width drift, wobble on round bowls |
-| `river` 760 30 1180 190 | bold sans, straight stems, R bowl, v diagonals | flared/rounded junctions, bowed straights |
-| `caps` 440 240 1180 300 | tracked light-blue caps, ~20 px cap height, ~3.5 px stems, O/C/A/B counters | sub-pixel strokes, closed counters, colour drift toward white at the rim |
+| `thin` 440 30 760 190 | thin geometric sans, ~6 px stems, soft edges, a dot, small counters | stroke-vs-fill misclassification, stem width drift, wobble on round bowls |
+| `bold` 760 30 1180 190 | bold sans, straight stems, a bowl, diagonals | flared/rounded junctions, bowed straights |
+| `caps` 440 240 1180 300 | tracked light-blue caps, ~20 px cap height, ~3.5 px stems, small counters | sub-pixel strokes, closed counters, colour drift toward white at the rim |
 
 The regions above are the starting `focus.yaml`; Task 4 confirms them on the baseline sheet.
 
@@ -102,8 +102,8 @@ Write `backend/bench/focus/wave-lockup/focus.yaml`:
 regions:
   wave:  [0, 60, 440, 250]
   gap:   [120, 110, 400, 200]
-  light: [440, 30, 760, 190]
-  river: [760, 30, 1180, 190]
+  thin:  [440, 30, 760, 190]
+  bold:  [760, 30, 1180, 190]
   caps:  [440, 240, 1180, 300]
 preset: balanced          # replaced in Task 4 by the preset Auto picks
 params: {}
@@ -760,7 +760,7 @@ Added after the Task 4 checkpoint. Tim's answer: the trace matches **shapes and 
 - **Edge fit**: Canny edges of both images' luminance at σ `EDGE_SIGMA` 1.5, which merges a 1–2 px halo or rim into its edge; every edge pixel of either image is scored by its distance to the other image's nearest edge. `edge_off_frac` is the share at `EDGE_OFF` 2 px or more, `edge_p99_px` the 99th percentile. The misses are clustered and located, so a run prints *where* the shapes differ.
 - **Fill colour**: CIEDE2000 between the two images on pixels at least `CORE_PX` 3 px inside an edge in both, each image blurred over that core alone by σ `FILL_SIGMA` 4 (normalised convolution). `fill_de_mean`, `fill_de_p95`.
 
-Calibrated while planning on the baseline: the misses at 2 px are the ribbon tips (≈ (430, 105), (88, 118), (358, 176)) and the small caps; `light`/`river` score `edge_off_frac` ≤ 0.0005; `fill_de_mean` is 0.4–0.6 on the wordmark and 1.2 / 2.9 on wave / gap, where the streaks are (residual by decision). Synthetic checks: a 1 px light halo outside a square plus a 1 px dark rim inside scores 0 on both; a 6 px corner cut scores `edge_off_frac` 0.04 with one miss cluster at the corner; a ΔE 5.5 fill shift scores `fill_de_p95` 5.5 with `edge_off_frac` 0. Pixel-level Canny does not see a sub-pixel corner rounding (the thin word's round stroke corners score within 1 px); Task 5 judges those on the 8× crops.
+Calibrated while planning on the baseline: the misses at 2 px are the ribbon tips (≈ (430, 105), (88, 118), (358, 176)) and the small caps; `thin`/`bold` score `edge_off_frac` ≤ 0.0005; `fill_de_mean` is 0.4–0.6 on the wordmark and 1.2 / 2.9 on wave / gap, where the streaks are (residual by decision). Synthetic checks: a 1 px light halo outside a square plus a 1 px dark rim inside scores 0 on both; a 6 px corner cut scores `edge_off_frac` 0.04 with one miss cluster at the corner; a ΔE 5.5 fill shift scores `fill_de_p95` 5.5 with `edge_off_frac` 0. Pixel-level Canny does not see a sub-pixel corner rounding (the thin word's round stroke corners score within 1 px); Task 5 judges those on the 8× crops.
 
 **Files:**
 - Modify: `backend/bench/focus.py`
@@ -963,7 +963,7 @@ The real asset cannot ship in the public corpus, so the corpus gets a synthetic 
 - Modify: `backend/bench/synth.py`, `backend/bench/corpus/manifest.yaml` (by `bench generate`)
 - Modify: `backend/bench/baselines/vexel.json`, `backend/studi0trace/engines/preset_details.json`, core fixtures
 
-- [ ] **Step 1: Add `wave-lockup` to `bench/synth.py`** in the logo class, following the existing generators' pattern: an SVG of two tapered ribbons (cubic outlines) with a 7 px white channel between them, each filled by a 4-stop `linearGradient` (navy `#14244a` → `#3b7fd9` → `#14244a`; `#3a9bd8` → `#5cc6e8` → `#5fc77a`), a row of thin-stroke geometric letterforms built from rects and circles (stem 6 px at 512 wide), a row of small caps (O, C, A, B, L shapes, stem 3.5 px), on `#fefefe`. Rendered at 512 and 1024 wide, plus the `-ds` degradation, as the generator does for other items. Add the blotch noise of the source (±1 level, 40 px Gaussian) to the backdrop in the PNG, not the truth.
+- [ ] **Step 1: Add `wave-lockup` to `bench/synth.py`** in the logo class, following the existing generators' pattern: an SVG of two tapered ribbons (cubic outlines) with a 7 px white channel between them, each filled by a 4-stop `linearGradient` (navy `#14244a` → `#3b7fd9` → `#14244a`; `#3a9bd8` → `#5cc6e8` → `#5fc77a`), a row of thin-stroke geometric letterforms built from rects and circles (stem 6 px at 512 wide), a row of small caps (ring, arc and bar shapes, stem 3.5 px), on `#fefefe`. Rendered at 512 and 1024 wide, plus the `-ds` degradation, as the generator does for other items. Add the blotch noise of the source (±1 level, 40 px Gaussian) to the backdrop in the PNG, not the truth.
 
 - [ ] **Step 2: Test it** in `tests/test_bench_corpus.py`: the generated item exists, has a truth SVG, and its PNG's backdrop is not a single colour.
 
@@ -993,7 +993,7 @@ git commit -m "bench: wave-lockup stand-in in the corpus; baseline and preset li
 ### 2026-10-05 — Tasks 0–4 (steps 1–4)
 
 - Environment: `uv sync` does not install the dev extra; use `VIRTUAL_ENV=$PWD/.venv uv pip install -e ".[dev]"` after it. `uv sync` writes an untracked `backend/uv.lock`: stage by name, never `git add -A`. Builds: vexel_rs 42 s, studi0trace_core 45 s.
-- Regions corrected on an overlay (the planned boxes clipped the g descender, split the t, missed the caps' tops): `gap [85,110,370,185]`, `light [440,30,805,215]`, `river [805,30,1180,190]`, `caps [440,222,1180,272]`; `wave` unchanged.
+- Regions corrected on an overlay (the planned boxes clipped a descender, split a stem, missed the caps' tops): `gap [85,110,370,185]`, `thin [440,30,805,215]`, `bold [805,30,1180,190]`, `caps [440,222,1180,272]`; `wave` unchanged.
 - Loop speeds: `qloop.sh focus` 6.4 s wall (trace 3.9–4.7 s); `--auto` 8.4 s; `qloop.sh ref` (corpus + held-out) 6 min 39 s with 6 workers.
 - References (HEAD 59a352a, engine = 29801cf): gate vs `bench/baselines/vexel.json` ok, 0 regressions, 0 improvements. Corpus score flat 0.9562 / gradient 0.9802 / logo 0.9685 / shadow 0.9668; held-out fluent-color 0.9366 / fluent-flat 0.9561 / noto 0.9452.
 - Auto picks `logo` (ΔE 1.533, ART 44.4, 43 paths) over balanced (ART 113.4), detailed (2 slivers), dense.
@@ -1003,11 +1003,11 @@ git commit -m "bench: wave-lockup stand-in in the corpus; baseline and preset li
 |---|---|---|---|---|---|
 | wave | 1.83 | 11.4 | 12.5 % | 23 | 0 |
 | gap | 3.70 | 12.4 | 29.4 % | 8 | 0 |
-| light | 1.34 | 12.9 | 6.5 % | 4 | 319 |
-| river | 1.54 | 12.9 | 6.1 % | 10 | 52 |
+| thin | 1.34 | 12.9 | 6.5 % | 4 | 319 |
+| bold | 1.54 | 12.9 | 6.1 % | 10 | 52 |
 | caps | 1.75 | 9.9 | 8.4 % | 2 | 2780 |
 
-- Where the error is: in the wordmark all of it lies within 2 px of an edge; in the wave and gap half is interior (the ribbons' specular streaks drawn as smooth ramps). Blurring the trace to the source's softness lowers visible_frac by at most a fifth, so softness is not the main cause. Seen at 8×: the thin word's stems are drawn as round-capped, round-joined strokes where the source has square ends and corners; the small caps come out heavier with lumpy outlines and malformed M vertices; some caps carry stray shading (an O drawn as a lit sphere, dark spots in M/U); a speck sits off the dark ribbon's left tip.
+- Where the error is: in the wordmark all of it lies within 2 px of an edge; in the wave and gap half is interior (the ribbons' specular streaks drawn as smooth ramps). Blurring the trace to the source's softness lowers visible_frac by at most a fifth, so softness is not the main cause. Seen at 8×: the thin word's stems are drawn as round-capped, round-joined strokes where the source has square ends and corners; the small caps come out heavier with lumpy outlines and malformed vertices on the zigzag caps; some caps carry stray shading (a round cap drawn as a lit sphere, dark spots in the zigzag and notched caps); a speck sits off the dark ribbon's left tip.
 
 ### 2026-10-05 — Task 4 checkpoint (Tim)
 
@@ -1022,13 +1022,13 @@ git commit -m "bench: wave-lockup stand-in in the corpus; baseline and preset li
 | whole | 0.0062 | 1.0 | 0.5749 | 2.0304 |
 | wave | 0.0144 | 3.0 | 1.2374 | 5.9732 |
 | gap | 0.0187 | 4.0 | 2.9184 | 7.3577 |
-| light | 0.0002 | 1.0 | 0.3968 | 1.1597 |
-| river | 0.0005 | 1.0 | 0.5996 | 1.8113 |
+| thin | 0.0002 | 1.0 | 0.3968 | 1.1597 |
+| bold | 0.0005 | 1.0 | 0.5996 | 1.8113 |
 | caps | 0.0112 | 2.0 | 0.5777 | 1.5363 |
 
 Printed misses (x, y, px, region), 8 largest:
 357.8 176.7 18 wave; 430.2 106.6 17 wave; 620.5 242.6 14 caps; 86.9 118.8 13 wave; 711.3 248.0 9 caps; 699.1 242.4 8 caps; 960.2 259.8 5 caps; 817.8 238.5 4 caps.
-(focus.json holds 17 clusters in total; the rest are 4 px or fewer, in caps/river/light.)
+(focus.json holds 17 clusters in total; the rest are 4 px or fewer, in caps/bold/thin.)
 
 ### 2026-10-05 — Task 5 defect ledger
 
@@ -1037,8 +1037,8 @@ Baseline `runs/20261005-224339-rust-baseline2` (Rust, `logo`). The dump run (`VE
 - **Source fact:** the asset is an exact 2× nearest-neighbour upscale (column pairs equal 100 %, row pairs (2k+1, 2k+2) equal 100 %). Every edge is a 2 px staircase, and the caps' strokes (~3.5 px) are about 1.75 px at native resolution.
 - **Where the primary measures come from:**
   - wave `edge_off_frac`: 48 of its 48 miss pixels are the three ribbon tips.
-  - caps `edge_off_frac`: 55 miss pixels, of which the M's have 22, the N's 24 and the A's 9.
-  - light/river: `edge_off_frac` ≤ 0.0005 and `edge_p99` 1 px.
+  - caps `edge_off_frac`: 55 miss pixels, of which the zigzag caps have 22, the diagonal caps 24 and the apex caps 9.
+  - thin/bold: `edge_off_frac` ≤ 0.0005 and `edge_p99` 1 px.
   - gap `fill_de`: 92 % comes from ribbon interior inside the gap box. The channel's own backdrop is 0.83.
 - **Streak floor (residual by decision):** a cubic-in-x colour model of each ribbon's core misses the source by 3.8 (light) and 4.0 (dark) ΔE. The trace misses that smooth model by 3.5 and 4.6.
 
@@ -1046,24 +1046,24 @@ Ranked by visible area at 1× under the shapes-and-true-colours decision ("exces
 
 | id | region | stage (module.function) | wrong at 1× | evidence | measure it moves | sentinels | fix hypothesis |
 |---|---|---|---|---|---|---|---|
-| D1 | caps (2nd O, 2nd A) | partition — `partition.seed_markers` (partition.py:206), then watershed in `initial_labels` (:409) | The O is drawn as a lit sphere: ring and counter are one region (669 px, `labels_*` 30) with a radial fill running from #f8fbfe to #006add. The A's counter is gone: its right half (34) plus the counter take a radial with a white stop. | `seed_mask` leaves 63–85 smooth px per caps glyph, in fragments under 16 px. `seed_markers`' floor = `min_region` = 16 (`logo`) drops them all, so C, O, A, I, O get no seed on the ink and the counter's seed floods the ring. With floor 6 every glyph gets seeds. O ring is 9.2 ΔE mean (16.8 p95) from the caps' true colour #53b1ed. A counter is 56 px in the source and 0 in the trace. O box visible 0.42 vs 0.07–0.15 for clean caps (≈ 385 excess px). Misses (1114,237) and (1120,251). | caps `fill_de`, `visible_frac` (≈ −1 pt), `edge_off_frac` (−9 px) | logo/vexel-wordmark-512, heldout noto/u2049-512, flat/low-contrast-512, logo/thin-mark-512 | Pool a stroke's same-colour smooth fragments into one marker before the size floor, or set the seed floor for thin features from stroke width, not `min_region`. |
+| D1 | caps (2nd round cap, 2nd apex cap) | partition — `partition.seed_markers` (partition.py:206), then watershed in `initial_labels` (:409) | The round cap is drawn as a lit sphere: ring and counter are one region (669 px, `labels_*` 30) with a radial fill running from #f8fbfe to #006add. The apex cap's counter is gone: its right half (34) plus the counter take a radial with a white stop. | `seed_mask` leaves 63–85 smooth px per caps glyph, in fragments under 16 px. `seed_markers`' floor = `min_region` = 16 (`logo`) drops them all, so the open, round, apex and bar caps (two of them round) get no seed on the ink and the counter's seed floods the ring. With floor 6 every glyph gets seeds. The round cap's ring is 9.2 ΔE mean (16.8 p95) from the caps' true colour #53b1ed. The apex cap's counter is 56 px in the source and 0 in the trace. The round cap's box visible 0.42 vs 0.07–0.15 for clean caps (≈ 385 excess px). Misses (1114,237) and (1120,251). | caps `fill_de`, `visible_frac` (≈ −1 pt), `edge_off_frac` (−9 px) | logo/vexel-wordmark-512, heldout noto/u2049-512, flat/low-contrast-512, logo/thin-mark-512 | Pool a stroke's same-colour smooth fragments into one marker before the size floor, or set the seed floor for thin features from stroke width, not `min_region`. |
 | D2 | wave / gap (3 tips) | partition — `partition.initial_labels` (watershed gives the tip to the backdrop basin) | Three ribbon tips end 3.5–6.4 px short and blunt: dark-right −3.5, light-left −4.5, light-right −6.4 px at half coverage. | Tip pixels at 55–88 % coverage are labelled backdrop already in `initial_labels` (light-right tip, (422–430, 105–111)). Label maps are short by 3.2–7.0 px. The tips are 2-region wedges, so `_extend_wedges` (3-way only) does not apply. Misses 18/17/13 px = all of wave's 48. Dark-right tip box ≈ 210 excess visible px. | wave `edge_off_frac` 0.0144 → ~0, `edge_p99` 3 → ≤ 1. gap `edge_off_frac` 0.0187 and `edge_p99` 4 fall too. | logo/wedge-fan-512, heldout fluent-color/nail-polish-512 | Extend a region's taper into the backdrop where coverage against that region's fill exceeds ½ along its own medial axis, i.e. a 2-region `_extend_wedges`. |
 | D3 | wave (dark ribbon, right tail) | fill — `fills.fit_fill` linear ramp | The tail at x ≥ 275 is bluer and lighter than the source's navy: ΔE 2.6 / 6.0 / 6.7 in 24 px bins (n 624 / 382 / 128). The x 203–227 bins are ΔE ~4, drawn darker. | `g3` axis (167.5,106.6)→(214.1,240.4) is 71° from horizontal. The source's navy→blue→navy runs along the ribbon, and the tail shares y with the blue middle. Bin means: source #15365d vs trace #1c4779 at x 299. Other bins are 0.4–2.6. | wave `fill_de_mean` (part of 1.24; the rest is streak) | gradient/linear-4stop-512, gradient/multi-shape-512-q75 | Allow the ramp parameter to follow the region's medial axis (ribbon-length ramp), or split the ramp axis search so both navy ends are kept. Check that the gain is above the streak floor. |
-| D4 | caps (both M's) | partition — per-stroke seeds (D1's cause), `merge.merge_regions` leaves the halves apart, `rescue.rescue_features` adds the V | Each M is 3 regions (27+29+43, 19+20+44). The middle vertex is malformed at the triple points. The pieces carry different solids (ΔE 3–4 apart: #5db9f2 / #51acec / #4fafec), which are the "dark spots". | In the M, `labels0` has 2 seeds; merge keeps 2; the V bottom is in the backdrop basin until rescue carves it as a third region. Misses (620,243) 14, (572,243) 4, (604,242) 3: M2 17 px, M1 5 px. Excess ≈ 250 visible px. Wobble cells (608,224) 931 and (544,224) 753. | caps `edge_off_frac` (−22 px ≈ −0.0045), caps wobble | logo/vexel-wordmark-512, heldout noto/u2049-512 | Falls out of D1 if one seed per glyph. Otherwise merge same-colour pieces whose shared boundary is not a ridge at most pairs, and let rescue hand a piece between two same-colour neighbours to them. |
-| D5 | caps (1st N) | fill — `fills.fit_fill` on a junction-only core (`weights.fill_core`) | A solid letter is drawn as a 3-stop linear ramp #0064d8 → #77c7ef → #289aeb, dark blue at the foot. | The core is 46 of 397 px, all at stroke junctions (max depth 5). The ramp extrapolates past the core to a colour darker than any source pixel. ΔE to true colour: 4.7 mean, 15.0 p95. N box visible 0.24 (≈ 140 excess px). The 2nd N (core 19 px) and U (no core, so all px) come out solid. | caps `visible_frac`, part of N's 17 miss px | gradient/multi-shape-512-q75, heldout fluent-color/nail-polish-512 | Clamp a ramp to the colour range of its weighted samples, or require a gradient to beat the solid on the full weighted pixel set when the core is a small fraction of the region. |
-| D6 | caps (N notches, A apex/counter) | partition rim + geometry — notch tip pixels labelled glyph (`initial_labels` rim); the fit at tol 0.6 smooths across | The acute backdrop notches between the N's diagonal and stems close up by ~2 px. The rescued A's counter top is short. | 1st N: notch tip at (700–701,243) has 0 % coverage but carries the glyph label; misses (699,242) 8, (711,248) 9. 2nd N: (960,260) 5, (964,241) 2. 1st A: (818,238) 4. | caps `edge_off_frac` (−24 px ≈ −0.005) | logo/wedge-fan-512, heldout noto/u2049-512 | Give 2-px notch tips to the backdrop when coverage is under ½ (`split_rim`-style), and let a concave acute corner be a cusp (`TIP_TRIM`). Re-test after D1/D4. |
+| D4 | caps (both zigzag caps) | partition — per-stroke seeds (D1's cause), `merge.merge_regions` leaves the halves apart, `rescue.rescue_features` adds the middle vertex | Each zigzag cap is 3 regions (27+29+43, 19+20+44). The middle vertex is malformed at the triple points. The pieces carry different solids (ΔE 3–4 apart: #5db9f2 / #51acec / #4fafec), which are the "dark spots". | In a zigzag cap, `labels0` has 2 seeds; merge keeps 2; the vertex bottom is in the backdrop basin until rescue carves it as a third region. Misses (620,243) 14, (572,243) 4, (604,242) 3: zigzag cap 2 17 px, cap 1 5 px. Excess ≈ 250 visible px. Wobble cells (608,224) 931 and (544,224) 753. | caps `edge_off_frac` (−22 px ≈ −0.0045), caps wobble | logo/vexel-wordmark-512, heldout noto/u2049-512 | Falls out of D1 if one seed per glyph. Otherwise merge same-colour pieces whose shared boundary is not a ridge at most pairs, and let rescue hand a piece between two same-colour neighbours to them. |
+| D5 | caps (1st diagonal cap) | fill — `fills.fit_fill` on a junction-only core (`weights.fill_core`) | A solid letter is drawn as a 3-stop linear ramp #0064d8 → #77c7ef → #289aeb, dark blue at the foot. | The core is 46 of 397 px, all at stroke junctions (max depth 5). The ramp extrapolates past the core to a colour darker than any source pixel. ΔE to true colour: 4.7 mean, 15.0 p95. The diagonal cap's box visible 0.24 (≈ 140 excess px). The 2nd diagonal cap (core 19 px) and the notched cap (no core, so all px) come out solid. | caps `visible_frac`, part of the diagonal cap's 17 miss px | gradient/multi-shape-512-q75, heldout fluent-color/nail-polish-512 | Clamp a ramp to the colour range of its weighted samples, or require a gradient to beat the solid on the full weighted pixel set when the core is a small fraction of the region. |
+| D6 | caps (diagonal-cap notches, apex-cap apex/counter) | partition rim + geometry — notch tip pixels labelled glyph (`initial_labels` rim); the fit at tol 0.6 smooths across | The acute backdrop notches between a diagonal cap's diagonal and stems close up by ~2 px. The rescued apex cap's counter top is short. | 1st diagonal cap: notch tip at (700–701,243) has 0 % coverage but carries the glyph label; misses (699,242) 8, (711,248) 9. 2nd diagonal cap: (960,260) 5, (964,241) 2. 1st apex cap: (818,238) 4. | caps `edge_off_frac` (−24 px ≈ −0.005) | logo/wedge-fan-512, heldout noto/u2049-512 | Give 2-px notch tips to the backdrop when coverage is under ½ (`split_rim`-style), and let a concave acute corner be a cusp (`TIP_TRIM`). Re-test after D1/D4. |
 | D7 | wave (dark ribbon, left tip) | partition — `rescue.rescue_features` promotes the tail; at 32 px it survives `engine.absorb_shards` (min_region 16) | A detached grey blob ("speck") with a gradient #d8dde5 → #4f5b73 sits off the ribbon's blunt end. | Label 38 (15–23, 181–188) is not in `labels_merge` and appears in `labels_rescue`. `strokes.txt`: "group [38]: no geometry". Same mechanism at the dark-right tip: piece 37 < 16 px is absorbed. Reach is fine (−0.8 px), but the colour is wrong and there is a gap. Box p99 25.5. | wave `visible_frac` (small area, high contrast) | logo/wedge-fan-512, heldout fluent-color/speech-balloon-512, shadow/card-512-q75 | Hand a rescued piece that touches one visible region at that region's tip back to it (falls out of D2 if the tip is kept). |
-| D8 | light + river (all stems) | geometry — `topology._fillets` (topology.py:2656) reads radii with no deblur; `_rectify`/`rects` regularise; `curves.find_corners` (:851) at `corner_threshold` 70 and `LINE_MIN` 8.1 (:162) | Square stem ends and corners are drawn round. 10 stem ends (8–10 px wide) are single U-turn cubics. About 19 corners are filleted at r 1.96–3.83, and the bold i is `<rect rx=2.94>`. Max 1.84 px inside the square corner. | Source corner block coverage is 0.57 ≈ the product of the side coverages (a square corner, blurred). Placed vertices are already rounded. `find_corners` finds no L corner at 70°. The 1.96 cluster equals the apparent radius of a square corner under the read σ 1.04: √(1.86²σ²+0.58) = 2.08. The rect's raw radii are 2.6/4.0/4.0/2.0, regularised to 2.94, and that is every fillet's anchor. What-ifs (Python, monkeypatched): no fillets + no rects moves no measure ≤ 0.001; `corner_threshold` 45 makes thin-L `visible_frac` worse (0.091 → 0.10). Excess vs the bold i stem ≈ 0. | none of the primary measures (all < 2 px); visual only | logo/vexel-wordmark-512, logo/hex-nest-512-ds, heldout noto/u2049-512 | Deblur fillet radii as `_rectify` does, and treat r ≤ the apparent radius of a blurred square corner as sharp. Sharpen two line runs that turn 60–120° within that footprint to their intersection, which also squares the ends when the two corners are closer than `LINE_MIN`. |
-| D9 | caps (rescued C, O, A, I) | partition — `rescue.rescue_features` region extent | Rescued glyphs are fatter than seeded ones. Mass vs source is 0.99–1.01 for rescued and 0.84–0.93 for seeded. Counters are 4–8 % small. | Rescued regions hold 44–58 px under ½ coverage; seeded ones hold 9–11. O counter 296 vs 316 px; A 48 vs 52. | caps `edge_off_frac` (A apex 4 px), `visible_frac` small | heldout fluent-color/speech-balloon-512, logo/thin-mark-512 | Falls out of D1 (seeded, not rescued). Otherwise trim a rescued region to coverage ≥ ½ against its own fill. |
+| D8 | thin + bold (all stems) | geometry — `topology._fillets` (topology.py:2656) reads radii with no deblur; `_rectify`/`rects` regularise; `curves.find_corners` (:851) at `corner_threshold` 70 and `LINE_MIN` 8.1 (:162) | Square stem ends and corners are drawn round. 10 stem ends (8–10 px wide) are single U-turn cubics. About 19 corners are filleted at r 1.96–3.83, and a bold stem is `<rect rx=2.94>`. Max 1.84 px inside the square corner. | Source corner block coverage is 0.57 ≈ the product of the side coverages (a square corner, blurred). Placed vertices are already rounded. `find_corners` finds no L corner at 70°. The 1.96 cluster equals the apparent radius of a square corner under the read σ 1.04: √(1.86²σ²+0.58) = 2.08. The rect's raw radii are 2.6/4.0/4.0/2.0, regularised to 2.94, and that is every fillet's anchor. What-ifs (Python, monkeypatched): no fillets + no rects moves no measure ≤ 0.001; `corner_threshold` 45 makes thin-L `visible_frac` worse (0.091 → 0.10). Excess vs the bold i stem ≈ 0. | none of the primary measures (all < 2 px); visual only | logo/vexel-wordmark-512, logo/hex-nest-512-ds, heldout noto/u2049-512 | Deblur fillet radii as `_rectify` does, and treat r ≤ the apparent radius of a blurred square corner as sharp. Sharpen two line runs that turn 60–120° within that footprint to their intersection, which also squares the ends when the two corners are closer than `LINE_MIN`. |
+| D9 | caps (rescued open, round, apex and bar caps) | partition — `rescue.rescue_features` region extent | Rescued glyphs are fatter than seeded ones. Mass vs source is 0.99–1.01 for rescued and 0.84–0.93 for seeded. Counters are 4–8 % small. | Rescued regions hold 44–58 px under ½ coverage; seeded ones hold 9–11. Round cap's counter 296 vs 316 px; apex cap 48 vs 52. | caps `edge_off_frac` (apex cap's apex 4 px), `visible_frac` small | heldout fluent-color/speech-balloon-512, logo/thin-mark-512 | Falls out of D1 (seeded, not rescued). Otherwise trim a rescued region to coverage ≥ ½ against its own fill. |
 
 Context-table hypotheses:
 - backdrop: spurious backdrop regions — **refuted** (one backdrop label; the counters are their own regions within ~1.5 ΔE of it). Halo rings as slivers — **refuted** (slivers 0, pinholes 0); halos are **artifact-by-decision**.
 - wave: gradient banding — **refuted** (smooth 4-stop SVG gradients). Ribbon split into pieces — **refuted** (one region each; only tip shards, D7). Wrong stop placement — **confirmed for the dark ribbon's tail** (D3). Streaks are **artifact-by-decision**.
 - gap: channel pinched/broken, backdrop not continuous — **refuted** (backdrop continuous; channel `fill_de` 0.83). Tips blunt — **confirmed** (D2).
 - tips: truncated wedge — **confirmed** (D2). Nub — **confirmed** at the dark-left tip (D7). Hairpin — **refuted**.
-- light: stroke-vs-fill misclassification — **refuted** (the only thin group is the caps' first I, fidelity 0.147 > gate 0.13, filled; the SVG has no strokes; the round ends are D8 geometry, not the stroke stage). Stem width drift — **refuted** (stem mass 0.99–1.01). Wobble on round bowls — **refuted** (edge p99 1 px; wobble at the h's arch junction is sub-pixel).
-- river: flared/rounded junctions — **confirmed, minor** (D8). Bowed straights — **refuted** (`rect_bowed` 0).
-- caps: sub-pixel strokes — **refuted** (`thin_strokes` 0). Closed counters — **confirmed** (D1). Colour drift toward white at the rim — **refuted** (solids within 0.8–3 ΔE of #53b1ed; the rim is **artifact-by-decision**). "Heavier" — **refuted as area** (D9 only for rescued glyphs; the crisp-vs-soft edge is what reads as heavier). Dark spots in M — **confirmed** (D4). Dark spots in U — **refuted**.
+- thin: stroke-vs-fill misclassification — **refuted** (the only thin group is the caps' first bar cap, fidelity 0.147 > gate 0.13, filled; the SVG has no strokes; the round ends are D8 geometry, not the stroke stage). Stem width drift — **refuted** (stem mass 0.99–1.01). Wobble on round bowls — **refuted** (edge p99 1 px; wobble at an arch junction is sub-pixel).
+- bold: flared/rounded junctions — **confirmed, minor** (D8). Bowed straights — **refuted** (`rect_bowed` 0).
+- caps: sub-pixel strokes — **refuted** (`thin_strokes` 0). Closed counters — **confirmed** (D1). Colour drift toward white at the rim — **refuted** (solids within 0.8–3 ΔE of #53b1ed; the rim is **artifact-by-decision**). "Heavier" — **refuted as area** (D9 only for rescued glyphs; the crisp-vs-soft edge is what reads as heavier). Dark spots in a zigzag cap — **confirmed** (D4). Dark spots in the notched cap — **refuted**.
 
 ### 2026-10-06 — D2 tips (+D7): BLOCKED, not landed
 
@@ -1089,3 +1089,197 @@ vexel_rs untouched. Report: `.superpowers/sdd/2026-10-05-wave-lockup-focus-loop/
   the change (a few handed pixels move a region's refitted fill and every coverage-placed edge of it).
   A D7 rule that splits any two-neighbour "mixture" region at ½ broke overlaps (flat/overlap-512
   delta_e 0.009 → 1.09) and was dropped.
+
+### 2026-10-07 — D1 caps seeding: BLOCKED, not landed
+
+Hypothesis confirmed on the asset: the caps' seed fragments are under the floor (16, `logo`), so the
+glyphs get no seed and a counter's seed floods its ring. Both hypotheses were tried; neither passes.
+The Python prototype is parked on branch `claude/wave-lockup-d1-wip` (7a5014d, 4 WIP commits on
+87b00c1, with `D1_POOL`/`D1_STRAND`/`D1_SEEDFLOOR` experiment toggles); this branch is back at
+87b00c1 plus this record. vexel_rs was never rebuilt; no Rust port, diffcheck stage or fixtures.
+Report: `.superpowers/sdd/2026-10-05-wave-lockup-focus-loop/d1-report.md`.
+
+- Rule tried (hypothesis 1, best variant try9): sub-floor fragments that touch corner to corner and
+  are nearer than `detail` in mean colour pool (union-find), and the floor judges the pool
+  (`partition.pool_fragments`). Pooling alone seeds the glyph ink and then floods the apex caps' counters
+  (13 seed px, under the floor), so a second rule was needed (`seed_stranded`): every sub-floor
+  pool is seeded in a trial flood, pools whose basins meet and agree in colour are one area, and an
+  area is seeded when it is `detail` or more from every marker basin beside it (its seed and the
+  pixels across the edge) and has an interior pixel (an area, not a line). On both focus inputs it
+  seeds exactly the two apex-cap counters.
+- Focus, try9 (Python) vs a Python no-change run (which equals the pinned Rust baseline on caps):
+  original caps edge_off 0.0112 → 0.0072, p99 2 → 1.41, fill_de_mean 0.5777 → 0.5695, p95
+  1.5363 → 1.5068, visible 0.0844 → 0.0699, wobble 2780 → 976; wave/gap unchanged; thin wobble
+  319.1 → 319.0, bold fill_de_p95 1.8113 → 1.8115 and wobble 52.33 → 52.35 (Python-vs-Rust level).
+  2nd round cap a ring with a counter (visible 0.317 → 0.067), both apex caps have counters, misses (620,243) 14 and
+  (711,248) 9 → gone / 9. Bilinear caps edge_off 0.0027 → 0.0019, visible 0.0822 → 0.0736, wobble
+  298 → 135, but fill_de_mean 0.5583 → 0.5606 / p95 1.4681 → 1.4748 (the 1st round cap, drawn soft through a
+  blur filter before, is a crisp ring: visible 0.029 → 0.085), wave fill_de 1.2328 → 1.2329.
+- D4: zigzag cap 1 3 → 1 ink pieces, cap 2 3 → 2. D9: no glyph is rescued any more; every glyph's label mass
+  is 0.85–0.89 of its coverage (rescued ones were 1.11–1.19, the 2nd round cap 1.72), counters present.
+- Survey (`bench/reports/keep-2026-10-05-wave-lockup/survey/d1_pools.py`, 224 items + 2 focus,
+  `d1_pools.json`): pooling reaches the floor in 99 corpus/held-out items (524 pools; 63 in
+  glow-512 alone) at the default floor 6. Pool size / floor: corpus 1–33×, focus 1–5×; fragments
+  per pool: corpus 2–21+, focus 3–20. No gap in either.
+- Python full gate vs d2py-off: try9 26 regressions in 8 corpus items (thin-mark-512 AI 0.36 → 7.30,
+  thin-mark-512-ds, wedge-fan-128 outline 0.12 → 1.47, blobs-128, sticker-512-ds, multi-shape-q75,
+  silverpeak-badge-768, studi0mail-logo-dark) and 44 in ~17 held-out items (noto u26cf/u26ce/u2640/
+  u1f96c/u1f4a0, fluent wheelchair/woman-elf/…), 10 + 13 improved. Pooling alone (stranded off):
+  24 + 42 regressions, the same items: the pooling is the cause. Typical mechanisms: a transparent
+  notch tip between a line and a triangle's side pools to 6 px and is seeded (the notch closes); a
+  JPEG ringing line 8 ΔE from its fill pools to 6 px and becomes a speck.
+- Hypothesis 2 (seed floor below `min_region`; the simplest form, a fixed seed floor 6, leaves the
+  default corpus untouched by construction): worse on the focus asset itself — wave edge_off
+  0.0144 → 0.0243 (tip shards seeded), caps edge_off 0.0112 → 0.0138, whole AI 44.4 → 57.3. A floor
+  from stroke width lowers it at the ribbon tips too, so it was not pursued further.
+- Synthetic (2× NN upscale of a 1.75 px #53b1ed round and apex cap, logo floor/detail) reproduces the defect, and
+  the pooling does not fix it: its round cap's seed breaks into four 8-chains of 13–15 px. The asset's pools
+  are a property of its staircase.
+- What would be next: the defect is the floor judging seeds by `min_region`; the corpus shows small
+  pools at floor 6 are mostly notch tips and ringing. A rule must tell a stroke's valley line from
+  those without a threshold — e.g. pool only fragments whose chain lies between two ridges of one
+  other region (a stroke's two edges against one backdrop), or seed the glyph after the merge from
+  the rescue's carved region instead of the partition.
+
+### 2026-10-07 — Degraded bench set: the blocked fixes re-scored
+
+Set: `bench/degraded` (spec `2026-10-07-degraded-bench-design.md`, plan `2026-10-07-degraded-bench.md`):
+13 vector-truth sources × nn2x / sharpen / small / combo = 52 items. Reference `ref-degraded`
+(Rust, engine = 87b00c1's) under `bench/reports/keep-2026-10-05-wave-lockup/`; every item traced
+without error.
+
+The wave-lockup stand-in's ribbons were redrawn after the prototype runs below (tips moved by 15 px or
+more and the proportions changed, so they no longer sit at the asset's tip coordinates); `ref-degraded`
+was re-frozen on the new set (Rust, 52 items, 0 errors) and the table is its means. The prototype
+counts below were measured on the previous ribbons and were not
+re-run; they can differ only in the four wave-lockup items.
+
+| class | items | score | delta_e_mean | outline_px | junction_px | artifact_index | wobble_deg_100px |
+|---|---|---|---|---|---|---|---|
+| combo | 13 | 0.9198 | 0.6024 | 2.1326 | 1.0625 | 137.2659 | 403.1250 |
+| nn2x | 13 | 0.9568 | 0.3462 | 0.3325 | 0.7486 | 69.0826 | 97.4997 |
+| sharpen | 13 | 0.9405 | 0.3730 | 0.2388 | 0.9945 | 15.4098 | 23.3930 |
+| small | 13 | 0.9614 | 0.3012 | 0.1276 | 0.4200 | 31.6127 | 102.5124 |
+
+Prototypes re-scored Python against Python (`degraded-eval/py-ref`, this branch's engine with
+`VEXEL_BACKEND=python`, 52 items, 0 errors); each from a detached worktree of its WIP branch, the D0
+toggle from the re-based experiment patch. Every prototype run traced all 52 items without error.
+The five runs took 11 min 16 s on 6 workers. Items per class, improved / regressed / same
+(`bench.gate --by-class`; an item that regresses any metric is regressed, whatever else improves):
+
+| prototype | targets | nn2x | sharpen | small | combo | degraded total | clean sets (already recorded) |
+|---|---|---|---|---|---|---|---|
+| D0 lanczos (87a0981) | nn2x, combo | 1/12/0 | 0/0/13 | 0/0/13 | 1/12/0 | 2/24/26 | 0 of 224 items changed (round-2 survey, `.superpowers/sdd/2026-10-05-wave-lockup-focus-loop/d0-report.md`) |
+| D0 bilinear (+patch) | nn2x, combo | 2/11/0 | 0/0/13 | 0/0/13 | 0/13/0 | 2/24/26 | not run on the clean sets (focus only); its detection is the same `native_of` test |
+| D1 try9 (7a5014d) | small, combo | 1/2/10 | 0/3/10 | 0/5/8 | 1/4/8 | 2/14/36 | 26 regressions in 8 corpus items, 44 in ~17 held-out; 10 + 13 improved |
+| D2 late5 (1ae71b3, tip regions off) | all | 1/1/11 | 0/1/12 | 0/0/13 | 0/3/10 | 1/5/46 | 6 regressions in 5 items, 7 improved |
+| (Rust vs Python, same engine) | — | 0/1/12 | 1/0/12 | 0/0/13 | 0/2/11 | 1/3/48 | — (scale of the engines' own difference) |
+
+D0's sanity check holds for both variants: every `sharpen` and `small` item is within tolerance
+(same), and every one of the 26 doubled items (`nn2x` and `combo`, whose noise is added before the
+doubling) moved.
+
+What the gate metrics compare with. Each source here is damaged, and only some metrics see past the
+damage:
+- **With the degraded source's pixels:** `seam_ppm` (the share of pixels the trace covers less than
+  the source's own alpha, here the staircase alpha), `delta_e_mean`, and `score` (SSIM, ΔE and edge F1
+  against the source).
+- **With the vector truth:** `outline_px` and `junction_px`.
+- **With the output only:** `artifact_index`, `wobble_deg_100px`, `slivers` and `thin_strokes`.
+  Pinholes, inside the artifact index, are only looked for where the source is opaque.
+
+So a fix that removes the damage can lose on the first group while it gains on the other two. D0's
+target-class items (improved / regressed / same) counted three ways (`bench.gate.by_class` with the
+gate's `TOLERANCES` restricted):
+
+| D0 variant | class | all gate metrics | without seam_ppm, delta_e_mean, score | outline_px + junction_px only |
+|---|---|---|---|---|
+| lanczos | nn2x | 1/12/0 | 8/4/1 | 10/2/1 |
+| lanczos | combo | 1/12/0 | 6/6/1 | 8/4/1 |
+| lanczos | both | 2/24/0 | 14/10/2 | **18/6/2** |
+| bilinear | nn2x | 2/11/0 | 5/7/1 | 6/6/1 |
+| bilinear | combo | 0/13/0 | 8/5/0 | 9/4/0 |
+| bilinear | both | 2/24/0 | 13/12/1 | 15/10/1 |
+
+The routing rule (`2026-10-07-degraded-bench.md`, Step 10, lines 1211-1218: improved ≥ 2 × regressed in
+the target classes, then at least two thirds of the improved items in them) is not met by the middle
+column, the one that drops only the source-compared metrics: lanczos 14 improved / 10 regressed,
+bilinear 13 / 12. Only the narrowest column, `outline_px` + `junction_px`, gives lanczos 18 / 6 (meets
+2×) and bilinear 15 / 10 (does not), and that column leaves out every output-only cost. For lanczos,
+8 items regress on `seam_ppm` and nothing else. Recounted the same ways, D1 and D2 do not change
+verdict: D1 in small + combo is 3/7 without the source-compared metrics and 1/3 on truth only, and D2
+is 0/0/52 on truth only.
+
+The three-way counts reproduce with `bench.gate` (from `backend/`; `R` is
+`bench/reports/keep-2026-10-05-wave-lockup/degraded-eval`, `V` is `d0-lanczos` or `d0-bilinear`; the
+per-class table is the output's last block, the target classes are its nn2x and combo rows):
+
+```bash
+python -m bench.gate $R/py-ref/results.json $R/$V/results.json --by-class
+python -m bench.gate $R/py-ref/results.json $R/$V/results.json --by-class \
+  --metrics artifact_index,pinholes,slivers,thin_strokes,outline_px,junction_px,wobble_deg_100px
+python -m bench.gate $R/py-ref/results.json $R/$V/results.json --by-class --metrics outline_px,junction_px
+```
+
+- **D0 lanczos:** wins are metric-wide in its two classes (90 improved metric lines: artifact_index
+  in 21 of 26 doubled items, wobble in 21, outline_px in 19, score up in 8 and down in 4), e.g.
+  combo/venn-512 AI 133.29 → 31.85, wobble 441.2 → 43.4; nn2x/thin-mark-512 AI 239.77 → 43.34; combo/
+  logomark-512 outline 1.914 → 0.200, thin_strokes 10 → 0. Only 2 items pass clean (nn2x/hex-nest-512,
+  combo/radial-disc-512) because 17 of the 26 regress `seam_ppm` (8 on seam_ppm alone), e.g.
+  combo/logomark-512 3475.5 → 21435.7, nn2x/thin-mark-512 85653 → 144576. The other regressions are
+  thin-mark slivers 0 → 6 (nn2x) and 0 → 7 (combo), combo/card-512 ΔE 0.816 → 1.555, combo/wedge-fan-512
+  outline 20.27 → 29.73, and nn2x/logomark-512 AI 78.99 → 99.44 / wobble 96.0 → 221.8.
+- **D0 bilinear:** the same shape. 85 improved lines (AI 21, wobble 22, outline 17, score up in 8,
+  down in 3). It passes clean on nn2x/card-512 and nn2x/hex-nest-512, and 17 of 26 items regress seam_ppm
+  (5 on it alone). It costs more colour than lanczos: delta_e_mean regresses in 12 items (lanczos 6),
+  nn2x/thin-mark-512 ΔE 0.542 → 1.377, score 0.9395 → 0.8899. combo/radial-disc-512 goes from clean to
+  AI 0 → 40.81 and outline 0.020 → 0.264. nn2x/nail-polish-512 slivers 0 → 16.
+- **D1 try9:** 2 improved items (combo/u2049-512, nn2x/wave-lockup-1208: AI 90.90 → 82.89, wobble
+  143.6 → 121.6). 14 regressed, in every class: sharpen/wave-lockup-1208 AI 25.33 → 41.71 / wobble
+  35.3 → 58.9, small/wedge-fan-176 AI 26.11 → 31.46, small/wave-lockup-176 slivers 11 → 15, combo/
+  wedge-fan-512 wobble 716.9 → 733.7. Its largest single win is small/thin-mark-176 (AI 107.35 →
+  48.35, slivers 21 → 5), which is still regressed: score 0.9331 → 0.9185, ΔE 0.259 → 0.416.
+- **D2 late5:** 1 improved item (nn2x/wave-lockup-1208 AI 90.90 → 88.83). 5 regressed by small
+  amounts: combo/u2049-512 AI 167.71 → 171.88, nn2x/wedge-fan-512 wobble 62.9 → 66.1, sharpen/wave-
+  lockup-1208 wobble 35.3 → 44.2, combo/logomark-512 slivers 0 → 1. That is close to the Rust-vs-Python
+  difference of the unchanged engine (1/3/48).
+
+**Routing recommendation.**
+- **D0: not a candidate yet, decided by the first clause on every column that counts the output-only
+  metrics.** With all gate metrics, 2 improved items against 24 regressed in its target classes (both
+  variants). Dropping only the source-compared metrics (`seam_ppm`, `delta_e_mean`, `score`), the
+  column that still counts what the output looks like, gives lanczos 14 / 10 and bilinear 13 / 12:
+  neither meets 2 ×. Only truth metrics alone (`outline_px` + `junction_px`) put lanczos at 18 / 6,
+  which ignores the output-only costs. All of D0's improved items are in nn2x and combo, so the
+  two-thirds clause would pass. D0 becomes a routing candidate only if both hold: (a) its `seam_ppm`
+  rise proves to be a staircase artefact, by rendering the trace against the vector truth instead of
+  the degraded source (the metric is measured against the staircase's alpha, and rises in 17 of 26
+  doubled items under either resampler); and (b) its output-only regressions are fixed. For lanczos
+  they are, in the gate files (`d0-lanczos.gate.txt`): nn2x/thin-mark-512 slivers 0 → 6 (combo/
+  thin-mark-512 0 → 7), and nn2x/logomark-512 artifact_index 78.99 → 99.44 with wobble_deg_100px 95.97
+  → 221.77. (Bilinear: nn2x/thin-mark-512 slivers 0 → 3, nn2x/logomark-512 artifact_index 78.99 →
+  142.25.) The detector is already exact: the exactly-once `native_of` test changed 0 of 224 clean
+  items (round-2 survey, `.superpowers/sdd/2026-10-05-wave-lockup-focus-loop/d0-report.md`), kept all
+  26 sharpen/small items within tolerance (same) and caught all 26 doubled ones. Adding the round-2
+  partial-coverage clause would also clear the two crisp-art pytest fixtures. Next steps, in order:
+  (1) measure the seam with the trace rendered against the truth; (2) fix the sliver and wobble
+  regressions on thin-mark and logomark; (3) re-count the middle column. The variant tie-break
+  (lanczos 14 / 10 against bilinear 13 / 12, half as many delta_e_mean regressions) leans lanczos, and
+  should be re-read after (1).
+- **D1: not a candidate, decided by the first clause.** In small and combo it has 1 improved item
+  against 9 regressed. It does not help degraded inputs either: 2 improved items in all 52. Its
+  costs are as broad as on the clean sets, with regressions in all four classes, including sharpen
+  and nn2x, where it has no target. No detector would route it. The pooling rule itself needs
+  redesign (see its 2026-10-07 entry).
+- **D2: not a candidate, decided by the first clause.** It targets all classes and has 1 improved
+  item against 5 regressed. It does not help degraded inputs: its one win and its costs are both
+  around the size of the engines' own Rust-vs-Python difference. Its wins are not concentrated
+  anywhere, so no cheap detector exists. The rule must be made safe on clean inputs, and its
+  clean-set regressions (silverpeak-badge-768, studi0mail-logo-dark, wedge-fan-512, two noto q75
+  items) are the list to fix.
+
+Order for the next plan (detectors and routed fixes): no candidate meets the rule yet. D0 lanczos
+is the first to work on: its middle-column count is 14 improved / 10 regressed, short of 2 ×, and
+(a) the seam_ppm rise has to be settled against the truth and (b) the thin-mark slivers and
+logomark artifact_index / wobble regressions fixed before it is routed (detector done). D1 (1 / 3 on
+truth metrics) and D2 (0) follow, both only after a redesign.

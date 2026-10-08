@@ -2,16 +2,18 @@
 # The three speeds of the focus loop. Run from backend/.
 #   tools/qloop.sh focus [bench.focus run args]   ~5 s: the one asset (default bench/focus/wave-lockup)
 #   tools/qloop.sh sentinels                      ~30 s: bench/sentinels.txt, gated per item
-#   tools/qloop.sh full                           minutes: corpus + held-out, gated per item
-#   tools/qloop.sh ref                            freeze the references the gates compare against
+#   tools/qloop.sh full                           minutes: corpus + held-out + degraded, gated per item
+#   tools/qloop.sh ref [SET ...]                  freeze the references the gates compare against (default: all sets)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY=.venv/bin/python
 KEEP=bench/reports/keep-2026-10-05-wave-lockup
 ASSET=${ASSET:-bench/focus/wave-lockup}
+SETS="corpus heldout degraded"  # bench/<set>, each gated against $KEEP/ref-<set>
 export VEXEL_BACKEND=${VEXEL_BACKEND:-rust} RAYON_NUM_THREADS=${RAYON_NUM_THREADS:-2}
 W=${WORKERS:-6}
 
+# bench/sentinels.txt: the first column names the set (corpus | heldout | degraded), the second the item id
 ids() { grep -v '^#' bench/sentinels.txt | awk -v c="$1" '$1==c {print $2}' | paste -sd, -; }
 
 bench_run() {  # corpus-dir ids-or-empty out-dir
@@ -23,12 +25,14 @@ bench_run() {  # corpus-dir ids-or-empty out-dir
 case "${1:-}" in
   focus) shift; exec $PY -m bench.focus run "$ASSET" "$@" ;;
   ref)
-    bench_run bench/corpus "" "$KEEP/ref-corpus"
-    bench_run bench/heldout "" "$KEEP/ref-heldout"
-    echo "references: $KEEP/ref-{corpus,heldout}/results.json" ;;
+    shift
+    for set in ${*:-$SETS}; do
+      bench_run "bench/$set" "" "$KEEP/ref-$set"
+      echo "reference: $KEEP/ref-$set/results.json"
+    done ;;
   sentinels|full)
     tag=$(date +%H%M%S); rc=0
-    for set in corpus heldout; do
+    for set in $SETS; do
       sel=""
       if [ "$1" = sentinels ]; then
         sel=$(ids $set)

@@ -336,6 +336,18 @@ gradient stair-stepping, plus path/node/byte counts and time. Classes:
 `logo`, `flat`, `gradient`, `shadow`. Composite weights live in
 `bench/config.py` and are echoed into every `results.json`.
 
+Two more sets sit beside the corpus, each run with `--corpus`: `bench/heldout`
+(open-source emoji never used while developing Vexel) and `bench/degraded`
+(`python -m bench.degraded generate`): thirteen vector-truth sources rendered
+with the damage real uploads carry — `nn2x` (an exact nearest-neighbour 2×
+upscale), `sharpen` (unsharp-mask rims and halos), `small` (176 px, strokes
+under 2 px) and `combo` (`nn2x` and `sharpen` together plus ground noise, at
+the full size). `sharpen`'s dark rim and light halo appear only against an
+opaque ground; on a transparent ground the unsharp mask over straight RGB
+brightens the rim instead. A fix aimed at a
+degraded input is judged there on both sides, where it helps and where it
+costs; `tools/qloop.sh full` gates all three sets per item.
+
 ## Deploy
 
 Two independent services, described in `render.yaml` and deployed from `main`:

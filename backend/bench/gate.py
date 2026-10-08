@@ -31,7 +31,9 @@ def _by_id(run: dict, engine: str) -> dict[str, dict]:
     return {r["id"]: r for r in run["items"] if r["engine"] == engine}
 
 
-def gate(ref: dict, cand: dict, engine: str = "vexel") -> tuple[list[str], list[str], list[str]]:
+def gate(ref: dict, cand: dict, engine: str = "vexel",
+         metrics: list[str] | None = None) -> tuple[list[str], list[str], list[str]]:
+    tolerances = TOLERANCES if metrics is None else {k: TOLERANCES[k] for k in metrics}
     a, b = _by_id(ref, engine), _by_id(cand, engine)
     regs: list[str] = []
     imps: list[str] = []
@@ -42,7 +44,7 @@ def gate(ref: dict, cand: dict, engine: str = "vexel") -> tuple[list[str], list[
         if "error" in a[i] or "error" in b[i]:
             continue
         ma, mb = a[i]["metrics"], b[i]["metrics"]
-        for k, (sign, tol) in TOLERANCES.items():
+        for k, (sign, tol) in tolerances.items():
             va, vb = ma.get(k), mb.get(k)
             # Both None is OK (no truth); vanished or non-finite is regression
             if va is None and vb is None:
@@ -62,12 +64,40 @@ def gate(ref: dict, cand: dict, engine: str = "vexel") -> tuple[list[str], list[
     return regs, imps, missing
 
 
+def by_class(ref: dict, cand: dict, engine: str = "vexel",
+             metrics: list[str] | None = None) -> dict[str, dict[str, int]]:
+    """Items per class that regressed (any metric, or errored/lost), improved
+    (some metric and none regressed) or stayed the same, as `gate` judges them."""
+    regs, imps, missing = gate(ref, cand, engine, metrics)
+    bad = {ln.split(" ", 1)[0] for ln in regs + missing}
+    good = {ln.split(" ", 1)[0] for ln in imps} - bad
+    a, b = _by_id(ref, engine), _by_id(cand, engine)
+    subset = len(b) < len(a)
+    out: dict[str, dict[str, int]] = {}
+    for i, rec in sorted(a.items()):
+        if subset and i not in b:
+            continue
+        row = out.setdefault(rec.get("cls", "?"), {"improved": 0, "regressed": 0, "same": 0})
+        row["regressed" if i in bad else "improved" if i in good else "same"] += 1
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench.gate")
     ap.add_argument("ref")
     ap.add_argument("cand")
     ap.add_argument("--engine", default="vexel")
+    ap.add_argument("--by-class", action="store_true", help="also count improved/regressed/same items per class")
+    ap.add_argument("--metrics", help="comma-separated: judge only these metrics (names as in TOLERANCES)")
     args = ap.parse_args(argv)
+    metrics = None
+    if args.metrics is not None:
+        metrics = [m.strip() for m in args.metrics.split(",") if m.strip()]
+        unknown = [m for m in metrics if m not in TOLERANCES]
+        if unknown or not metrics:
+            print(f"unknown metric(s): {', '.join(unknown) or '(none given)'}; known: {', '.join(TOLERANCES)}",
+                  file=sys.stderr)
+            return 2
     ref_data = json.loads(Path(args.ref).read_text())
     cand_data = json.loads(Path(args.cand).read_text())
     # Check for no items with the specified engine
@@ -77,11 +107,15 @@ def main(argv: list[str] | None = None) -> int:
     if not _by_id(cand_data, args.engine):
         print(f"no {args.engine} items in {args.cand}", file=sys.stderr)
         return 2
-    regs, imps, missing = gate(ref_data, cand_data, args.engine)
+    regs, imps, missing = gate(ref_data, cand_data, args.engine, metrics)
     for title, lines in (("REGRESSED", regs), ("MISSING", missing), ("improved", imps)):
         if lines:
             print(f"\n{title} ({len(lines)})")
             print("\n".join(f"  {ln}" for ln in lines))
+    if args.by_class:
+        print(f"\n{'class':<12}{'improved':>9}{'regressed':>10}{'same':>6}")
+        for cls, row in sorted(by_class(ref_data, cand_data, args.engine, metrics).items()):
+            print(f"{cls:<12}{row['improved']:>9}{row['regressed']:>10}{row['same']:>6}")
     bad = bool(regs or missing)
     print("\nGATE FAIL" if bad else "\ngate ok")
     return 1 if bad else 0

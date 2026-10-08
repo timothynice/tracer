@@ -75,7 +75,14 @@ fidelity bench. Read `README.md` first — it has the run/test/API reference.
   so it is in the default run) and exits non-zero, with the build command, when
   `studi0trace_core` is not installed
 - `backend/bench/` — Vexel Bench (`python -m bench …`); `bench/geometry.py` measures
-  against vector truth, `bench/truth.py` reads the truth's corners
+  against vector truth, `bench/truth.py` reads the truth's corners. Three sets, each
+  gated per item by `tools/qloop.sh full`: `bench/corpus`, `bench/heldout` and
+  `bench/degraded` (`python -m bench.degraded generate`: vector-truth sources doubled
+  nearest-neighbour, sharpened, rendered at 176 px, or (`combo`) doubled and
+  sharpened together with ground noise, at the full size —
+  the damage real uploads carry, which the clean sets cannot show a fix's benefit on).
+  `bench/degraded/` must never get an `__init__.py`: it shares its name with
+  `bench/degraded.py`
 - `backend/tests/` — pytest; run `cd backend && .venv/bin/python -m pytest`.
   Rust tests: `cargo test --workspace --release` at the root (the engine and the
   core; `cd backend/vexel-rs && cargo test` for the engine alone)

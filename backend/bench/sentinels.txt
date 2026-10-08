@@ -1,4 +1,4 @@
-# Middle loop (tools/qloop.sh sentinels). Each line: corpus|heldout <id>  # stage it guards
+# Middle loop (tools/qloop.sh sentinels). Each line: corpus|heldout|degraded <id>  # stage it guards
 corpus logo/vexel-wordmark-512        # wordmark, sharpening halos, rounded rects
 corpus logo/studi0mail-logo-light     # wordmark on a light backdrop
 corpus logo/thin-mark-512             # strokes vs fills, stroke_fidelity gate
@@ -12,3 +12,7 @@ corpus shadow/card-512-q75            # shadow bands on an opaque backdrop
 heldout fluent-color/nail-polish-512  # focal radial, highlight with pointed ends
 heldout fluent-color/speech-balloon-512 # faint-alpha halo
 heldout noto/u2049-512                # glyph outlines
+degraded combo/wave-lockup-1208       # the asset's signature: doubled at phase 1, sharpened, ground noise
+degraded nn2x/thin-mark-512           # exact 2× doubling of thin strokes
+degraded small/venn-176               # strokes and slivers under 2 px
+degraded sharpen/wave-lockup-1208     # unsharp rims and halos, opaque ground (on transparent ground the rim brightens)
