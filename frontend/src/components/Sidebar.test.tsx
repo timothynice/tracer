@@ -28,6 +28,9 @@ function setup(patch: Partial<SidebarProps> = {}) {
 
 function props_(patch: Partial<SidebarProps> = {}): SidebarProps {
   const props: SidebarProps = {
+    tab: "images",
+    onTab: vi.fn(),
+    inspect: null,
     items: [item("a"), item("b", { job: { id: "j", key: "auto", startedAt: 0, phase: "queued" } }), item("c", { error: new ApiError("engine_crashed", "The trace crashed (signal 9)"), errorKey: "auto" })],
     failed: [],
     selected: "a",
@@ -73,6 +76,15 @@ describe("Sidebar", () => {
     expect(badges[1]).toHaveAttribute("title", "Settings changed since this trace");
     expect(badges[1]).toHaveClass("text-warning");
     expect(screen.getByRole("option", { name: /r\.png/ }).querySelector("img")).toHaveClass("opacity-60");
+  });
+
+  it("has two faces: the library, and the inspector it is given", () => {
+    const props = setup({ tab: "inspect", inspect: <span>inspector</span> });
+    expect(screen.getByRole("tab", { name: "Inspect" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("inspector")).toBeInTheDocument();
+    expect(screen.queryByText("Add Image")).toBeNull();
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Images" }));
+    expect(props.onTab).toHaveBeenCalledWith("images");
   });
 
   it("adds, selects, walks with the arrow keys and clears", () => {

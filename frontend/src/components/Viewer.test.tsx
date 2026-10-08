@@ -15,8 +15,6 @@ function setup(patch: Partial<ViewerProps> = {}) {
     mode: "split",
     onModeChange: vi.fn(),
     busy: null,
-    display: { points: false, outlines: false },
-    onDisplayChange: vi.fn(),
     layersOpen: false,
     onToggleLayers: vi.fn(),
     ...patch,
@@ -169,12 +167,10 @@ describe("Viewer", () => {
     expect(screen.getByTestId("source-pane")).toHaveClass("ghost");
   });
 
-  it("the layers button and the display toggles are the caller's", () => {
+  it("the layers button is the caller's", () => {
     const { props } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Layers" }));
-    fireEvent.click(screen.getByRole("button", { name: "Show anchor points" }));
     expect(props.onToggleLayers).toHaveBeenCalledOnce();
-    expect(props.onDisplayChange).toHaveBeenCalledWith({ points: true });
   });
 
   it("wheel and gesture events over the panel are the panel's: no pan, no preventDefault", () => {
@@ -330,7 +326,7 @@ describe("Viewer refit on resize", () => {
     expect(screen.queryByText("Vector")).toBeNull();
     expect(screen.getByRole("separator", { name: /comparison divider/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Generate Vector" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Show anchor points" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Layers" })).toBeNull();
     rerender(<Viewer {...props} mode="side" />);
     expect(screen.getByText("AI redraw")).toBeInTheDocument();
     expect(screen.getByAltText("AI redraw")).toBeInTheDocument();

@@ -201,12 +201,13 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       onGenerate={() => lib.generate(item.image.id)}
       errorMessage={visibleError?.message}
       onRetry={() => lib.generate(item.image.id)}
-      display={{ points: layers.state.points, outlines: layers.state.outlines }}
-      onDisplayChange={layers.patch}
       layersOpen={layers.state.open}
-      onToggleLayers={() => layers.patch({ open: !layers.state.open })}
+      onToggleLayers={() => {
+        // the inspector lives in the sidebar: opening it shows the sidebar too
+        if (!layers.state.open) setSidebar(true);
+        layers.patch({ open: !layers.state.open });
+      }}
       marks={layers.doc ? (scale) => <InspectorOverlay doc={layers.doc!} state={layers.liveState} scale={scale} /> : undefined}
-      panel={layers.doc && layers.state.open ? <Inspector doc={layers.doc} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} engineLabel={catalog.engine.label} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} onToggle={layers.toggle} /> : undefined}
     />
   ) : (
     <EmptyState formats={DROP_FORMATS} canDownscale={platform.kind === "native"} onOpen={() => void open(platform.pickImages())} onSample={(name) => void open(loadSample(name).then((f) => platform.openFiles([f])))} />
@@ -406,6 +407,9 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
       sidebar={
         sidebar ? (
           <Sidebar
+            tab={layers.state.open ? "inspect" : "images"}
+            onTab={(t) => layers.patch({ open: t === "inspect" })}
+            inspect={<Inspector doc={layers.doc ?? null} bytes={layers.exportSvg?.length ?? 0} elapsedMs={answer?.elapsedMs} edited={layers.dropped.size > 0} state={layers.liveState} onChange={layers.patch} onToggle={layers.toggle} />}
             items={state.items}
             failed={state.failed}
             selected={state.selected}

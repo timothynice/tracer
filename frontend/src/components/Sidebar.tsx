@@ -1,3 +1,4 @@
+import * as Tabs from "@radix-ui/react-tabs";
 import { ImageOff, Plus, Trash2 } from "lucide-react";
 import { Fragment, useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
@@ -6,7 +7,14 @@ import type { OpenFailure } from "@/platform/types";
 import type { ImageItem } from "@/state/library";
 import { ImageCard } from "./ImageCard";
 
+export type SidebarTab = "images" | "inspect";
+
 export interface SidebarProps {
+  /** Which of the panel's two faces shows: the library, or the selected trace's inspector. */
+  tab: SidebarTab;
+  onTab: (tab: SidebarTab) => void;
+  /** The Inspect tab's content. */
+  inspect: ReactNode;
   items: ImageItem[];
   failed: OpenFailure[];
   selected: string | null;
@@ -26,7 +34,7 @@ export interface SidebarProps {
 
 const TOO_BIG = new Set(["too_many_pixels", "too_large"]);
 
-export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd, onSelect, onSelectNext, onClear, onDownscale, onDismissFailure, wrapCard = (_, card) => card }: SidebarProps) {
+export function Sidebar({ tab, onTab, inspect, items, failed, selected, formats, canDownscale, onAdd, onSelect, onSelectNext, onClear, onDownscale, onDismissFailure, wrapCard = (_, card) => card }: SidebarProps) {
   // A selection made by the arrow keys, or a newly opened image, may be out of sight in a long list; so may a new failure.
   const failures = useRef<HTMLDivElement>(null);
   const seenFailures = useRef(failed.length);
@@ -47,8 +55,21 @@ export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd,
       onSelectNext(-1);
     }
   };
+  const trigger = "inline-flex h-7 flex-1 items-center justify-center rounded-[6px] text-[12px] font-medium text-muted-foreground transition-colors data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm";
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <Tabs.Root value={tab} onValueChange={(v) => onTab(v as SidebarTab)} className="flex min-h-0 flex-1 flex-col">
+      <Tabs.List aria-label="Sidebar" className="mx-2 mt-2 flex h-8 shrink-0 rounded-lg bg-muted p-0.5">
+        <Tabs.Trigger value="images" className={trigger}>
+          Images
+        </Tabs.Trigger>
+        <Tabs.Trigger value="inspect" className={trigger}>
+          Inspect
+        </Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="inspect" className="flex min-h-0 flex-1 flex-col pt-2 data-[state=inactive]:hidden">
+        {inspect}
+      </Tabs.Content>
+      <Tabs.Content value="images" className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
       <div className="p-2">
         <button type="button" onClick={onAdd} className="flex w-full items-center gap-3 rounded-lg bg-background/70 p-2.5 text-left transition-colors hover:bg-background">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-background shadow-sm">
@@ -96,6 +117,7 @@ export function Sidebar({ items, failed, selected, formats, canDownscale, onAdd,
           Clear All
         </button>
       </div>
-    </div>
+      </Tabs.Content>
+    </Tabs.Root>
   );
 }

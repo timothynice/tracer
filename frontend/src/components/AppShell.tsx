@@ -16,7 +16,7 @@ export function AppShell({ titleBar, sidebar, main, inspector, overlay }: AppShe
       {titleBar}
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
         {sidebar && (
-          <aside aria-label="Images" className="panel-sidebar flex w-[232px] shrink-0 flex-col overflow-hidden">
+          <aside aria-label="Images" className="panel-sidebar flex w-[256px] shrink-0 flex-col overflow-hidden">
             {sidebar}
           </aside>
         )}

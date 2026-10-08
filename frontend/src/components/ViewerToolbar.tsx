@@ -1,6 +1,6 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tabs from "@radix-ui/react-tabs";
-import { ChevronDown, CircleDot, Columns2, Hand, Layers, Layers2, Maximize, PenTool, Search, Spline, SplitSquareHorizontal } from "lucide-react";
+import { ChevronDown, Columns2, Hand, Layers, Layers2, Maximize, Search, Spline, SplitSquareHorizontal } from "lucide-react";
 
 import { formatPercent } from "@/lib/format";
 import type { ViewMode } from "@/platform/types";
@@ -27,8 +27,6 @@ export interface ViewerToolbarProps {
   hasVector: boolean;
   /** What the right-hand view is: the vector, or (comparing two rasters) the AI redraw. */
   rightLabel?: string;
-  display: { points: boolean; outlines: boolean };
-  onDisplayChange: (patch: { points?: boolean; outlines?: boolean }) => void;
   layersOpen: boolean;
   onToggleLayers: () => void;
 }
@@ -99,17 +97,9 @@ export function ViewerToolbar(p: ViewerToolbarProps) {
       {p.hasVector && (
         <>
           {divider}
-          <div className={group}>
-            <button type="button" className="mac-icon" aria-label="Show anchor points" aria-pressed={p.display.points} title="Anchor points" onClick={() => p.onDisplayChange({ points: !p.display.points })}>
-              <CircleDot className="h-4 w-4" aria-hidden="true" />
-            </button>
-            <button type="button" className="mac-icon" aria-label="Show outlines" aria-pressed={p.display.outlines} title="Outlines" onClick={() => p.onDisplayChange({ outlines: !p.display.outlines })}>
-              <PenTool className="h-4 w-4" aria-hidden="true" />
-            </button>
-            <button type="button" className="mac-icon" aria-label="Layers" aria-pressed={p.layersOpen} title="Layers" onClick={p.onToggleLayers}>
-              <Layers className="h-4 w-4" aria-hidden="true" />
-            </button>
-          </div>
+          <button type="button" className="mac-icon" aria-label="Layers" aria-pressed={p.layersOpen} title="Inspect the layers" onClick={p.onToggleLayers}>
+            <Layers className="h-4 w-4" aria-hidden="true" />
+          </button>
         </>
       )}
     </div>

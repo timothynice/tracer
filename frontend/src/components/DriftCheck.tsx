@@ -70,8 +70,6 @@ export function DriftCheck({ original, redraw, drift, mode, onModeChange, decide
         mode={mode}
         onModeChange={onModeChange}
         busy={null}
-        display={{ points: false, outlines: false }}
-        onDisplayChange={() => {}}
         layersOpen={false}
         onToggleLayers={() => {}}
       />

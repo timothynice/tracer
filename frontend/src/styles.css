@@ -199,6 +199,16 @@
     background: rgb(0 122 255 / 0.1);
     box-shadow: inset 0 0 0 1px rgb(0 122 255 / 0.6);
   }
+  /* A large on/off toggle (the inspector's display rail): the accent tint and an inset ring when on. */
+  .mac-toggle {
+    @apply flex h-14 flex-col items-center justify-center gap-1 rounded-lg bg-background/70 text-[11px] font-medium text-muted-foreground
+      transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40;
+  }
+  .mac-toggle[aria-pressed="true"] {
+    @apply text-foreground;
+    background: rgb(0 122 255 / 0.1);
+    box-shadow: inset 0 0 0 1px rgb(0 122 255 / 0.6);
+  }
   .mac-radio {
     @apply inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/40;
   }
@@ -209,10 +219,12 @@
   }
   @supports (color: color-mix(in srgb, red 50%, blue)) {
     .mac-tint,
-    .mac-choice[aria-checked="true"] {
+    .mac-choice[aria-checked="true"],
+    .mac-toggle[aria-pressed="true"] {
       background: color-mix(in srgb, var(--accent-mac) 10%, transparent);
     }
-    .mac-choice[aria-checked="true"] {
+    .mac-choice[aria-checked="true"],
+    .mac-toggle[aria-pressed="true"] {
       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-mac) 60%, transparent);
     }
   }

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { expect, test, vi } from "vitest";
 
 import { EMPTY_INSPECTOR, Inspector, tinyShapes, type InspectorState } from "./Inspector";
 import { parseSvg } from "@/lib/svgdoc";
@@ -36,4 +37,16 @@ test("the speck threshold picks out only the small shapes", () => {
 test("says what the cleanup will actually drop", () => {
   render(<Inspector doc={doc} bytes={512} state={state({ minArea: 10 })} onChange={() => {}} onToggle={() => {}} />);
   expect(screen.getByText(/1 shape will be left out/)).toBeInTheDocument();
+});
+
+test("the display rail toggles anchors and outlines, and is off until there is a vector", () => {
+  const onChange = vi.fn();
+  const { rerender } = render(<Inspector doc={doc} bytes={512} state={state({ outlines: true })} onChange={onChange} onToggle={() => {}} />);
+  expect(screen.getByRole("button", { name: "Outlines" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "Anchor points" }));
+  expect(onChange).toHaveBeenCalledWith({ points: true });
+  rerender(<Inspector doc={null} bytes={0} state={state()} onChange={onChange} onToggle={() => {}} />);
+  expect(screen.getByRole("button", { name: "Anchor points" })).toBeDisabled();
+  expect(screen.getByText("Trace this image to inspect it.")).toBeInTheDocument();
+  expect(screen.queryByText("Layers")).toBeNull();
 });

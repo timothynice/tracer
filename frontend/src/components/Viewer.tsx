@@ -22,8 +22,6 @@ export interface ViewerProps {
   busy: { phase: string; startedAt: number } | null;
   errorMessage?: string;
   onRetry?: () => void;
-  display: { points: boolean; outlines: boolean };
-  onDisplayChange: (patch: { points?: boolean; outlines?: boolean }) => void;
   layersOpen: boolean;
   onToggleLayers: () => void;
   /** Drawn in the vector's own coordinates, over everything. */
@@ -71,7 +69,7 @@ const reducedMotion = () => typeof window.matchMedia !== "function" || window.ma
 const WIPE = "transition-[clip-path] duration-[450ms] delay-150 ease-out";
 
 export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(props, ref) {
-  const { sourceUrl, svg, width, height, mode, onModeChange, busy, errorMessage, onRetry, display, onDisplayChange, layersOpen, onToggleLayers, marks, panel, compare, onGenerate } = props;
+  const { sourceUrl, svg, width, height, mode, onModeChange, busy, errorMessage, onRetry, layersOpen, onToggleLayers, marks, panel, compare, onGenerate } = props;
   const [split, setSplit] = useState(0.5);
   const [overlay, setOverlay] = useState(0.7);
   const [tool, setTool] = useState<Tool>("pan");
@@ -433,8 +431,6 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
         onOverlay={setOverlay}
         hasVector={!!svg && !compare}
         rightLabel={rightLabel}
-        display={display}
-        onDisplayChange={onDisplayChange}
         layersOpen={layersOpen}
         onToggleLayers={onToggleLayers}
       />

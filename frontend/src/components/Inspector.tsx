@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Layers, PanelLeftClose, Sparkles } from "lucide-react";
+import { CircleDot, Eye, EyeOff, PenTool, Sparkles } from "lucide-react";
 import { useMemo } from "react";
 
 import { formatBytes, formatInt, formatMs } from "@/lib/format";
@@ -16,11 +16,11 @@ export interface InspectorState {
 export const EMPTY_INSPECTOR: InspectorState = { open: false, points: false, outlines: false, hidden: new Set(), highlight: null, minArea: 0 };
 
 export interface InspectorProps {
-  doc: SvgDoc;
+  /** The vector on screen; null before a trace, when only the rail shows, off. */
+  doc: SvgDoc | null;
   bytes: number;
   /** Engine time for this trace, in ms. */
   elapsedMs?: number | null;
-  engineLabel?: string;
   /** True once the cleanup has changed what will be exported. */
   edited?: boolean;
   state: InspectorState;
@@ -34,7 +34,26 @@ export function tinyShapes(doc: SvgDoc, minArea: number): number[] {
   return minArea <= 0 ? [] : doc.shapes.filter((s) => s.area <= minArea).map((s) => s.index);
 }
 
-export function Inspector({ doc, bytes, elapsedMs, engineLabel, edited, state, onChange, onToggle }: InspectorProps) {
+/** The sidebar's Inspect tab: the display rail, then the trace's numbers, the cleanup and the layers. */
+export function Inspector({ doc, bytes, elapsedMs, edited, state, onChange, onToggle }: InspectorProps) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div role="group" aria-label="Display" className="grid grid-cols-2 gap-2 px-3 pb-3 pt-1">
+        <button type="button" className="mac-toggle" aria-pressed={state.points} disabled={!doc} title="Show the anchor points of every shape" onClick={() => onChange({ points: !state.points })}>
+          <CircleDot className="h-5 w-5" aria-hidden="true" />
+          Anchor points
+        </button>
+        <button type="button" className="mac-toggle" aria-pressed={state.outlines} disabled={!doc} title="Outline every shape" onClick={() => onChange({ outlines: !state.outlines })}>
+          <PenTool className="h-5 w-5" aria-hidden="true" />
+          Outlines
+        </button>
+      </div>
+      {doc ? <InspectorBody doc={doc} bytes={bytes} elapsedMs={elapsedMs} edited={edited} state={state} onChange={onChange} onToggle={onToggle} /> : <p className="border-t px-3 pt-4 text-center text-[12px] text-muted-foreground">Trace this image to inspect it.</p>}
+    </div>
+  );
+}
+
+function InspectorBody({ doc, bytes, elapsedMs, edited, state, onChange, onToggle }: InspectorProps & { doc: SvgDoc }) {
   // The summary describes what will be exported, so hiding a shape moves it.
   const live = useMemo(() => doc.shapes.filter((s) => !state.hidden.has(s.index)), [doc, state.hidden]);
   const totalAnchors = useMemo(() => live.reduce((n, s) => n + s.anchors.length, 0), [live]);
@@ -43,101 +62,82 @@ export function Inspector({ doc, bytes, elapsedMs, engineLabel, edited, state, o
   const maxArea = useMemo(() => Math.max(1, ...doc.shapes.map((s) => s.area)), [doc]);
 
   return (
-    <div
-      data-overlay-ui
-      className="motion-rise pointer-events-auto absolute left-3 top-3 z-30 flex max-h-[calc(100%-1.5rem)] w-[17rem] flex-col rounded-lg border bg-card/95 shadow-elevated backdrop-blur"
-    >
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <Layers className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-        <span className="text-sm font-medium">Inspect</span>
-        {engineLabel && (
-          <span className="pill">
-            <span className="dot-brand" aria-hidden="true" />
-            {engineLabel}
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto border-t px-3 pb-3 pt-3">
+      <dl className="tabular grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+        <dt className="text-muted-foreground">Shapes{edited ? " (edited)" : ""}</dt>
+        <dd className="text-right font-medium">{formatInt(live.length)}</dd>
+        <dt className="text-muted-foreground">Anchors</dt>
+        <dd className="text-right font-medium">{formatInt(totalAnchors)}</dd>
+        <dt className="text-muted-foreground">Colours</dt>
+        <dd className="text-right font-medium">{formatInt(colours)}</dd>
+        <dt className="text-muted-foreground">Size</dt>
+        <dd className="text-right font-medium">{formatBytes(bytes)}</dd>
+        <dt className="text-muted-foreground">Time</dt>
+        <dd className="text-right font-medium">{formatMs(elapsedMs)}</dd>
+      </dl>
+
+      <section className="space-y-2 border-t pt-3">
+        <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Clean up</h4>
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          Tracing can leave stray one- or two-pixel shapes along edges and in noisy areas. Raise this to leave them out of the export.
+        </p>
+        <label className="block space-y-1 text-xs">
+          <span className="flex items-center justify-between">
+            <span>Drop specks under</span>
+            <span className="tabular text-muted-foreground">{state.minArea ? `${formatInt(Math.round(state.minArea))} px²` : "off"}</span>
           </span>
-        )}
-        <button type="button" className="btn-ghost btn-icon ml-auto h-7 w-7" aria-label="Close inspector" onClick={() => onChange({ open: false, highlight: null })}>
-          <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </div>
+          <input
+            type="range"
+            min={0}
+            max={Math.round(maxArea / 20)}
+            step={1}
+            value={state.minArea}
+            onChange={(e) => onChange({ minArea: Number(e.target.value) })}
+            className="w-full accent-[hsl(var(--primary))]"
+            aria-label="Drop shapes smaller than"
+          />
+        </label>
+        <p className="text-[11px] text-muted-foreground">
+          {tiny.length ? `${tiny.length} shape${tiny.length === 1 ? "" : "s"} will be left out of the export.` : "Nothing dropped."}
+        </p>
+      </section>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
-        <dl className="tabular grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-          <dt className="text-muted-foreground">Shapes{edited ? " (edited)" : ""}</dt>
-          <dd className="text-right font-medium">{formatInt(live.length)}</dd>
-          <dt className="text-muted-foreground">Anchors</dt>
-          <dd className="text-right font-medium">{formatInt(totalAnchors)}</dd>
-          <dt className="text-muted-foreground">Colours</dt>
-          <dd className="text-right font-medium">{formatInt(colours)}</dd>
-          <dt className="text-muted-foreground">Size</dt>
-          <dd className="text-right font-medium">{formatBytes(bytes)}</dd>
-          <dt className="text-muted-foreground">Time</dt>
-          <dd className="text-right font-medium">{formatMs(elapsedMs)}</dd>
-        </dl>
-
-        <section className="space-y-2 border-t pt-3">
-          <h4 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Clean up</h4>
-          <p className="text-[11px] leading-snug text-muted-foreground">
-            Tracing can leave stray one- or two-pixel shapes along edges and in noisy areas. Raise this to leave them out of the export.
-          </p>
-          <label className="block space-y-1 text-xs">
-            <span className="flex items-center justify-between">
-              <span>Drop specks under</span>
-              <span className="tabular text-muted-foreground">{state.minArea ? `${formatInt(Math.round(state.minArea))} px²` : "off"}</span>
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={Math.round(maxArea / 20)}
-              step={1}
-              value={state.minArea}
-              onChange={(e) => onChange({ minArea: Number(e.target.value) })}
-              className="w-full accent-[hsl(var(--primary))]"
-              aria-label="Drop shapes smaller than"
-            />
-          </label>
-          <p className="text-[11px] text-muted-foreground">
-            {tiny.length ? `${tiny.length} shape${tiny.length === 1 ? "" : "s"} will be left out of the export.` : "Nothing dropped."}
-          </p>
-        </section>
-
-        <section className="space-y-0.5 border-t pt-3">
-          <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Layers</h4>
-          <ul className="space-y-0.5">
-            {doc.shapes.map((s) => {
-              const off = state.hidden.has(s.index);
-              const on = state.highlight === s.index;
-              return (
-                <li key={s.index}>
-                  <div
-                    className={`flex items-center gap-2 rounded-sm px-1.5 py-1 text-xs transition-colors ${on ? "bg-accent ring-1 ring-primary/20" : "hover:bg-accent/60"}`}
-                    onMouseEnter={() => onChange({ highlight: s.index })}
-                    onMouseLeave={() => onChange({ highlight: null })}
+      <section className="space-y-0.5 border-t pt-3">
+        <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Layers</h4>
+        <ul className="space-y-0.5">
+          {doc.shapes.map((s) => {
+            const off = state.hidden.has(s.index);
+            const on = state.highlight === s.index;
+            return (
+              <li key={s.index}>
+                <div
+                  className={`flex items-center gap-2 rounded-sm px-1.5 py-1 text-xs transition-colors ${on ? "bg-accent ring-1 ring-primary/20" : "hover:bg-accent/60"}`}
+                  onMouseEnter={() => onChange({ highlight: s.index })}
+                  onMouseLeave={() => onChange({ highlight: null })}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="checker h-3.5 w-3.5 shrink-0 rounded-[3px] border"
+                    style={s.paint === "solid" ? { background: s.fill, opacity: s.opacity } : undefined}
+                    title={s.paint === "gradient" ? "gradient" : s.fill}
+                  />
+                  <span className={`min-w-0 flex-1 truncate ${off ? "text-muted-foreground line-through" : ""}`}>{shapeLabel(s)}</span>
+                  {s.filtered && <Sparkles className="h-3 w-3 shrink-0 text-brand" aria-label="has a filter" />}
+                  <span className="tabular shrink-0 text-[11px] text-muted-foreground">{s.anchors.length}</span>
+                  <button
+                    type="button"
+                    className="btn-ghost btn-icon h-6 w-6 shrink-0"
+                    aria-label={`${off ? "Show" : "Hide"} ${shapeLabel(s)}`}
+                    onClick={() => onToggle(s.index)}
                   >
-                    <span
-                      aria-hidden="true"
-                      className="checker h-3.5 w-3.5 shrink-0 rounded-[3px] border"
-                      style={s.paint === "solid" ? { background: s.fill, opacity: s.opacity } : undefined}
-                      title={s.paint === "gradient" ? "gradient" : s.fill}
-                    />
-                    <span className={`min-w-0 flex-1 truncate ${off ? "text-muted-foreground line-through" : ""}`}>{shapeLabel(s)}</span>
-                    {s.filtered && <Sparkles className="h-3 w-3 shrink-0 text-brand" aria-label="has a filter" />}
-                    <span className="tabular shrink-0 text-[11px] text-muted-foreground">{s.anchors.length}</span>
-                    <button
-                      type="button"
-                      className="btn-ghost btn-icon h-6 w-6 shrink-0"
-                      aria-label={`${off ? "Show" : "Hide"} ${shapeLabel(s)}`}
-                      onClick={() => onToggle(s.index)}
-                    >
-                      {off ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Eye className="h-3.5 w-3.5" aria-hidden="true" />}
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      </div>
+                    {off ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Eye className="h-3.5 w-3.5" aria-hidden="true" />}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
     </div>
   );
 }
