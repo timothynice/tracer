@@ -15,8 +15,8 @@ export function TitleBar({ native, sidebar, inspector, onToggleSidebar, onToggle
   return (
     <header data-tauri-drag-region="deep" className="flex h-[52px] shrink-0 items-center gap-2.5 pr-3" style={{ paddingLeft: native ? 88 : 16 }}>
       {/* the wordmark follows the appearance; the icon tile runs against it (the slate tile on the light window, the white one under `.dark`), so the tile always stands off the bar */}
-      <img src="/brand/icon-dark.png" alt="" draggable={false} className="h-7 w-auto shrink-0 dark:hidden" />
-      <img src="/brand/icon-light.png" alt="" draggable={false} className="hidden h-7 w-auto shrink-0 dark:block" />
+      <img src="/brand/icon-slate.png" alt="" draggable={false} className="h-7 w-auto shrink-0 dark:hidden" />
+      <img src="/brand/icon-white.png" alt="" draggable={false} className="hidden h-7 w-auto shrink-0 dark:block" />
       <h1 className="flex min-w-0 items-center">
         <img src="/brand/wordmark-light.png" alt="Studi0Trace" draggable={false} className="h-[15px] w-auto dark:hidden" />
         <img src="/brand/wordmark-dark.png" alt="" aria-hidden="true" draggable={false} className="hidden h-[15px] w-auto dark:block" />
