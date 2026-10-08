@@ -27,7 +27,20 @@ fn updates_come_from_the_latest_github_release_signed_with_the_apps_key() {
 #[test]
 fn only_the_release_config_makes_updater_artifacts() {
     assert!(json("tauri.conf.json")["bundle"].get("createUpdaterArtifacts").is_none());
-    assert_eq!(json("tauri.release.conf.json"), serde_json::json!({ "bundle": { "createUpdaterArtifacts": true } }));
+    assert_eq!(json("tauri.release.conf.json")["bundle"]["createUpdaterArtifacts"], true);
+}
+
+#[test]
+fn distribution_builds_require_developer_id_and_hardened_runtime() {
+    // Keep source builds available without a Developer ID certificate while
+    // preventing the distribution config from falling back to an ad hoc signature.
+    assert_eq!(json("tauri.conf.json")["bundle"]["macOS"]["signingIdentity"], "-");
+    let release = json("tauri.release.conf.json");
+    assert_eq!(
+        release["bundle"]["macOS"]["signingIdentity"],
+        "Developer ID Application: Timothy Nice (B7VLZJMQAL)"
+    );
+    assert_eq!(release["bundle"]["macOS"]["hardenedRuntime"], true);
 }
 
 #[test]
