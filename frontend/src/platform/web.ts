@@ -41,6 +41,7 @@ export function webPlatform(): Platform {
 
   return {
     kind: "web",
+    canExportPdf: false,
     engines: (signal) => getEngines(signal),
     presets: (signal) => getPresets(signal),
     pickImages: () =>
@@ -76,6 +77,7 @@ export function webPlatform(): Platform {
       }
     },
     async exportFile(file) {
+      if (file.kind === "pdf") throw new Error("PDF export needs the Mac app.");
       downloadBlob(new Blob([file.bytes], { type: file.kind === "png" ? "image/png" : "image/svg+xml" }), file.name);
       return file.name;
     },

@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
+import { paramsKey } from "@/lib/schema";
 import type { ImageItem } from "@/state/library";
 import { Sidebar, type SidebarProps } from "./Sidebar";
 
@@ -53,6 +54,25 @@ describe("Sidebar", () => {
     expect(screen.getByText(/Queued/)).toBeInTheDocument();
     expect(screen.getByText(/· Failed/)).toBeInTheDocument();
     expect(screen.getByTitle("The trace crashed (signal 9)")).toBeInTheDocument();
+  });
+
+  it("badges a traced image, amber when its settings have moved since, and dims one that is tracing", () => {
+    const key = paramsKey({ detail: 6 });
+    const answer = { svg: "<svg/>", elapsedMs: 1, stats: {} };
+    setup({
+      items: [
+        item("t", { preset: "balanced", params: { detail: 6 }, traces: { [key]: answer }, shown: key }),
+        item("s", { preset: "logo", params: { detail: 9 }, traces: { [key]: answer }, shown: key }),
+        item("u"),
+        item("r", { job: { id: "j", key: "auto", startedAt: 0, phase: "tracing" } }),
+      ],
+    });
+    const badges = screen.getAllByText("SVG");
+    expect(badges).toHaveLength(2);
+    expect(badges[0]).toHaveAttribute("title", "Traced");
+    expect(badges[1]).toHaveAttribute("title", "Settings changed since this trace");
+    expect(badges[1]).toHaveClass("text-warning");
+    expect(screen.getByRole("option", { name: /r\.png/ }).querySelector("img")).toHaveClass("opacity-60");
   });
 
   it("adds, selects, walks with the arrow keys and clears", () => {

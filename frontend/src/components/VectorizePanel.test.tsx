@@ -29,6 +29,7 @@ describe("VectorizePanel", () => {
       <VectorizePanel item={item} catalog={{ engine: VEXEL, presets: VEXEL_PRESETS }} specs={specsFor(VEXEL)} invalidField={null} onPick={vi.fn()} onParam={onParam} onGenerate={vi.fn()} onCancel={vi.fn()} exportMenu={<span>export</span>} />,
     );
     expect(screen.getByRole("heading", { name: "Vectorize" })).toBeInTheDocument();
+    expect(screen.queryByText("Convert your image to a clean, scalable vector.")).toBeNull();
     expect(screen.getByText("16 shapes · 43 nodes · 4.4 KB · 1.5 s")).toBeInTheDocument();
     expect(screen.queryByText("Shapes")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Advanced Options" }));
@@ -43,6 +44,11 @@ describe("VectorizePanel", () => {
     rerender(<VectorizePanel {...props} invalidField="detail" />);
     expect(screen.getByText("Shapes")).toBeInTheDocument();
   });
+  it("wears the redraw chip beside its title", () => {
+    render(<VectorizePanel item={item} catalog={{ engine: VEXEL, presets: VEXEL_PRESETS }} specs={specsFor(VEXEL)} invalidField={null} onPick={vi.fn()} onParam={vi.fn()} onGenerate={vi.fn()} onCancel={vi.fn()} exportMenu={null} redrawChip={<span>chip</span>} />);
+    expect(screen.getByRole("heading", { name: "Vectorize" }).parentElement).toContainElement(screen.getByText("chip"));
+  });
+
   it("says one shape, not 1 shapes", () => {
     const one: ImageItem = { ...item, traces: { [key]: { svg: '<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>', elapsedMs: 10, stats: { paths: 0, nodes: 0, bytes: 60 } } } };
     render(<VectorizePanel item={one} catalog={{ engine: VEXEL, presets: VEXEL_PRESETS }} specs={specsFor(VEXEL)} invalidField={null} onPick={vi.fn()} onParam={vi.fn()} onGenerate={vi.fn()} onCancel={vi.fn()} exportMenu={null} />);

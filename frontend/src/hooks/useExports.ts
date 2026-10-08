@@ -2,7 +2,7 @@ import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 
 import { baseName, svgToPngBlob } from "@/lib/raster";
-import { platform, type Settings } from "@/platform";
+import { platform, type ExportKind, type Settings } from "@/platform";
 import { revealInFinder } from "./reveal";
 import { shownAnswer, type ExportMark, type ImageItem, type LibraryState } from "@/state/library";
 
@@ -27,7 +27,7 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
   };
 
   const exportImage = useCallback(
-    (kind: "svg" | "png", scale: number, target: ImageItem | null = item) =>
+    (kind: ExportKind, scale: number, target: ImageItem | null = item) =>
       exclusive(async () => {
         // the selected image goes as it is on screen, with the layer inspector's edits; any other with its own.
         // By id: the context menu's item may be an older copy of the selected one (a state update since render).
@@ -35,8 +35,9 @@ export function useExports(state: LibraryState, item: ImageItem | null, svg: str
         if (!target || !text) return;
         const stem = baseName(target.image.name);
         try {
-          const bytes = kind === "svg" ? new TextEncoder().encode(text) : new Uint8Array(await (await svgToPngBlob(text, target.image.width, target.image.height, scale)).arrayBuffer());
-          const name = kind === "svg" ? `${stem}.svg` : scale === 1 ? `${stem}.png` : `${stem}@${scale}x.png`;
+          // a PDF goes as the SVG's text: the app converts it
+          const bytes = kind === "png" ? new Uint8Array(await (await svgToPngBlob(text, target.image.width, target.image.height, scale)).arrayBuffer()) : new TextEncoder().encode(text);
+          const name = kind === "svg" ? `${stem}.svg` : kind === "pdf" ? `${stem}.pdf` : scale === 1 ? `${stem}.png` : `${stem}@${scale}x.png`;
           const path = await platform.exportFile({ kind, imageId: target.image.id, name, bytes }, settings);
           // the selected image's bytes came from what is on screen now, so its mark is the trace shown now
           const key = target.image.id === item?.image.id ? item.shown : target.shown;

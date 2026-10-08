@@ -9,7 +9,7 @@ import { ExportMenu } from "./components/ExportMenu";
 import { ImageMenu } from "./components/ImageMenu";
 import { Inspector, InspectorOverlay } from "./components/Inspector";
 import { RedrawConsentSheet } from "./components/RedrawConsentSheet";
-import { RedrawSection } from "./components/RedrawSection";
+import { RedrawChip, RedrawSection } from "./components/RedrawSection";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
@@ -98,7 +98,7 @@ function MainWindow() {
 
 const VIEW_KEY = "studi0trace.view";
 // the commands that read the parameters or the traced SVG, which a number field still being typed in has not yet committed
-const READS_SETTINGS = new Set<Command>(["generate", "export-svg", "export-png-1", "export-png-2", "export-png-4", "export-all", "copy-svg"]);
+const READS_SETTINGS = new Set<Command>(["generate", "export-svg", "export-pdf", "export-png-1", "export-png-2", "export-png-4", "export-all", "copy-svg"]);
 const MODES: ViewMode[] = ["split", "side", "overlay", "vector"];
 
 function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; settings: Settings; onSettingsChange: (next: Settings) => void }) {
@@ -186,7 +186,8 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
   const layers = useLayerInspector(answer?.svg, item?.image.id, useMemo(() => state.items.map((i) => i.image.id), [state.items]));
 
   const job = item ? currentJob(item) : null;
-  const busy = job ? (job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${catalog.presets.filter((p) => p.auto_candidate).length} presets…` : "Tracing…") : null;
+  const candidates = catalog.presets.filter((p) => p.auto_candidate).length;
+  const busy = job ? { phase: job.phase === "queued" ? "Queued…" : job.key === "auto" ? `Trying ${candidates} styles…` : "Tracing…", startedAt: job.startedAt } : null;
   const viewer = item ? (
     <Viewer
       ref={viewerRef}
@@ -263,6 +264,8 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
           return openSettings();
         case "export-svg":
           return void exports.exportImage("svg", 1);
+        case "export-pdf":
+          return void exports.exportImage("pdf", 1);
         case "export-png-1":
           return void exports.exportImage("png", 1);
         case "export-png-2":
@@ -385,12 +388,11 @@ function Workspace({ catalog, settings, onSettingsChange }: { catalog: Catalog; 
             suggest={settings.suggestRedraw}
             onRedraw={() => void startRedraw(item.image.id)}
             onCancel={() => lib.cancelRedraw(item.image.id)}
-            onShowOriginal={() => setReviewing(item.image.id)}
-            onRevert={() => revert(item.image.id)}
           />
         ) : undefined
       }
-      exportMenu={<ExportMenu canExport={!!layers.exportSvg} anyVector={anyVector} onExport={(k, s) => void exports.exportImage(k, s)} onCopy={() => void exports.copySvg()} onExportAll={() => void exports.exportAll()} />}
+      redrawChip={CAN_REDRAW ? <RedrawChip item={item} onShowOriginal={() => setReviewing(item.image.id)} onRevert={() => revert(item.image.id)} /> : undefined}
+      exportMenu={<ExportMenu canExport={!!layers.exportSvg} anyVector={anyVector} canPdf={platform.canExportPdf} onExport={(k, s) => void exports.exportImage(k, s)} onCopy={() => void exports.copySvg()} onExportAll={() => void exports.exportAll()} />}
     />
   ) : (
     <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground">Open an image to vectorize it.</div>

@@ -7,7 +7,7 @@ import type { ImageItem, LibraryState } from "@/state/library";
 import { useExports } from "./useExports";
 
 const mocks = vi.hoisted(() => ({
-  platform: { kind: "native", exportFile: vi.fn(), exportAll: vi.fn(), copyText: vi.fn(), reveal: vi.fn() },
+  platform: { kind: "native", canExportPdf: true, exportFile: vi.fn(), exportAll: vi.fn(), copyText: vi.fn(), reveal: vi.fn() },
   success: vi.fn(),
   error: vi.fn(),
   png: vi.fn(),
@@ -68,6 +68,14 @@ describe("useExports", () => {
     const older = { ...a, job: null }; // the same image, from a render before a state update
     await act(() => result.current.exportImage("svg", 1, older));
     expect(text(mocks.platform.exportFile.mock.calls[0][0].bytes)).toBe("<svg edited/>");
+  });
+
+  it("exports a PDF as stem.pdf, sending the SVG text for the app to convert", async () => {
+    const { result } = renderHook(() => useExports(state(a), a, "<svg edited/>", DEFAULT_SETTINGS));
+    await act(() => result.current.exportImage("pdf", 1));
+    const file = mocks.platform.exportFile.mock.calls[0][0];
+    expect(file).toMatchObject({ kind: "pdf", imageId: "a", name: "logo.pdf" });
+    expect(text(file.bytes)).toBe("<svg edited/>");
   });
 
   it("names a PNG stem.png at 1× and stem@2x.png at 2×, rendered at that scale", async () => {

@@ -107,6 +107,7 @@ export type ViewMode = "split" | "side" | "overlay" | "vector";
 
 export type MenuCommand =
   | "export-svg"
+  | "export-pdf"
   | "export-png-1"
   | "export-png-2"
   | "export-png-4"
@@ -152,8 +153,10 @@ export interface MenuState {
   isRedraw: boolean;
 }
 
+export type ExportKind = "svg" | "png" | "pdf";
+
 export interface ExportFile {
-  kind: "svg" | "png";
+  kind: ExportKind;
   imageId: string;
   /** The suggested file name, e.g. "logo.svg" or "logo@2x.png". */
   name: string;
@@ -168,6 +171,8 @@ export interface ExportAllResult {
 
 export interface Platform {
   readonly kind: "native" | "web";
+  /** Whether `exportFile` can take a "pdf" (the Mac app converts it; a browser cannot). */
+  readonly canExportPdf: boolean;
   engines(signal?: AbortSignal): Promise<EngineDescription[]>;
   presets(signal?: AbortSignal): Promise<Preset[]>;
   /** The open panel (a file picker in a browser), and what was chosen, opened. */

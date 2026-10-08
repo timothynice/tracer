@@ -41,13 +41,25 @@ describe("Viewer", () => {
     expect(divider).toHaveAttribute("aria-valuenow", "52");
   });
 
-  it("the divider and its handle wait for a vector, so the hint never sits on them", () => {
+  it("before a trace the source shows whole and ghosted: no clip, no divider, no labels", () => {
     const { props, rerender } = setup({ svg: undefined });
+    const pane = screen.getByTestId("source-pane");
+    expect(pane).toHaveClass("ghost");
+    expect(pane.style.clipPath).toBe("");
     expect(screen.queryByRole("separator", { name: /comparison divider/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/Press Generate Vector/)).toBeInTheDocument();
-    expect(screen.getByText("Original")).toBeInTheDocument();
+    expect(screen.queryByText("Original")).toBeNull();
+    expect(screen.queryByText("Vector")).toBeNull();
+    expect(screen.getByText("Press ⌘↩ to trace")).toBeInTheDocument();
     rerender(<Viewer {...props} svg={SVG} />);
+    expect(screen.getByTestId("source-pane")).not.toHaveClass("ghost");
     expect(screen.getByRole("separator", { name: /comparison divider/i })).toBeInTheDocument();
+    expect(screen.getByText("Original")).toBeInTheDocument();
+  });
+
+  it("side by side before a trace is the same ghost, not two panes", () => {
+    setup({ svg: undefined, mode: "side" });
+    expect(screen.getByTestId("source-pane")).toHaveClass("ghost");
+    expect(screen.queryByText("Original")).toBeNull();
   });
 
   it("the mode is the caller's: the tabs ask for a change, the prop decides", () => {
@@ -62,7 +74,7 @@ describe("Viewer", () => {
   });
 
   it("overlay has an opacity slider; errors and the busy bar show", () => {
-    setup({ mode: "overlay", busy: "Tracing…", errorMessage: "Vexel failed: nope" });
+    setup({ mode: "overlay", busy: { phase: "Tracing…", startedAt: 0 }, errorMessage: "Vexel failed: nope" });
     expect(screen.getByLabelText("Vector opacity")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Vexel failed");
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
@@ -103,11 +115,30 @@ describe("Viewer", () => {
     expect(zoomLevel()).toHaveTextContent("100%");
   });
 
-  it("split leaves the vector side empty until a vector exists", () => {
-    const { props, rerender } = setup({ svg: undefined });
-    expect(screen.getByTestId("source-pane")).toHaveStyle({ clipPath: "inset(0 50% 0 0)" });
-    rerender(<Viewer {...props} svg={SVG} />);
-    expect(screen.getByRole("img", { name: "Vector result" })).toBeInTheDocument();
+  it("while tracing the ghost stays, a band sweeps it and the pill counts the seconds", () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      setup({ svg: undefined, busy: { phase: "Tracing…", startedAt: Date.now() } });
+      expect(screen.getByTestId("source-pane")).toHaveClass("ghost");
+      expect(screen.getByTestId("sweep")).toBeInTheDocument();
+      expect(screen.getByText("Tracing… 0 s")).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(4000));
+      expect(screen.getByText("Tracing… 4 s")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a queued job says so without counting", () => {
+    setup({ svg: undefined, busy: { phase: "Queued…", startedAt: Date.now() } });
+    expect(screen.getByText("Queued…")).toBeInTheDocument();
+  });
+
+  it("a re-trace over a vector dims it under the progress bar, with no sweep", () => {
+    setup({ busy: { phase: "Tracing…", startedAt: Date.now() } });
+    expect(screen.getByRole("progressbar", { name: "Tracing" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Vector result" })).toHaveClass("opacity-60");
+    expect(screen.queryByTestId("sweep")).toBeNull();
   });
 
   it("a failure is a persistent error with Try Again, and its click is not swallowed by panning", () => {
@@ -122,11 +153,7 @@ describe("Viewer", () => {
     fireEvent.click(button);
     expect(onRetry).toHaveBeenCalled();
     expect(screen.queryByText("No vector yet")).toBeNull();
-  });
-
-  it("while busy it names the phase", () => {
-    setup({ svg: undefined, busy: "Queued…" });
-    expect(screen.getByText("Queued…")).toBeInTheDocument();
+    expect(screen.getByTestId("source-pane")).toHaveClass("ghost");
   });
 
   it("the layers button and the display toggles are the caller's", () => {
@@ -289,7 +316,7 @@ describe("Viewer refit on resize", () => {
     expect(screen.getByText("AI redraw")).toBeInTheDocument();
     expect(screen.queryByText("Vector")).toBeNull();
     expect(screen.getByRole("separator", { name: /comparison divider/i })).toBeInTheDocument();
-    expect(screen.queryByText(/Press Generate Vector/)).toBeNull();
+    expect(screen.queryByText(/Press ⌘↩ to trace/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Show anchor points" })).toBeNull();
     rerender(<Viewer {...props} mode="side" />);
     expect(screen.getByText("AI redraw")).toBeInTheDocument();

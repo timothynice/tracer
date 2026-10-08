@@ -14,6 +14,7 @@ vi.mock("@/platform", async () => {
   const types = await vi.importActual<typeof import("@/platform/types")>("@/platform/types");
   const platform = {
     kind: "native",
+    canExportPdf: true,
     engines: async () => [VEXEL],
     presets: async () => VEXEL_PRESETS,
     pickImages: async () => [],

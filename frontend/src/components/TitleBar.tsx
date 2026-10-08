@@ -18,10 +18,7 @@ export function TitleBar({ native, sidebar, inspector, onToggleSidebar, onToggle
       <span aria-hidden="true" className="flex h-7 w-7 shrink-0 rounded-[8px] bg-[#3F4D60]">
         <img src="/brand/studi0trace-mark.svg" alt="" draggable={false} className="h-7 w-7" />
       </span>
-      <div className="min-w-0 leading-tight">
-        <h1 className="font-brand text-[15px] font-semibold tracking-tight">Studi0Trace</h1>
-        <p className="text-[11px] text-muted-foreground">Turn images into clean vectors</p>
-      </div>
+      <h1 className="min-w-0 font-brand text-[15px] font-semibold tracking-tight">Studi0Trace</h1>
       <div className="ml-auto flex items-center gap-0.5">
         <button type="button" className="mac-icon" aria-label="Show sidebar" aria-pressed={sidebar} title="Show Sidebar (⌃⌘S)" onClick={onToggleSidebar}>
           <PanelLeft className="h-4 w-4" aria-hidden="true" />

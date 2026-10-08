@@ -60,6 +60,14 @@ fn write_io(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Write through a temporary file in the same folder, so nothing ever sees half a file.
+/// The SVG the frontend holds, as a PDF: a vector PDF, gradients kept, filters rasterised.
+pub fn to_pdf(svg: &[u8]) -> Result<Vec<u8>, CommandError> {
+    let refuse = || CommandError::bad_request("This vector could not be converted to PDF.");
+    let text = std::str::from_utf8(svg).map_err(|_| refuse())?;
+    let tree = svg2pdf::usvg::Tree::from_str(text, &svg2pdf::usvg::Options::default()).map_err(|_| refuse())?;
+    svg2pdf::to_pdf(&tree, svg2pdf::ConversionOptions::default(), svg2pdf::PageOptions::default()).map_err(|_| refuse())
+}
+
 pub fn write_file(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
     write_io(path, bytes).map_err(|e| CommandError::io_write(path, &e))
 }
@@ -173,6 +181,26 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("s0t-export-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_vector_with_a_gradient_and_a_filter_becomes_a_pdf() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient><filter id="b"><feGaussianBlur stdDeviation="2"/></filter></defs><rect width="64" height="64" fill="url(#g)"/><circle cx="32" cy="32" r="10" filter="url(#b)"/></svg>"##;
+        let pdf = to_pdf(svg.as_bytes()).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
+        let text = String::from_utf8_lossy(&pdf);
+        // the gradient is a PDF shading, still a vector; the blur is a raster image, the one thing a PDF cannot draw
+        assert!(text.contains("/ShadingType"), "the gradient should be a shading");
+        assert!(text.contains("/Subtype /Image") || text.contains("/Subtype/Image"), "the filter should be rasterised");
+        if let Ok(path) = std::env::var("STUDI0TRACE_DUMP_PDF") {
+            std::fs::write(path, &pdf).unwrap();
+        }
+    }
+
+    #[test]
+    fn what_is_not_an_svg_is_refused_as_such() {
+        assert_eq!(to_pdf(b"<svg").unwrap_err().code(), Some("bad_request"));
+        assert_eq!(to_pdf(&[0xff, 0xfe]).unwrap_err().code(), Some("bad_request"));
     }
 
     #[test]

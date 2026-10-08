@@ -1,4 +1,4 @@
-import { ChevronRight, Wand2 } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { Preset } from "@/lib/api";
@@ -23,9 +23,11 @@ export interface VectorizePanelProps {
   exportMenu: ReactNode;
   /** AI redraw's section (the Mac app). */
   redraw?: ReactNode;
+  /** The chip on a redrawn image, beside the title (the Mac app). */
+  redrawChip?: ReactNode;
 }
 
-export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onParam, onGenerate, onCancel, exportMenu, redraw }: VectorizePanelProps) {
+export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onParam, onGenerate, onCancel, exportMenu, redraw, redrawChip }: VectorizePanelProps) {
   const [advanced, setAdvanced] = useState(invalidField !== null);
   useEffect(() => {
     if (invalidField !== null) setAdvanced(true); // a field the server refused is in there
@@ -36,14 +38,9 @@ export function VectorizePanel({ item, catalog, specs, invalidField, onPick, onP
   const candidates = catalog.presets.filter((p) => p.auto_candidate).length;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-start gap-3 p-4 pb-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-background ring-1 ring-border">
-          <Wand2 className="h-5 w-5" aria-hidden="true" />
-        </span>
-        <div>
-          <h2 className="text-[15px] font-semibold">Vectorize</h2>
-          <p className="text-[12px] leading-snug text-muted-foreground">Convert your image to a clean, scalable vector.</p>
-        </div>
+      <div className="flex min-h-[44px] items-center justify-between gap-2 px-4 pb-2 pt-3">
+        <h2 className="text-[15px] font-semibold">Vectorize</h2>
+        {redrawChip}
       </div>
       {redraw && <div className="px-3 pb-3">{redraw}</div>}
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-3">

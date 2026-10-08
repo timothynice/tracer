@@ -30,35 +30,37 @@ describe("TraceButton", () => {
     expect(onGenerate).toHaveBeenCalledOnce();
   });
 
-  it("is up to date when the trace on screen is the settings', and Update when they moved", () => {
+  it("is Up to date when the trace on screen is the settings', and Update when they moved", () => {
     const key = paramsKey({ detail: 6 });
     const { rerender } = render(<TraceButton item={{ ...base, traces: { [key]: answer }, shown: key }} candidates={4} onGenerate={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /Generate Vector/ })).toBeDisabled();
-    expect(screen.getByText("Up to date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Generate Vector/ })).toBeNull();
     rerender(<TraceButton item={{ ...base, params: { detail: 9 }, traces: { [key]: answer }, shown: key }} candidates={4} onGenerate={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByRole("button", { name: /Update Vector/ })).toBeEnabled();
   });
 
-  it("while a job runs: its phase, the seconds, and Cancel", () => {
+  it("while a job runs the one button names the phase, counts the seconds and cancels", () => {
     const onCancel = vi.fn();
-    const started = Date.now();
-    render(<TraceButton item={{ ...base, preset: "auto", job: { id: "j", key: "auto", startedAt: started, phase: "tracing" } }} candidates={4} onGenerate={vi.fn()} onCancel={onCancel} />);
-    expect(screen.getByText("Trying 4 presets…")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel · 0 s" })).toBeInTheDocument();
+    render(<TraceButton item={{ ...base, preset: "auto", job: { id: "j", key: "auto", startedAt: Date.now(), phase: "tracing" } }} candidates={4} onGenerate={vi.fn()} onCancel={onCancel} />);
+    expect(screen.getByRole("button", { name: "Trying 4 styles… 0 s" })).toHaveAttribute("title", "Cancel Trace (⌘.)");
+    expect(screen.getByTestId("sweep")).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(3000));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel · 3 s" }));
+    fireEvent.click(screen.getByRole("button", { name: "Trying 4 styles… 3 s" }));
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
   it("a job for other settings is not this button's: it shows the settings' own state", () => {
     const key = paramsKey({ detail: 6 });
     render(<TraceButton item={{ ...base, traces: { [key]: answer }, shown: key, job: { id: "j", key: "auto", startedAt: Date.now(), phase: "tracing" } }} candidates={4} onGenerate={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.queryByRole("button", { name: /^Cancel/ })).toBeNull();
-    expect(screen.getByText("Up to date")).toBeInTheDocument();
+    expect(screen.queryByTestId("sweep")).toBeNull();
+    expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
   });
 
-  it("a queued job says so", () => {
-    render(<TraceButton item={{ ...base, job: { id: "j", key: paramsKey({ detail: 6 }), startedAt: Date.now(), phase: "queued" } }} candidates={4} onGenerate={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByText("Queued…")).toBeInTheDocument();
+  it("a queued job says so, without the sweep, and still cancels", () => {
+    const onCancel = vi.fn();
+    render(<TraceButton item={{ ...base, job: { id: "j", key: paramsKey({ detail: 6 }), startedAt: Date.now(), phase: "queued" } }} candidates={4} onGenerate={vi.fn()} onCancel={onCancel} />);
+    expect(screen.queryByTestId("sweep")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Queued…" }));
+    expect(onCancel).toHaveBeenCalledOnce();
   });
 });

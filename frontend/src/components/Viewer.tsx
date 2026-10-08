@@ -18,8 +18,8 @@ export interface ViewerProps {
   height: number;
   mode: ViewMode;
   onModeChange: (mode: ViewMode) => void;
-  /** What the wait is for ("Queued…", "Tracing…") while a job runs; null when none does. */
-  busy: string | null;
+  /** What the wait is for ("Queued…", "Tracing…", "Trying 4 styles…") and when it began; null when nothing runs. */
+  busy: { phase: string; startedAt: number } | null;
   errorMessage?: string;
   onRetry?: () => void;
   display: { points: boolean; outlines: boolean };
@@ -55,6 +55,18 @@ const keepsSpace = (target: EventTarget | null) =>
 
 // Controls painted over the viewer (the layer inspector, the error card) keep their wheel and gesture events.
 const overUi = (e: Event) => !!(e.target as Element | null)?.closest?.("[data-overlay-ui]");
+
+export type Stage = "untraced" | "tracing" | "retracing" | "traced" | "failed";
+
+/** What the canvas is showing: a trace or a redraw, or until then the source as a ghost. */
+export function stageOf(p: { svg?: string; compare?: unknown; busy: unknown; errorMessage?: string }): Stage {
+  if (p.svg || p.compare) return p.busy ? "retracing" : "traced";
+  if (p.errorMessage) return "failed";
+  return p.busy ? "tracing" : "untraced";
+}
+
+const reducedMotion = () => typeof window.matchMedia !== "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const WIPE = "transition-[clip-path] duration-[450ms] delay-150 ease-out";
 
 export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(props, ref) {
   const { sourceUrl, svg, width, height, mode, onModeChange, busy, errorMessage, onRetry, display, onDisplayChange, layersOpen, onToggleLayers, marks, panel, compare } = props;
@@ -225,6 +237,41 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
 
   const imgStyle = useMemo(() => ({ width, height, transform: `translate(${t.x}px, ${t.y}px) scale(${t.scale})`, transformOrigin: "0 0" as const }), [t, width, height]);
 
+  // the right-hand side: the vector, or in a drift check the redraw
+  const shown = !!svg || !!compare;
+  const rightLabel = compare?.label ?? "Vector";
+  const stage = stageOf({ svg, compare, busy, errorMessage });
+  const ghost = stage === "untraced" || stage === "tracing" || stage === "failed";
+
+  // the pill's seconds
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!busy) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [busy]);
+  const counting = busy && busy.phase !== "Queued…";
+  const pill = busy ? (counting ? `${busy.phase} ${Math.max(0, Math.floor((now - busy.startedAt) / 1000))} s` : busy.phase) : "Press ⌘↩ to trace";
+
+  // The reveal, once, when a vector (or a redraw) first arrives: "start" paints it clipped away, "run" lets it wipe in.
+  const [wipe, setWipe] = useState<"start" | "run" | null>(null);
+  const had = useRef(shown);
+  useEffect(() => {
+    const arrived = shown && !had.current;
+    had.current = shown;
+    if (!arrived || reducedMotion()) return;
+    setWipe("start");
+    const frame = requestAnimationFrame(() => setWipe("run"));
+    const done = setTimeout(() => setWipe(null), 900);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(done);
+    };
+  }, [shown]);
+  const wiping = wipe === "run" ? WIPE : "";
+  const arriving = wipe !== null ? "motion-fade [animation-delay:300ms]" : "";
+
   // the checkerboard is under the image only; the panel around it stays the panel
   const board = <div aria-hidden="true" className="checker absolute left-0 top-0 rounded-[2px] shadow-sm" style={imgStyle} />;
   const source = <img src={sourceUrl} alt="Source raster" draggable={false} className="absolute left-0 top-0 max-w-none select-none" style={{ ...imgStyle, imageRendering: t.scale > 3 ? "pixelated" : "auto" }} />;
@@ -238,14 +285,12 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
   ) : svg ? (
     <div aria-label="Vector result" role="img" className={`absolute left-0 top-0 [&>svg]:block [&>svg]:h-full [&>svg]:w-full ${busy ? "opacity-60" : ""}`} style={imgStyle} dangerouslySetInnerHTML={{ __html: svg }} />
   ) : null;
-  // the right-hand side: the vector, or in a drift check the redraw
-  const shown = !!svg || !!compare;
-  const rightLabel = compare?.label ?? "Vector";
-  const chip = (text: string, where: string) => <span className={`pointer-events-none absolute top-3 z-20 rounded-full bg-popover/85 px-2.5 py-0.5 text-[11px] font-medium shadow-sm backdrop-blur ${where}`}>{text}</span>;
+  const sweep = stage === "tracing" ? <div data-testid="sweep" aria-hidden="true" className="sweep pointer-events-none absolute left-0 top-0" style={imgStyle} /> : null;
+  const chip = (text: string, where: string) => <span className={`pointer-events-none absolute top-3 z-20 rounded-full bg-popover/85 px-2.5 py-0.5 text-[11px] font-medium shadow-sm backdrop-blur ${where} ${arriving}`}>{text}</span>;
 
   return (
     <section aria-label="Canvas" className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-      {busy && svg && (
+      {busy && shown && (
         <div className="absolute inset-x-0 top-0 z-30 h-0.5 overflow-hidden bg-muted" role="progressbar" aria-label="Tracing">
           <div className="h-full w-1/3 animate-[slide_1.1s_ease-in-out_infinite]" style={{ background: "var(--accent-mac)" }} />
         </div>
@@ -260,13 +305,13 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        {mode === "side" ? (
+        {shown && mode === "side" ? (
           <>
             <div data-testid="source-pane" className="absolute inset-y-0 left-0 w-1/2 overflow-hidden">
               {board}
               {source}
             </div>
-            <div className="absolute inset-y-0 right-0 w-1/2 overflow-hidden border-l">
+            <div className={`absolute inset-y-0 right-0 w-1/2 overflow-hidden border-l ${arriving}`}>
               {board}
               {vector}
               {marksNode}
@@ -277,65 +322,62 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
         ) : (
           <>
             {board}
-            {/* In split the source is clipped to its side: running under the empty half it would read as a finished trace. */}
-            {mode === "split" ? (
-              <div data-testid="source-pane" className="absolute inset-0" style={{ clipPath: `inset(0 ${(1 - split) * 100}% 0 0)` }}>
+            {/* Until something is shown the source is the whole canvas, as a ghost. In split it is then clipped to its side: running under the vector's half it would read as part of the trace. */}
+            {(ghost || mode !== "vector") && (
+              <div data-testid="source-pane" className={`absolute inset-0 ${ghost ? "ghost" : ""} ${shown && mode === "split" ? wiping : ""}`} style={shown && mode === "split" ? { clipPath: `inset(0 ${wipe === "start" ? 0 : (1 - split) * 100}% 0 0)` } : undefined}>
                 {source}
               </div>
-            ) : (
-              mode !== "vector" && source
             )}
-            {mode === "split" && (
-              <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${split * 100}%)` }}>
+            {sweep}
+            {shown && mode === "split" && (
+              <div className={`absolute inset-0 ${wiping}`} style={{ clipPath: `inset(0 0 0 ${wipe === "start" ? 100 : split * 100}%)` }}>
                 {vector}
                 {marksNode}
               </div>
             )}
-            {mode === "overlay" && (
+            {shown && mode === "overlay" && (
               <>
-                <div className="absolute inset-0" style={{ opacity: overlay }}>
+                <div className={`absolute inset-0 ${arriving}`} style={{ opacity: overlay }}>
                   {vector}
                 </div>
                 {marksNode}
               </>
             )}
-            {mode === "vector" && (
-              <>
+            {shown && mode === "vector" && (
+              <div className={`absolute inset-0 ${arriving}`}>
                 {vector}
                 {marksNode}
-              </>
+              </div>
             )}
-            {/* The divider and its handle wait for a vector: before that the centre of the viewport belongs to the hint, the busy pill and the error card. */}
-            {mode === "split" && shown && (
-              <>
-                <div
-                  role="separator"
-                  aria-label="Comparison divider"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(split * 100)}
-                  aria-orientation="vertical"
-                  tabIndex={0}
-                  onPointerDown={startSplit}
-                  onKeyDown={(e) => {
-                    if (e.key === "ArrowLeft") setSplit((s) => Math.max(0.02, s - 0.02));
-                    if (e.key === "ArrowRight") setSplit((s) => Math.min(0.98, s + 0.02));
-                  }}
-                  className="absolute inset-y-0 z-10 w-6 -translate-x-1/2 cursor-col-resize"
-                  style={{ left: `${split * 100}%` }}
-                >
-                  <div className="mx-auto h-full w-px bg-foreground/50" />
-                  <div className="absolute left-1/2 top-1/2 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-popover/90 shadow-elevated backdrop-blur">
-                    <ChevronLeft className="-mr-1 h-3.5 w-3.5" aria-hidden="true" />
-                    <ChevronRight className="-ml-1 h-3.5 w-3.5" aria-hidden="true" />
-                  </div>
+            {/* The divider and its handle wait for a vector: before that the centre of the viewport belongs to the pill and the error card. */}
+            {shown && mode === "split" && (
+              <div
+                role="separator"
+                aria-label="Comparison divider"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(split * 100)}
+                aria-orientation="vertical"
+                tabIndex={0}
+                onPointerDown={startSplit}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowLeft") setSplit((s) => Math.max(0.02, s - 0.02));
+                  if (e.key === "ArrowRight") setSplit((s) => Math.min(0.98, s + 0.02));
+                }}
+                className={`absolute inset-y-0 z-10 w-6 -translate-x-1/2 cursor-col-resize ${arriving}`}
+                style={{ left: `${split * 100}%` }}
+              >
+                <div className="mx-auto h-full w-px bg-foreground/50" />
+                <div className="absolute left-1/2 top-1/2 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-popover/90 shadow-elevated backdrop-blur">
+                  <ChevronLeft className="-mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                  <ChevronRight className="-ml-1 h-3.5 w-3.5" aria-hidden="true" />
                 </div>
-              </>
+              </div>
             )}
-            {mode === "split" && chip("Original", "left-3")}
-            {mode === "split" && chip(rightLabel, "right-3")}
-            {mode === "overlay" && chip("Overlay", "left-1/2 -translate-x-1/2")}
-            {mode === "vector" && chip(rightLabel, "left-1/2 -translate-x-1/2")}
+            {shown && mode === "split" && chip("Original", "left-3")}
+            {shown && mode === "split" && chip(rightLabel, "right-3")}
+            {shown && mode === "overlay" && chip("Overlay", "left-1/2 -translate-x-1/2")}
+            {shown && mode === "vector" && chip(rightLabel, "left-1/2 -translate-x-1/2")}
           </>
         )}
 
@@ -361,13 +403,11 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(prop
                   </button>
                 )}
               </div>
-            ) : busy ? (
-              <div className="flex items-center gap-2.5 rounded-full border bg-popover/90 px-4 py-2 shadow-sm backdrop-blur" aria-live="polite">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
-                <p className="text-[13px] font-medium">{busy}</p>
-              </div>
             ) : (
-              <p className="rounded-full bg-popover/80 px-3 py-1 text-[13px] text-muted-foreground">Press Generate Vector (⌘↩) to trace</p>
+              <p className={`flex items-center gap-2.5 rounded-full border bg-popover/90 px-3.5 py-1.5 text-[13px] font-medium shadow-sm backdrop-blur ${busy ? "" : "text-muted-foreground"}`} aria-live="polite">
+                {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />}
+                <span className="tabular">{pill}</span>
+              </p>
             )}
           </div>
         )}

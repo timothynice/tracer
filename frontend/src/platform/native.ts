@@ -105,6 +105,7 @@ export function nativePlatform(): Platform {
 
   return {
     kind: "native",
+    canExportPdf: true,
     engines: () => call<EngineDescription[]>("engines"),
     presets: () => call<Preset[]>("presets"),
     pickImages: async () => outcomes(await call<OutcomeDto[]>("pick_images")),
