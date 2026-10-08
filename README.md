@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/timothynice/tracer/releases"><img alt="Download for Mac" src="https://img.shields.io/badge/Download-Mac%20(Apple%20silicon)-007aff?style=for-the-badge&logo=apple&logoColor=white"></a>
+  <a href="https://github.com/timothynice/Studi0Trace/releases"><img alt="Download for Mac" src="https://img.shields.io/badge/Download-Mac%20(Apple%20silicon)-007aff?style=for-the-badge&logo=apple&logoColor=white"></a>
   &nbsp;
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-3f4a5c?style=for-the-badge"></a>
   &nbsp;
@@ -97,7 +97,7 @@ studi0trace-desktop --release -- --ignored live_redraw --nocapture` does, by han
 
 ## Get it
 
-**Download** the latest `Studi0Trace.app` or `.dmg` from [Releases](https://github.com/timothynice/tracer/releases). macOS 13 or later, Apple silicon. Free and MIT licensed.
+**Download** the latest `Studi0Trace.app` or `.dmg` from [Releases](https://github.com/timothynice/Studi0Trace/releases). macOS 13 or later, Apple silicon. Free and MIT licensed.
 
 **The app is not signed**, so macOS stops it the first time. On macOS 13 and 14,
 right-click the app and choose Open (or open System Settings ▸ Privacy & Security

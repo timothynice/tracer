@@ -17,7 +17,7 @@ fn updates_come_from_the_latest_github_release_signed_with_the_apps_key() {
     // the signature's trusted comment carries the version it was signed for: a crafted latest.json cannot pair a
     // higher version with an older, genuinely signed artifact
     assert_eq!(updater["requireSignedVersion"], true);
-    assert_eq!(updater["endpoints"], serde_json::json!(["https://github.com/timothynice/tracer/releases/latest/download/latest.json"]));
+    assert_eq!(updater["endpoints"], serde_json::json!(["https://github.com/timothynice/Studi0Trace/releases/latest/download/latest.json"]));
     assert_eq!(
         updater["pubkey"],
         "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE1QTI0NDhGMThEQjlBNDMKUldSRG10c1lqMFNpRlNUN3hRNVNwSWZRcGM5SXlTNTZ0RlNjYlRxcGFkODJKZWJYYVpJWXpCVk0K"

@@ -55,7 +55,7 @@ pub const MENU: &[Entry] = &[
     e("acknowledgements", "Acknowledgements", None),
 ];
 
-const HELP_URL: &str = "https://github.com/timothynice/tracer#readme";
+const HELP_URL: &str = "https://github.com/timothynice/Studi0Trace#readme";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

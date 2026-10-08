@@ -28,7 +28,7 @@ the whole window with the window's own 24 px corners.
 > Studi0Trace: a free, open-source Mac app that turns a PNG of a logo or illustration into a clean SVG.
 > Real gradients and drop shadows, straight edges that stay straight, no hairlines between shapes.
 > Everything runs on your Mac.
-> https://github.com/timothynice/tracer
+> https://github.com/timothynice/Studi0Trace
 
 **LinkedIn**
 
@@ -40,9 +40,9 @@ the whole window with the window's own 24 px corners.
 > them. On a bench of 104 images it is the most faithful on 102, with a third of the paths.
 >
 > It's free, MIT licensed, and nothing leaves your Mac. Download it or read how the engine works:
-> https://github.com/timothynice/tracer
+> https://github.com/timothynice/Studi0Trace
 
 **Short**
 
 > Turn images into clean vectors. Studi0Trace for Mac, free and open source.
-> https://github.com/timothynice/tracer
+> https://github.com/timothynice/Studi0Trace
