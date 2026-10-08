@@ -73,7 +73,7 @@ On the bench against two well-known open-source tracers, Vexel is the most faith
   </tr>
 </table>
 
-**Rough source? Redraw it first (optional).** A small, blurry or pixel-doubled image is the hardest thing to trace. Image ▸ Redraw with AI… sends that one image to OpenAI's image model with your own key, shows the result against the original with a drift check, and only replaces the image when you say so. It is the only thing in the app that touches the network, and it is off until you turn it on.
+**Rough source? Redraw it first (optional).** A small, blurry or pixel-doubled image is the hardest thing to trace. Image ▸ Redraw with AI… shows an AI redraw against the original with a drift check, and only replaces the image when you say so. Your images stay on your Mac: nothing is uploaded unless you choose AI redraw, which sends that one image to OpenAI with your own API key. It is the only thing in the app that touches the network, and it is off until you turn it on.
 
 <details>
 <summary>AI redraw, in detail</summary>
